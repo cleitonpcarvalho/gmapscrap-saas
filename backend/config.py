@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     db_name: str = ""
     db_user: str = ""
     db_password: str = ""
+    db_sslmode: str = ""
     app_username: str = "cleiton.carvalho@automasoluct.com.br"
     app_password: str = "change-this-password"
     session_secret: str = "change-this-local-secret"
@@ -22,6 +23,12 @@ class Settings(BaseSettings):
     contact_email: str = "contato@automasoluct.com.br"
     openai_api_key: str = ""
     openai_model: str = "gpt-5.6"
+    supabase_url: str = ""
+    supabase_publishable_key: str = ""
+    supabase_secret_key: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_role_key: str = ""
+    supabase_storage_bucket: str = "gmapscrap"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

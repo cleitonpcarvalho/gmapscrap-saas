@@ -217,6 +217,7 @@ const defaultSmtpForm: SmtpConfig = {
 const DEFAULT_TEMPLATE_LOGO = "https://automasoluct.com.br/wp-content/uploads/2025/06/Automa_Soluct_Logo_Sem_Fundo.png";
 const DEFAULT_CONTACT_EMAIL = "contato@automasoluct.com.br";
 const LEADS_PAGE_SIZE = 30;
+const SEARCH_RUNS_PAGE_SIZE = 4;
 const LIST_FILTER_SEPARATOR = "||";
 
 const CAMPAIGN_TIMEZONES = [
@@ -299,6 +300,37 @@ function statusLabel(status: SearchRun["status"]) {
     failed: "Falhou"
   };
   return labels[status];
+}
+
+function searchRunMessage(run: SearchRun) {
+  const rawMessage = (run.error || run.message || "").trim();
+
+  if (!rawMessage) {
+    if (run.status === "failed") return "A busca falhou antes de registrar detalhes.";
+    if (run.status === "completed") return "Busca concluída.";
+    if (run.status === "paused") return "Busca pausada.";
+    return "Busca em andamento.";
+  }
+
+  const withoutPrefix = rawMessage.replace(/^message:\s*/i, "").trim();
+  const beforeStacktrace = withoutPrefix.split(/stacktrace:/i)[0].trim();
+  const likelyTechnicalTrace = /stacktrace:|<unknown>|0x[0-9a-f]{8,}|selenium|webdriver|chrome/i.test(rawMessage);
+
+  if (!beforeStacktrace && likelyTechnicalTrace) {
+    return "Google Maps não conseguiu abrir os resultados no Chrome headless. Tente novamente em alguns minutos.";
+  }
+
+  const compactMessage = (beforeStacktrace || withoutPrefix)
+    .replace(/0x[0-9a-f]+/gi, "")
+    .replace(/<unknown>/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (likelyTechnicalTrace && compactMessage.toLowerCase() === "message:") {
+    return "Google Maps não conseguiu abrir os resultados no Chrome headless. Tente novamente em alguns minutos.";
+  }
+
+  return compactMessage.length > 150 ? `${compactMessage.slice(0, 147).trim()}...` : compactMessage;
 }
 
 function campaignStatusLabel(status: EmailCampaign["status"]) {
@@ -594,6 +626,7 @@ export default function Home() {
   const [selectedLeadNiches, setSelectedLeadNiches] = useState<string[]>([]);
   const [selectedLeadLocations, setSelectedLeadLocations] = useState<string[]>([]);
   const [leadPage, setLeadPage] = useState(1);
+  const [runPage, setRunPage] = useState(1);
   const [emailError, setEmailError] = useState("");
   const [emailMessage, setEmailMessage] = useState("");
   const [smtpForm, setSmtpForm] = useState<SmtpConfig>(defaultSmtpForm);
@@ -651,6 +684,12 @@ export default function Home() {
     () => searches.find((run) => run.status === "running" || run.status === "queued"),
     [searches]
   );
+  const runPageCount = Math.max(1, Math.ceil(searches.length / SEARCH_RUNS_PAGE_SIZE));
+  const currentRunPage = Math.min(runPage, runPageCount);
+  const runPageStartIndex = (currentRunPage - 1) * SEARCH_RUNS_PAGE_SIZE;
+  const paginatedSearches = searches.slice(runPageStartIndex, runPageStartIndex + SEARCH_RUNS_PAGE_SIZE);
+  const runPageStart = searches.length === 0 ? 0 : runPageStartIndex + 1;
+  const runPageEnd = Math.min(runPageStartIndex + SEARCH_RUNS_PAGE_SIZE, searches.length);
 
   const leadNicheOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.niche)), [leads]);
   const leadLocationOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.location)), [leads]);
@@ -804,6 +843,12 @@ export default function Home() {
       setLeadPage(leadPageCount);
     }
   }, [leadPage, leadPageCount]);
+
+  useEffect(() => {
+    if (runPage > runPageCount) {
+      setRunPage(runPageCount);
+    }
+  }, [runPage, runPageCount]);
 
   useEffect(() => {
     if (templates.length === 0) {
@@ -1242,6 +1287,7 @@ export default function Home() {
           max_results: maxResults
         })
       });
+      setRunPage(1);
       await refreshData();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "Não foi possível iniciar a busca.");
@@ -1625,14 +1671,14 @@ export default function Home() {
               <div className="jobs-list">
                 {runError ? <p className="error-text">{runError}</p> : null}
                 {searches.length === 0 ? <p className="empty-state">Nenhuma busca iniciada.</p> : null}
-                {searches.slice(0, 6).map((run) => (
+                {paginatedSearches.map((run) => (
                   <article className="job-row" key={run.id}>
                     <div>
                       <strong>{run.niche}</strong>
                       <span>
                         {run.location} · {formatDate(run.created_at)}
                       </span>
-                      <p>{run.error || run.message}</p>
+                      <p title={run.error || run.message}>{searchRunMessage(run)}</p>
                     </div>
                     <div className="job-meta">
                       <div className="job-actions">
@@ -1667,6 +1713,36 @@ export default function Home() {
                   </article>
                 ))}
               </div>
+              {searches.length > SEARCH_RUNS_PAGE_SIZE ? (
+                <div className="pagination-row compact-pagination">
+                  <span className="helper-text">
+                    Mostrando {runPageStart}-{runPageEnd} de {searches.length}
+                  </span>
+                  <div className="row-actions">
+                    <button
+                      className="secondary-button compact-button"
+                      disabled={currentRunPage <= 1}
+                      onClick={() => setRunPage((page) => Math.max(1, page - 1))}
+                      type="button"
+                    >
+                      <ChevronLeft size={16} />
+                      Anterior
+                    </button>
+                    <span className="muted-count">
+                      Página {currentRunPage} de {runPageCount}
+                    </span>
+                    <button
+                      className="secondary-button compact-button"
+                      disabled={currentRunPage >= runPageCount}
+                      onClick={() => setRunPage((page) => Math.min(runPageCount, page + 1))}
+                      type="button"
+                    >
+                      Próxima
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </section>
             </section>
 

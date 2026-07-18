@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from threading import Lock
+import re
 import time
 
 from sqlalchemy import func, select
@@ -162,12 +163,17 @@ def _format_search_error(exc: Exception) -> str:
     if isinstance(exc, TimeoutException):
         return "Google Maps não carregou os resultados dentro do tempo limite."
 
-    if isinstance(exc, WebDriverException):
-        message = getattr(exc, "msg", "") or str(exc)
-        message = message.split("Stacktrace:", 1)[0].strip()
-        return message or "Chrome/Selenium falhou ao executar a busca."
+    def clean_message(value: str) -> str:
+        message = value.split("Stacktrace:", 1)[0]
+        message = re.sub(r"^Message:\s*", "", message.strip(), flags=re.IGNORECASE)
+        message = re.sub(r"\s+", " ", message).strip()
+        return "" if message.lower() in {"message", "message:"} else message
 
-    message = str(exc).split("Stacktrace:", 1)[0].strip()
+    if isinstance(exc, WebDriverException):
+        message = clean_message(getattr(exc, "msg", "") or str(exc))
+        return message or "Google Maps não conseguiu completar a busca no navegador headless."
+
+    message = clean_message(str(exc))
     return message or "Busca falhou por um erro inesperado."
 
 

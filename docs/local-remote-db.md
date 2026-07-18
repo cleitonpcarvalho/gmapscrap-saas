@@ -1,4 +1,8 @@
-# Local scraper with VPS database
+# Legacy: local scraper with VPS database
+
+The main database is now Supabase. Use the regular `docker-compose.yml` with the Supabase `DB_*` variables from `.env` for both local development and production.
+
+Keep this guide only as a rollback/reference path for the old VPS-hosted PostgreSQL setup.
 
 Use this when the Google Maps scraper should run on the local machine, but the leads must be saved in the production PostgreSQL database on the VPS.
 

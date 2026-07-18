@@ -1,26 +1,16 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: gmapscrap
-      POSTGRES_USER: gmapscrap
-      POSTGRES_PASSWORD: gmapscrap
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gmapscrap -d gmapscrap"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
     environment:
-      DATABASE_URL: postgresql+psycopg://gmapscrap:gmapscrap@postgres:5432/gmapscrap
+      DATABASE_URL: "${DATABASE_URL:-}"
+      DB_HOST: "${DB_HOST:?defina DB_HOST no .env}"
+      DB_PORT: "${DB_PORT:-5432}"
+      DB_NAME: "${DB_NAME:-postgres}"
+      DB_USER: "${DB_USER:-postgres}"
+      DB_PASSWORD: "${DB_PASSWORD:?defina DB_PASSWORD no .env}"
+      DB_SSLMODE: "${DB_SSLMODE:-require}"
       APP_USERNAME: "${APP_USERNAME:-cleiton.carvalho@automasoluct.com.br}"
       APP_PASSWORD: "${APP_PASSWORD:-change-this-password}"
       SESSION_SECRET: "${SESSION_SECRET:-local-dev-session-secret-change-me}"
@@ -31,12 +21,15 @@ services:
       CONTACT_EMAIL: "${CONTACT_EMAIL:-contato@automasoluct.com.br}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5.6}"
+      SUPABASE_URL: "${SUPABASE_URL:-}"
+      SUPABASE_PUBLISHABLE_KEY: "${SUPABASE_PUBLISHABLE_KEY:-}"
+      SUPABASE_SECRET_KEY: "${SUPABASE_SECRET_KEY:-}"
+      SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY:-}"
+      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY:-}"
+      SUPABASE_STORAGE_BUCKET: "${SUPABASE_STORAGE_BUCKET:-gmapscrap}"
       PUBLIC_BASE_URL: http://localhost:8000
     ports:
       - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   frontend:
     build:
@@ -49,6 +42,3 @@ services:
       - "3001:3000"
     depends_on:
       - backend
-
-volumes:
-  postgres_data:

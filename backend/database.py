@@ -18,6 +18,10 @@ settings = get_settings()
 
 def _database_url() -> str | URL:
     if settings.db_host and settings.db_name and settings.db_user:
+        query = {}
+        if settings.db_sslmode:
+            query["sslmode"] = settings.db_sslmode
+
         return URL.create(
             "postgresql+psycopg",
             username=settings.db_user,
@@ -25,7 +29,12 @@ def _database_url() -> str | URL:
             host=settings.db_host,
             port=settings.db_port,
             database=settings.db_name,
+            query=query,
         )
+
+    if settings.database_url.startswith("postgresql://"):
+        return settings.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
     return settings.database_url
 
 

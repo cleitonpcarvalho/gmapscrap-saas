@@ -764,6 +764,7 @@ td span {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
+  min-height: 92px;
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -785,6 +786,14 @@ td span {
 
 .job-row p {
   margin: 6px 0 0;
+  display: -webkit-box;
+  max-width: 100%;
+  min-height: 34px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
 }
 
 .job-meta {
@@ -932,6 +941,10 @@ td span {
   justify-content: space-between;
   gap: 12px;
   margin-top: 14px;
+}
+
+.compact-pagination {
+  padding-top: 2px;
 }
 
 .pagination-row .secondary-button:disabled {

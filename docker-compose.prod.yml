@@ -1,29 +1,4 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: gmapscrap
-      POSTGRES_USER: gmapscrap
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no Portainer}"
-    volumes:
-      - gmapscrap_postgres_data:/var/lib/postgresql/data
-    networks:
-      - internal
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gmapscrap -d gmapscrap"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 5
-      placement:
-        constraints:
-          - node.role == manager
-
   backend:
     image: ghcr.io/cleitonpcarvalho/gmapscrap-saas-backend:latest
     labels:
@@ -36,11 +11,13 @@ services:
       - traefik.http.routers.gmapscrap-api.tls.certresolver=letsencryptresolver
       - traefik.http.services.gmapscrap-api.loadbalancer.server.port=8000
     environment:
-      DB_HOST: gmapscrap_postgres
-      DB_PORT: "5432"
-      DB_NAME: gmapscrap
-      DB_USER: gmapscrap
-      DB_PASSWORD: "${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no Portainer}"
+      DATABASE_URL: "${DATABASE_URL:-}"
+      DB_HOST: "${DB_HOST:?defina DB_HOST do Supabase no Portainer}"
+      DB_PORT: "${DB_PORT:-5432}"
+      DB_NAME: "${DB_NAME:-postgres}"
+      DB_USER: "${DB_USER:-postgres}"
+      DB_PASSWORD: "${DB_PASSWORD:?defina DB_PASSWORD do Supabase no Portainer}"
+      DB_SSLMODE: "${DB_SSLMODE:-require}"
       APP_USERNAME: "${APP_USERNAME:?defina APP_USERNAME no Portainer}"
       APP_PASSWORD: "${APP_PASSWORD:?defina APP_PASSWORD no Portainer}"
       SESSION_SECRET: "${SESSION_SECRET:?defina SESSION_SECRET no Portainer}"
@@ -52,9 +29,14 @@ services:
       CONTACT_EMAIL: "${CONTACT_EMAIL:-contato@automasoluct.com.br}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5.6}"
+      SUPABASE_URL: "${SUPABASE_URL:-}"
+      SUPABASE_PUBLISHABLE_KEY: "${SUPABASE_PUBLISHABLE_KEY:-}"
+      SUPABASE_SECRET_KEY: "${SUPABASE_SECRET_KEY:-}"
+      SUPABASE_ANON_KEY: "${SUPABASE_ANON_KEY:-}"
+      SUPABASE_SERVICE_ROLE_KEY: "${SUPABASE_SERVICE_ROLE_KEY:-}"
+      SUPABASE_STORAGE_BUCKET: "${SUPABASE_STORAGE_BUCKET:-gmapscrap}"
       PUBLIC_BASE_URL: "https://api.automasoluct.com.br"
     networks:
-      - internal
       - proxy
     deploy:
       replicas: 1
@@ -104,13 +86,6 @@ services:
         - traefik.http.services.gmapscrap-web.loadbalancer.server.port=3000
 
 networks:
-  internal:
-    driver: overlay
-    attachable: true
   proxy:
     external: true
     name: AutomaNet
-
-volumes:
-  gmapscrap_postgres_data:
-    name: gmapscrap_postgres_data
