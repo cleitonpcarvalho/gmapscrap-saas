@@ -32,6 +32,9 @@ iconutil -c icns "$ICONSET_DIR" -o "$ICON_ICNS"
   --icon "$ICON_ICNS" \
   --osx-bundle-identifier br.com.automasoluct.gmapscrap \
   --add-data "$ROOT_DIR/desktop/assets:assets" \
+  --collect-submodules selenium.webdriver \
+  --collect-data selenium \
+  --collect-binaries selenium \
   --paths "$ROOT_DIR" \
   --distpath "$ROOT_DIR/desktop/dist" \
   --workpath "$ROOT_DIR/desktop/build" \

@@ -79,6 +79,16 @@ type Lead = {
   created_at: string;
 };
 
+type ManualLeadForm = {
+  niche: string;
+  location: string;
+  name: string;
+  address: string;
+  phone: string;
+  website: string;
+  email: string;
+};
+
 type DeleteDialog = { kind: "single"; lead: Lead } | { kind: "bulk"; ids: number[] } | null;
 
 type AppView = "dashboard" | "search" | "leads" | "templates" | "lists" | "campaigns" | "history" | "settings";
@@ -260,6 +270,16 @@ const defaultCampaignForm = {
   send_window_end: "17:00",
   timezone_name: "America/New_York",
   send_days: "0,1,2,3,4",
+};
+
+const defaultManualLeadForm: ManualLeadForm = {
+  niche: "",
+  location: "",
+  name: "",
+  address: "",
+  phone: "",
+  website: "",
+  email: ""
 };
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -675,8 +695,11 @@ export default function Home() {
   const [campaignForm, setCampaignForm] = useState(defaultCampaignForm);
   const [emailBusy, setEmailBusy] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
+  const [manualLeadOpen, setManualLeadOpen] = useState(false);
+  const [manualLeadForm, setManualLeadForm] = useState<ManualLeadForm>(defaultManualLeadForm);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialog>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [savingManualLead, setSavingManualLead] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [runActionLoading, setRunActionLoading] = useState<number | null>(null);
 
@@ -937,6 +960,8 @@ export default function Home() {
     setLeads([]);
     setSelectedIds([]);
     setEditingLead(null);
+    setManualLeadOpen(false);
+    setManualLeadForm(defaultManualLeadForm);
     setDeleteDialog(null);
     setSelectedLeadNiches([]);
     setSelectedLeadLocations([]);
@@ -1321,6 +1346,56 @@ export default function Home() {
     }
 
     setSelectedIds((current) => Array.from(new Set([...current, ...visibleIds])));
+  }
+
+  function openManualLeadModal() {
+    setActionError("");
+    setManualLeadForm({
+      ...defaultManualLeadForm,
+      niche: selectedLeadNiches[0] || niche,
+      location: selectedLeadLocations[0] || location
+    });
+    setManualLeadOpen(true);
+  }
+
+  function closeManualLeadModal() {
+    setActionError("");
+    setManualLeadOpen(false);
+    setManualLeadForm(defaultManualLeadForm);
+  }
+
+  async function handleCreateManualLead(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (
+      !manualLeadForm.niche.trim() ||
+      !manualLeadForm.location.trim() ||
+      !manualLeadForm.name.trim() ||
+      !manualLeadForm.website.trim()
+    ) {
+      setActionError("Preencha nome, nicho, localidade e site.");
+      return;
+    }
+
+    setActionError("");
+    setSavingManualLead(true);
+    try {
+      const createdLead = await apiFetch<Lead>("/api/leads", {
+        method: "POST",
+        body: JSON.stringify(manualLeadForm)
+      });
+      setManualLeadOpen(false);
+      setManualLeadForm(defaultManualLeadForm);
+      setLeadNameQuery(createdLead.name);
+      setSelectedLeadNiches([]);
+      setSelectedLeadLocations([]);
+      setLeadPage(1);
+      await refreshData();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Não foi possível cadastrar o lead.");
+    } finally {
+      setSavingManualLead(false);
+    }
   }
 
   async function handlePauseSearch(runId: number) {
@@ -1817,6 +1892,10 @@ export default function Home() {
                 <h2>Leads salvos</h2>
               </div>
               <div className="lead-actions">
+                <button className="primary-button compact-button" onClick={openManualLeadModal} type="button">
+                  <Plus size={16} />
+                  Adicionar lead
+                </button>
                 <span className="muted-count">{filteredLeads.length} visíveis</span>
                 <button
                   className="danger-button"
@@ -2942,6 +3021,92 @@ export default function Home() {
               <button className="primary-button" disabled={emailBusy} type="submit">
                 {emailBusy ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
                 {editingTemplateId ? "Salvar template" : "Criar template"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {manualLeadOpen ? (
+        <div className="modal-backdrop">
+          <form className="edit-modal" onSubmit={handleCreateManualLead}>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Cadastro manual</p>
+                <h2>Adicionar lead</h2>
+              </div>
+              <button className="icon-button" onClick={closeManualLeadModal} title="Fechar" type="button">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="edit-grid">
+              <label>
+                Nome da empresa
+                <input
+                  required
+                  value={manualLeadForm.name}
+                  onChange={(event) => setManualLeadForm({ ...manualLeadForm, name: event.target.value })}
+                />
+              </label>
+              <label>
+                Nicho
+                <input
+                  required
+                  value={manualLeadForm.niche}
+                  onChange={(event) => setManualLeadForm({ ...manualLeadForm, niche: event.target.value })}
+                />
+              </label>
+              <label>
+                Localidade
+                <input
+                  required
+                  value={manualLeadForm.location}
+                  onChange={(event) => setManualLeadForm({ ...manualLeadForm, location: event.target.value })}
+                />
+              </label>
+              <label>
+                Telefone
+                <input
+                  value={manualLeadForm.phone}
+                  onChange={(event) => setManualLeadForm({ ...manualLeadForm, phone: event.target.value })}
+                />
+              </label>
+              <label>
+                Site
+                <input
+                  required
+                  placeholder="https://empresa.com"
+                  value={manualLeadForm.website}
+                  onChange={(event) => setManualLeadForm({ ...manualLeadForm, website: event.target.value })}
+                />
+              </label>
+              <label>
+                E-mail
+                <input
+                  type="email"
+                  value={manualLeadForm.email}
+                  onChange={(event) => setManualLeadForm({ ...manualLeadForm, email: event.target.value })}
+                />
+              </label>
+              <label className="wide-field">
+                Endereço
+                <input
+                  value={manualLeadForm.address}
+                  onChange={(event) => setManualLeadForm({ ...manualLeadForm, address: event.target.value })}
+                />
+              </label>
+            </div>
+
+            {actionError ? <p className="error-text">{actionError}</p> : null}
+
+            <div className="modal-actions">
+              <button className="secondary-button" onClick={closeManualLeadModal} type="button">
+                Cancelar
+              </button>
+              <button className="primary-button" disabled={savingManualLead} type="submit">
+                {savingManualLead ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+                Salvar lead
               </button>
             </div>
           </form>

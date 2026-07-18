@@ -39,6 +39,7 @@ from backend.schemas import (
     EmailTemplateCreate,
     EmailTemplateRead,
     EmailTemplateUpdate,
+    LeadCreate,
     LeadListCreate,
     LeadListRead,
     LeadListUpdate,
@@ -363,6 +364,75 @@ def list_leads(
         stmt = stmt.where(SearchRun.location.ilike(f"%{location.strip()}%"))
 
     return list(db.scalars(stmt).all())
+
+
+@app.post("/api/leads", response_model=LeadRead)
+def create_manual_lead(
+    payload: LeadCreate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> Lead:
+    _ = username
+    website = normalize_site_url(payload.website)
+    if not website:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Site inválido")
+
+    existing = db.scalar(select(Lead).where(Lead.website == website))
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um lead com esse site")
+
+    niche = payload.niche.strip()
+    location = payload.location.strip()
+    now = utc_now()
+    manual_message = "Leads cadastrados manualmente."
+    run = db.scalar(
+        select(SearchRun)
+        .where(
+            SearchRun.niche == niche,
+            SearchRun.location == location,
+            SearchRun.message == manual_message,
+            SearchRun.status == "completed",
+        )
+        .order_by(desc(SearchRun.created_at))
+    )
+
+    if not run:
+        run = SearchRun(
+            niche=niche,
+            location=location,
+            target_quantity=None,
+            max_results=True,
+            status="completed",
+            message=manual_message,
+            scanned_count=0,
+            saved_count=0,
+            skipped_count=0,
+            started_at=now,
+            finished_at=now,
+        )
+        db.add(run)
+
+    lead = Lead(
+        search_run=run,
+        name=payload.name.strip(),
+        address=payload.address.strip() or "Não informado",
+        phone=payload.phone.strip(),
+        website=website,
+        email=payload.email.strip(),
+    )
+    run.scanned_count += 1
+    run.saved_count += 1
+    run.finished_at = now
+    db.add(lead)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Lead duplicado") from None
+
+    db.refresh(lead)
+    return lead
 
 
 @app.patch("/api/leads/{lead_id}", response_model=LeadRead)

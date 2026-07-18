@@ -47,6 +47,16 @@ class LeadRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class LeadCreate(BaseModel):
+    niche: str = Field(min_length=1, max_length=255)
+    location: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    address: str = Field(default="", max_length=1000)
+    phone: str = Field(default="", max_length=80)
+    website: str = Field(min_length=1, max_length=500)
+    email: str = Field(default="", max_length=255)
+
+
 class LeadUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     address: str | None = Field(default=None, min_length=1)
