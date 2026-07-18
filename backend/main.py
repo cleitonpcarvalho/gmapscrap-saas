@@ -1,5 +1,6 @@
 import base64
 import csv
+from datetime import datetime, timezone
 from io import StringIO
 from types import SimpleNamespace
 
@@ -28,6 +29,9 @@ from backend.schemas import (
     BulkDeleteRequest,
     BulkDeleteResponse,
     ContentPreviewRead,
+    DesktopLeadIngestResponse,
+    DesktopSearchLead,
+    DesktopSearchUpdate,
     EmailCampaignCreate,
     EmailCampaignRead,
     EmailCampaignUpdate,
@@ -62,8 +66,15 @@ from backend.services.email_campaigns import (
 )
 from backend.services.email_delivery import get_or_create_smtp_config, send_email, send_test_email, update_smtp_config
 from backend.services.ai_templates import generate_email_templates
-from backend.services.jobs import create_search_run, resume_unfinished_search_runs, submit_search_job
+from backend.services.jobs import (
+    create_search_run,
+    resume_unfinished_search_runs,
+    save_enriched_lead,
+    save_scraped_lead,
+    submit_search_job,
+)
 from backend.services.template_seeds import seed_default_email_templates
+from backend.scrapers.maps_scraper import MapLead
 
 
 settings = get_settings()
@@ -92,6 +103,10 @@ def on_startup() -> None:
 
 def require_user(request: Request) -> str:
     return get_current_username(request)
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @app.get("/api/health")
@@ -174,6 +189,108 @@ def get_search(
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Busca não encontrada")
     return run
+
+
+@app.post("/api/desktop/searches", response_model=SearchRunRead)
+def create_desktop_search(
+    payload: SearchCreate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> SearchRun:
+    _ = username
+    run = SearchRun(
+        niche=payload.niche.strip(),
+        location=payload.location.strip(),
+        target_quantity=None if payload.max_results else payload.quantity,
+        max_results=payload.max_results,
+        status="running",
+        message="Busca local iniciada no aplicativo desktop.",
+        started_at=utc_now(),
+        finished_at=None,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+@app.patch("/api/desktop/searches/{run_id}", response_model=SearchRunRead)
+def update_desktop_search(
+    run_id: int,
+    payload: DesktopSearchUpdate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> SearchRun:
+    _ = username
+    run = db.get(SearchRun, run_id)
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Busca não encontrada")
+
+    if payload.scanned_count is not None:
+        run.scanned_count = max(run.scanned_count, payload.scanned_count)
+
+    if payload.skipped_delta:
+        run.skipped_count += payload.skipped_delta
+
+    if payload.message is not None:
+        run.message = payload.message.strip()
+
+    if payload.error is not None:
+        run.error = payload.error.strip() or None
+
+    if payload.status is not None:
+        run.status = payload.status
+        if payload.status in ("completed", "failed"):
+            run.finished_at = utc_now()
+        if payload.status == "failed" and not run.error:
+            run.error = run.message or "Busca local falhou."
+
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+@app.post("/api/desktop/searches/{run_id}/leads", response_model=DesktopLeadIngestResponse)
+def ingest_desktop_lead(
+    run_id: int,
+    payload: DesktopSearchLead,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> DesktopLeadIngestResponse:
+    _ = username
+    run = db.get(SearchRun, run_id)
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Busca não encontrada")
+
+    if run.status not in ("queued", "running", "paused"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta busca já foi finalizada")
+
+    lead = MapLead(
+        name=payload.name.strip(),
+        address=payload.address.strip() or "Não encontrado",
+        phone=payload.phone.strip(),
+        website=payload.website.strip(),
+    )
+    run.status = "running"
+    run.scanned_count = max(run.scanned_count, payload.scanned)
+    run.message = f"Salvando {lead.name}..." if payload.email.strip() else f"Buscando e-mail em {lead.website}..."
+    db.commit()
+
+    if payload.email.strip():
+        saved = save_enriched_lead(db, run, lead, payload.email)
+    else:
+        saved = save_scraped_lead(db, run, lead)
+    run = db.get(SearchRun, run_id)
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Busca não encontrada")
+
+    if saved:
+        run.saved_count += 1
+        run.message = f"{lead.name} salvo."
+
+    db.commit()
+    db.refresh(run)
+    return DesktopLeadIngestResponse(saved=saved, message=run.message, run=run)
 
 
 @app.post("/api/searches/{run_id}/pause", response_model=SearchRunRead)

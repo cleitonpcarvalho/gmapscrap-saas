@@ -82,6 +82,29 @@ class SearchRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DesktopSearchLead(BaseModel):
+    scanned: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=255)
+    address: str = Field(default="", max_length=1000)
+    phone: str = Field(default="", max_length=80)
+    website: str = Field(min_length=1, max_length=500)
+    email: str = Field(default="", max_length=255)
+
+
+class DesktopSearchUpdate(BaseModel):
+    status: Literal["running", "paused", "completed", "failed"] | None = None
+    message: str | None = Field(default=None, max_length=2000)
+    scanned_count: int | None = Field(default=None, ge=0)
+    skipped_delta: int = Field(default=0, ge=0, le=50)
+    error: str | None = Field(default=None, max_length=2000)
+
+
+class DesktopLeadIngestResponse(BaseModel):
+    saved: bool
+    message: str
+    run: SearchRunRead
+
+
 class StatsRead(BaseModel):
     total_leads: int
     total_with_email: int

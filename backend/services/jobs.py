@@ -137,6 +137,56 @@ def _save_lead(db: Session, run: SearchRun, lead: MapLead) -> bool:
     return True
 
 
+def save_enriched_lead(db: Session, run: SearchRun, lead: MapLead, email: str) -> bool:
+    website = normalize_site_url(lead.website)
+    if not website:
+        run.skipped_count += 1
+        run.message = f"{lead.name} ignorado: site inválido."
+        db.commit()
+        return False
+
+    if _website_exists(db, website):
+        run.skipped_count += 1
+        run.message = f"{lead.name} ignorado: site duplicado."
+        db.commit()
+        return False
+
+    clean_email = (email or "").strip().lower()
+    if not clean_email:
+        run.skipped_count += 1
+        run.message = f"{lead.name} ignorado: e-mail não encontrado."
+        db.commit()
+        return False
+
+    row = Lead(
+        run_id=run.id,
+        name=lead.name,
+        address=lead.address,
+        phone=lead.phone,
+        website=website,
+        email=clean_email,
+    )
+    db.add(row)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        run = db.get(SearchRun, run.id)
+        if run:
+            run.skipped_count += 1
+            run.message = f"{lead.name} ignorado: site duplicado."
+            db.commit()
+        return False
+
+    db.refresh(row)
+    return True
+
+
+def save_scraped_lead(db: Session, run: SearchRun, lead: MapLead) -> bool:
+    return _save_lead(db, run, lead)
+
+
 def _update_run_from_event(db: Session, run: SearchRun, event: ScrapeEvent) -> None:
     run.scanned_count = max(run.scanned_count, event.scanned)
     run.message = event.message
