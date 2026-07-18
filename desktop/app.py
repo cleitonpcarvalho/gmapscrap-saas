@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Qt
-from PySide6.QtGui import QBrush, QColor, QCloseEvent
+from PySide6.QtGui import QBrush, QColor, QCloseEvent, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -31,6 +32,14 @@ from desktop.api_client import ApiClientError, GmapScrapApiClient
 from desktop.worker import SearchWorker
 
 
+def asset_path(filename: str) -> str:
+    base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    bundled = base_dir / "assets" / filename
+    if bundled.exists():
+        return str(bundled)
+    return str(Path(__file__).resolve().parent / "assets" / filename)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -39,6 +48,7 @@ class MainWindow(QMainWindow):
         self.current_run: dict | None = None
 
         self.setWindowTitle("GmapScrap Desktop")
+        self.setWindowIcon(QIcon(asset_path("gmapscrap-favicon.png")))
         self.resize(1180, 760)
         self.setMinimumSize(980, 680)
 
@@ -56,28 +66,39 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.setSpacing(14)
 
-        logo = QLabel("G")
-        logo.setObjectName("logo")
+        logo = QLabel()
+        logo.setObjectName("logoImage")
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setFixedSize(52, 52)
+        logo.setFixedSize(154, 124)
+        brand_logo = QPixmap(asset_path("gmapscrap-logo.png"))
+        logo.setPixmap(
+            brand_logo.scaled(
+                154,
+                124,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
 
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-        title = QLabel("GmapScrap Desktop")
+        title = QLabel("Desktop")
         title.setObjectName("title")
         subtitle = QLabel("Busca local com Selenium headless")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
+        title_box.addStretch()
 
         self.connection_label = QLabel("Pronto")
         self.connection_label.setObjectName("connection")
         self.connection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.connection_label.setFixedHeight(52)
 
         header.addWidget(logo)
         header.addLayout(title_box)
         header.addStretch()
-        header.addWidget(self.connection_label)
+        header.addWidget(self.connection_label, 0, Qt.AlignmentFlag.AlignTop)
 
         body = QHBoxLayout()
         body.setSpacing(18)
@@ -244,12 +265,9 @@ class MainWindow(QMainWindow):
                 border: 1px solid #dce8e4;
                 border-radius: 8px;
             }
-            QLabel#logo {
-                background: #008996;
-                color: white;
-                border-radius: 12px;
-                font-size: 26px;
-                font-weight: 800;
+            QLabel#logoImage {
+                background: transparent;
+                border: none;
             }
             QLabel#title {
                 font-size: 28px;

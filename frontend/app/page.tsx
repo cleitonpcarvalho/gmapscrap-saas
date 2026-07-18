@@ -17,7 +17,6 @@ import {
   Loader2,
   LogOut,
   Mail,
-  MapPin,
   Megaphone,
   MousePointerClick,
   Pause,
@@ -1412,14 +1411,9 @@ export default function Home() {
     return (
       <main className="login-shell">
         <section className="login-panel">
-          <div className="brand-lockup">
-            <div className="brand-mark">
-              <MapPin size={28} />
-            </div>
-            <div>
-              <p className="eyebrow">GmapScrap</p>
-              <h1>Entrar no sistema</h1>
-            </div>
+          <div className="brand-lockup login-brand">
+            <img className="brand-logo login-logo" src="/gmapscrap-logo.png" alt="GmapScrap" />
+            <h1>Entrar no sistema</h1>
           </div>
 
           <form className="login-form" onSubmit={handleLogin}>
@@ -1450,14 +1444,8 @@ export default function Home() {
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <div className="brand-lockup compact">
-          <div className="brand-mark">
-            <MapPin size={24} />
-          </div>
-          <div>
-            <p className="eyebrow">GmapScrap</p>
-            <strong>Leads Web</strong>
-          </div>
+        <div className="brand-lockup compact sidebar-brand">
+          <img className="brand-logo sidebar-logo" src="/gmapscrap-logo.png" alt="GmapScrap Leads Web" />
         </div>
 
         <nav className="nav-list">

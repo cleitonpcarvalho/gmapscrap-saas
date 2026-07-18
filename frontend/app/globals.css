@@ -72,6 +72,32 @@ a {
   gap: 10px;
 }
 
+.brand-logo {
+  display: block;
+  object-fit: contain;
+}
+
+.login-brand {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.login-logo {
+  width: min(260px, 100%);
+  height: auto;
+}
+
+.sidebar-brand {
+  align-items: flex-start;
+}
+
+.sidebar-logo {
+  width: 148px;
+  max-width: 100%;
+  height: auto;
+}
+
 .brand-mark {
   width: 48px;
   height: 48px;
