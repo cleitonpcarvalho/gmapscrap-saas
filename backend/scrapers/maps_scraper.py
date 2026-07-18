@@ -1,4 +1,6 @@
 import re
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from urllib.parse import quote_plus, urlparse
@@ -53,6 +55,7 @@ class ScrapeEvent:
 def _create_driver() -> WebDriver:
     settings = get_settings()
     options = Options()
+    profile_dir = tempfile.mkdtemp(prefix="gmapscrap-chrome-")
 
     if settings.selenium_headless:
         options.add_argument("--headless=new")
@@ -61,18 +64,117 @@ def _create_driver() -> WebDriver:
         options.binary_location = settings.chrome_bin
 
     options.add_argument("--no-sandbox")
+    options.add_argument("--disable-setuid-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-sync")
+    options.add_argument("--disable-notifications")
+    options.add_argument("--no-first-run")
+    options.add_argument("--no-default-browser-check")
+    options.add_argument("--remote-debugging-port=0")
     options.add_argument("--window-size=1365,900")
     options.add_argument("--lang=pt-BR")
+    options.add_argument("--accept-lang=pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7")
+    options.add_argument(f"--user-data-dir={profile_dir}")
     options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("prefs", {"intl.accept_languages": "pt-BR,pt,en-US,en"})
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
     service = Service(executable_path=settings.chromedriver_bin) if settings.chromedriver_bin else Service()
-    return webdriver.Chrome(service=service, options=options)
+    try:
+        driver = webdriver.Chrome(service=service, options=options)
+    except Exception:
+        shutil.rmtree(profile_dir, ignore_errors=True)
+        raise
+
+    setattr(driver, "_gmapscrap_profile_dir", profile_dir)
+    return driver
+
+
+def _quit_driver(driver: WebDriver) -> None:
+    profile_dir = getattr(driver, "_gmapscrap_profile_dir", "")
+    try:
+        driver.quit()
+    except WebDriverException:
+        pass
+    finally:
+        if profile_dir:
+            shutil.rmtree(profile_dir, ignore_errors=True)
+
+
+def _click_google_consent_if_present(driver: WebDriver) -> None:
+    labels = (
+        "Aceitar tudo",
+        "Concordo",
+        "Accept all",
+        "I agree",
+        "Reject all",
+        "Rejeitar tudo",
+    )
+
+    for label in labels:
+        xpath = f"//button[.//*[contains(normalize-space(), '{label}')] or contains(normalize-space(), '{label}')]"
+        try:
+            buttons = driver.find_elements(By.XPATH, xpath)
+            if buttons:
+                buttons[0].click()
+                time.sleep(1.5)
+                return
+        except WebDriverException:
+            continue
+
+
+def _diagnose_maps_page(driver: WebDriver) -> str:
+    try:
+        title = driver.title
+        current_url = driver.current_url
+        body = driver.find_element(By.TAG_NAME, "body").text
+    except WebDriverException:
+        return "Google Maps não respondeu corretamente no Chrome headless."
+
+    page_text = f"{title}\n{current_url}\n{body}".lower()
+    if any(
+        marker in page_text
+        for marker in (
+            "unusual traffic",
+            "not a robot",
+            "não sou um robô",
+            "captcha",
+            "/sorry/",
+            "our systems have detected",
+        )
+    ):
+        return "Google bloqueou a busca no servidor e pediu verificação/CAPTCHA."
+
+    if any(marker in page_text for marker in ("before you continue", "antes de continuar", "privacy", "privacidade")):
+        return "Google exibiu tela de consentimento/privacidade e não abriu os resultados do Maps."
+
+    if "maps" not in current_url.lower():
+        return f"Google Maps redirecionou para outra página: {title or current_url}."
+
+    return "Google Maps não carregou a lista de resultados no servidor dentro do tempo limite."
+
+
+def _wait_for_results_panel(driver: WebDriver, wait: WebDriverWait):
+    selectors = (
+        "//div[contains(@aria-label, 'Resultados') or contains(@aria-label, 'Results')]",
+        "//div[@role='feed']",
+        "//div[contains(@class, 'm6QErb') and .//a[contains(@href, '/maps/place/')]]",
+    )
+
+    for selector in selectors:
+        try:
+            return wait.until(EC.presence_of_element_located((By.XPATH, selector)))
+        except TimeoutException:
+            continue
+
+    raise RuntimeError(_diagnose_maps_page(driver))
 
 
 def _infer_region(address: str) -> str:
@@ -265,16 +367,15 @@ def _extract_current_place(driver: WebDriver, wait: WebDriverWait) -> MapLead:
 
 def scrape_google_maps(niche: str, location: str, start_index: int = 1):
     driver = _create_driver()
-    wait = WebDriverWait(driver, 10)
+    wait = WebDriverWait(driver, 15)
 
     try:
         query = quote_plus(f"{niche} {location}")
-        driver.get(f"https://www.google.com/maps/search/{query}")
+        driver.get(f"https://www.google.com/maps/search/{query}?hl=pt-BR")
         time.sleep(5)
+        _click_google_consent_if_present(driver)
 
-        results_panel = wait.until(
-            EC.presence_of_element_located((By.XPATH, "//div[contains(@aria-label, 'Resultados')]"))
-        )
+        results_panel = _wait_for_results_panel(driver, wait)
 
         def scroll_list() -> bool:
             previous_height = driver.execute_script("return arguments[0].scrollHeight", results_panel)
@@ -331,4 +432,4 @@ def scrape_google_maps(niche: str, location: str, start_index: int = 1):
 
             index += 1
     finally:
-        driver.quit()
+        _quit_driver(driver)

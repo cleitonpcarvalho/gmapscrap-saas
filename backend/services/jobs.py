@@ -6,6 +6,7 @@ import time
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from selenium.common.exceptions import TimeoutException, WebDriverException
 
 from backend.database import SessionLocal
 from backend.models import Lead, SearchRun
@@ -157,6 +158,19 @@ def _wait_if_paused(db: Session, run_id: int) -> SearchRun | None:
         time.sleep(1)
 
 
+def _format_search_error(exc: Exception) -> str:
+    if isinstance(exc, TimeoutException):
+        return "Google Maps não carregou os resultados dentro do tempo limite."
+
+    if isinstance(exc, WebDriverException):
+        message = getattr(exc, "msg", "") or str(exc)
+        message = message.split("Stacktrace:", 1)[0].strip()
+        return message or "Chrome/Selenium falhou ao executar a busca."
+
+    message = str(exc).split("Stacktrace:", 1)[0].strip()
+    return message or "Busca falhou por um erro inesperado."
+
+
 def run_search_job(run_id: int) -> None:
     db = SessionLocal()
 
@@ -240,9 +254,10 @@ def run_search_job(run_id: int) -> None:
     except Exception as exc:
         run = db.get(SearchRun, run_id)
         if run:
+            error_message = _format_search_error(exc)
             run.status = "failed"
-            run.error = str(exc)
-            run.message = "Busca falhou."
+            run.error = error_message
+            run.message = error_message
             run.finished_at = _now()
             db.commit()
     finally:
