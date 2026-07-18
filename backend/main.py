@@ -62,6 +62,7 @@ from backend.services.email_campaigns import (
     mark_opened,
     render_email,
     resume_running_campaigns,
+    start_campaign_scheduler,
     submit_campaign_job,
 )
 from backend.services.email_delivery import get_or_create_smtp_config, send_email, send_test_email, update_smtp_config
@@ -99,6 +100,7 @@ def on_startup() -> None:
         db.close()
     resume_unfinished_search_runs()
     resume_running_campaigns()
+    start_campaign_scheduler()
 
 
 def require_user(request: Request) -> str:
@@ -769,6 +771,7 @@ def start_email_campaign(
     campaign.status = "running"
     campaign.message = "Campanha iniciada."
     campaign.error = None
+    campaign.finished_at = None
     db.commit()
     submit_campaign_job(campaign.id)
     db.refresh(campaign)

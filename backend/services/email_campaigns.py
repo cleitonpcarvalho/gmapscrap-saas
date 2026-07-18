@@ -4,7 +4,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as dt_time, timedelta, timezone
-from threading import Lock
+from threading import Lock, Thread
 from urllib.parse import parse_qs, quote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -30,6 +30,8 @@ from backend.services.email_delivery import get_smtp_config, send_email
 campaign_executor = ThreadPoolExecutor(max_workers=1)
 _active_campaign_ids: set[int] = set()
 _active_campaign_ids_lock = Lock()
+_scheduler_started = False
+_scheduler_lock = Lock()
 VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
 YOUTUBE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{6,}$")
 LIST_FILTER_SEPARATOR = "||"
@@ -79,6 +81,29 @@ def resume_running_campaigns() -> None:
 
     for campaign_id in campaign_ids:
         submit_campaign_job(campaign_id)
+
+
+def start_campaign_scheduler(interval_seconds: int = 60) -> None:
+    global _scheduler_started
+
+    with _scheduler_lock:
+        if _scheduler_started:
+            return
+
+        _scheduler_started = True
+
+    thread = Thread(target=_campaign_scheduler_loop, args=(interval_seconds,), daemon=True)
+    thread.start()
+
+
+def _campaign_scheduler_loop(interval_seconds: int) -> None:
+    while True:
+        try:
+            resume_running_campaigns()
+        except Exception:
+            pass
+
+        time.sleep(interval_seconds)
 
 
 def lead_query_for_list(lead_list: LeadList):
@@ -320,14 +345,21 @@ def _parse_time(value: str) -> dt_time:
         return dt_time(9, 0)
 
 
-def _inside_send_window(campaign: EmailCampaign) -> bool:
+def _campaign_timezone(campaign: EmailCampaign) -> ZoneInfo:
     try:
-        campaign_timezone = ZoneInfo(campaign.timezone_name or "America/New_York")
+        return ZoneInfo(campaign.timezone_name or "America/New_York")
     except ZoneInfoNotFoundError:
-        campaign_timezone = ZoneInfo("America/New_York")
+        return ZoneInfo("America/New_York")
 
+
+def _allowed_send_days(campaign: EmailCampaign) -> set[int]:
+    return {int(day) for day in campaign.send_days.split(",") if day.strip().isdigit()}
+
+
+def _inside_send_window(campaign: EmailCampaign) -> bool:
+    campaign_timezone = _campaign_timezone(campaign)
     now = datetime.now(campaign_timezone)
-    allowed_days = {int(day) for day in campaign.send_days.split(",") if day.strip().isdigit()}
+    allowed_days = _allowed_send_days(campaign)
     if allowed_days and now.weekday() not in allowed_days:
         return False
 
@@ -336,10 +368,51 @@ def _inside_send_window(campaign: EmailCampaign) -> bool:
     return start <= now.time() <= end
 
 
-def _limit_reached(db: Session, campaign: EmailCampaign) -> str:
-    now = _now()
-    daily_since = now - timedelta(days=1)
-    weekly_since = now - timedelta(days=7)
+def _next_send_window_start(campaign: EmailCampaign, earliest: datetime | None = None) -> datetime | None:
+    campaign_timezone = _campaign_timezone(campaign)
+    now = earliest.astimezone(campaign_timezone) if earliest else datetime.now(campaign_timezone)
+    allowed_days = _allowed_send_days(campaign)
+    start = _parse_time(campaign.send_window_start)
+    end = _parse_time(campaign.send_window_end)
+
+    for offset in range(14):
+        candidate_date = (now + timedelta(days=offset)).date()
+        if allowed_days and candidate_date.weekday() not in allowed_days:
+            continue
+
+        candidate_start = datetime.combine(candidate_date, start, tzinfo=campaign_timezone)
+        candidate_end = datetime.combine(candidate_date, end, tzinfo=campaign_timezone)
+        if candidate_end < now:
+            continue
+
+        if candidate_start <= now <= candidate_end:
+            return now
+
+        return candidate_start
+
+    return None
+
+
+def _format_wait_until(value: datetime | None, campaign: EmailCampaign) -> str:
+    if value is None:
+        return ""
+
+    local_value = value.astimezone(_campaign_timezone(campaign))
+    return f" Retoma em {local_value.strftime('%d/%m %H:%M')} ({campaign.timezone_name})."
+
+
+def _wait_for_next_window(db: Session, campaign: EmailCampaign, reason: str, next_time: datetime | None) -> None:
+    campaign.message = f"Aguardando: {reason}.{_format_wait_until(next_time, campaign)}"
+    campaign.error = None
+    db.commit()
+
+
+def _limit_status(db: Session, campaign: EmailCampaign) -> tuple[str, datetime | None]:
+    campaign_timezone = _campaign_timezone(campaign)
+    now = datetime.now(campaign_timezone)
+    daily_since = now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    weekly_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    weekly_since = weekly_start.astimezone(timezone.utc)
     daily_sent = db.scalar(
         select(func.count(EmailSend.id)).where(
             EmailSend.campaign_id == campaign.id,
@@ -356,10 +429,12 @@ def _limit_reached(db: Session, campaign: EmailCampaign) -> str:
     ) or 0
 
     if daily_sent >= campaign.daily_limit:
-        return "Limite diário atingido."
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return "limite diário atingido", _next_send_window_start(campaign, tomorrow)
     if weekly_sent >= campaign.weekly_limit:
-        return "Limite semanal atingido."
-    return ""
+        next_week = (weekly_start + timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return "limite semanal atingido", _next_send_window_start(campaign, next_week)
+    return "", None
 
 
 def _sleep_with_pause_checks(db: Session, campaign_id: int, seconds: int) -> None:
@@ -397,16 +472,17 @@ def run_campaign(campaign_id: int) -> None:
                 return
 
             if not _inside_send_window(campaign):
-                campaign.status = "paused"
-                campaign.message = "Pausada: fora da janela de envio."
-                db.commit()
+                _wait_for_next_window(
+                    db,
+                    campaign,
+                    "fora da janela de envio",
+                    _next_send_window_start(campaign),
+                )
                 return
 
-            limit_message = _limit_reached(db, campaign)
+            limit_message, next_send_time = _limit_status(db, campaign)
             if limit_message:
-                campaign.status = "paused"
-                campaign.message = f"Pausada: {limit_message}"
-                db.commit()
+                _wait_for_next_window(db, campaign, limit_message, next_send_time)
                 return
 
             config = get_smtp_config(db)
