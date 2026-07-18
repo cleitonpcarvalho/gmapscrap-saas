@@ -1,6 +1,8 @@
 from collections.abc import Generator
+import time
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from backend.config import get_settings
@@ -18,9 +20,22 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db() -> None:
     from backend import models  # noqa: F401
 
+    _wait_for_database()
     Base.metadata.create_all(bind=engine)
     _ensure_email_template_columns()
     _ensure_email_campaign_columns()
+
+
+def _wait_for_database(max_attempts: int = 30, delay_seconds: int = 2) -> None:
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            return
+        except OperationalError:
+            if attempt == max_attempts:
+                raise
+            time.sleep(delay_seconds)
 
 
 def _ensure_email_template_columns() -> None:

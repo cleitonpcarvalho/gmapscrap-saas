@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:16-alpine
-    restart: unless-stopped
     environment:
       POSTGRES_DB: gmapscrap
       POSTGRES_USER: gmapscrap
@@ -15,12 +14,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      placement:
+        constraints:
+          - node.role == manager
 
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-    restart: unless-stopped
+    image: ghcr.io/cleitonpcarvalho/gmapscrap-saas-backend:latest
     environment:
       DATABASE_URL: "postgresql+psycopg://gmapscrap:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no Portainer}@postgres:5432/gmapscrap"
       APP_USERNAME: "${APP_USERNAME:?defina APP_USERNAME no Portainer}"
@@ -35,45 +40,49 @@ services:
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5.6}"
       PUBLIC_BASE_URL: "https://api.automasoluct.com.br"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=AutomaNet
-      - traefik.http.routers.gmapscrap-api.rule=Host(`api.automasoluct.com.br`)
-      - traefik.http.routers.gmapscrap-api.entrypoints=websecure
-      - traefik.http.routers.gmapscrap-api.tls=true
-      - traefik.http.routers.gmapscrap-api.tls.certresolver=letsencryptresolver
-      - traefik.http.services.gmapscrap-api.loadbalancer.server.port=8000
     networks:
       - internal
       - proxy
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=AutomaNet
+        - traefik.http.routers.gmapscrap-api.rule=Host(`api.automasoluct.com.br`)
+        - traefik.http.routers.gmapscrap-api.entrypoints=websecure
+        - traefik.http.routers.gmapscrap-api.tls=true
+        - traefik.http.routers.gmapscrap-api.tls.certresolver=letsencryptresolver
+        - traefik.http.services.gmapscrap-api.loadbalancer.server.port=8000
 
   frontend:
-    build:
-      context: ./frontend
-      args:
-        NEXT_PUBLIC_API_BASE_URL: "https://api.automasoluct.com.br"
-    restart: unless-stopped
+    image: ghcr.io/cleitonpcarvalho/gmapscrap-saas-frontend:latest
     environment:
       NEXT_PUBLIC_API_BASE_URL: "https://api.automasoluct.com.br"
-    depends_on:
-      - backend
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=AutomaNet
-      - traefik.http.routers.gmapscrap-web.rule=Host(`gmapscrap.automasoluct.com.br`)
-      - traefik.http.routers.gmapscrap-web.entrypoints=websecure
-      - traefik.http.routers.gmapscrap-web.tls=true
-      - traefik.http.routers.gmapscrap-web.tls.certresolver=letsencryptresolver
-      - traefik.http.services.gmapscrap-web.loadbalancer.server.port=3000
     networks:
       - proxy
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=AutomaNet
+        - traefik.http.routers.gmapscrap-web.rule=Host(`gmapscrap.automasoluct.com.br`)
+        - traefik.http.routers.gmapscrap-web.entrypoints=websecure
+        - traefik.http.routers.gmapscrap-web.tls=true
+        - traefik.http.routers.gmapscrap-web.tls.certresolver=letsencryptresolver
+        - traefik.http.services.gmapscrap-web.loadbalancer.server.port=3000
 
 networks:
   internal:
-    driver: bridge
+    driver: overlay
+    attachable: true
   proxy:
     external: true
     name: AutomaNet
