@@ -25,7 +25,7 @@ services:
           - node.role == manager
 
   backend:
-    image: ghcr.io/cleitonpcarvalho/gmapscrap-saas-backend:latest
+    image: ghcr.io/cleitonpcarvalho/gmapscrap-saas-backend:${GMAPSCRAP_IMAGE_TAG:-5f5d6636db37d92bbd62507347d3d3d435a2cb7d}
     labels:
       - traefik.enable=true
       - traefik.docker.network=AutomaNet
@@ -73,7 +73,7 @@ services:
         - traefik.http.services.gmapscrap-api.loadbalancer.server.port=8000
 
   frontend:
-    image: ghcr.io/cleitonpcarvalho/gmapscrap-saas-frontend:latest
+    image: ghcr.io/cleitonpcarvalho/gmapscrap-saas-frontend:${GMAPSCRAP_IMAGE_TAG:-5f5d6636db37d92bbd62507347d3d3d435a2cb7d}
     labels:
       - traefik.enable=true
       - traefik.docker.network=AutomaNet
