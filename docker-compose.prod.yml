@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gmapscrap
+      POSTGRES_USER: gmapscrap
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no Portainer}"
+    volumes:
+      - gmapscrap_postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gmapscrap -d gmapscrap"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql+psycopg://gmapscrap:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no Portainer}@postgres:5432/gmapscrap"
+      APP_USERNAME: "${APP_USERNAME:?defina APP_USERNAME no Portainer}"
+      APP_PASSWORD: "${APP_PASSWORD:?defina APP_PASSWORD no Portainer}"
+      SESSION_SECRET: "${SESSION_SECRET:?defina SESSION_SECRET no Portainer}"
+      SESSION_COOKIE_SECURE: "true"
+      CORS_ORIGINS: "https://gmapscrap.automasoluct.com.br"
+      CHROME_BIN: /usr/bin/chromium
+      CHROMEDRIVER_BIN: /usr/bin/chromedriver
+      SELENIUM_HEADLESS: "true"
+      CONTACT_EMAIL: "${CONTACT_EMAIL:-contato@automasoluct.com.br}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5.6}"
+      PUBLIC_BASE_URL: "https://api.automasoluct.com.br"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=AutomaNet
+      - traefik.http.routers.gmapscrap-api.rule=Host(`api.automasoluct.com.br`)
+      - traefik.http.routers.gmapscrap-api.entrypoints=websecure
+      - traefik.http.routers.gmapscrap-api.tls=true
+      - traefik.http.routers.gmapscrap-api.tls.certresolver=letsencryptresolver
+      - traefik.http.services.gmapscrap-api.loadbalancer.server.port=8000
+    networks:
+      - internal
+      - proxy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: "https://api.automasoluct.com.br"
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: "https://api.automasoluct.com.br"
+    depends_on:
+      - backend
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=AutomaNet
+      - traefik.http.routers.gmapscrap-web.rule=Host(`gmapscrap.automasoluct.com.br`)
+      - traefik.http.routers.gmapscrap-web.entrypoints=websecure
+      - traefik.http.routers.gmapscrap-web.tls=true
+      - traefik.http.routers.gmapscrap-web.tls.certresolver=letsencryptresolver
+      - traefik.http.services.gmapscrap-web.loadbalancer.server.port=3000
+    networks:
+      - proxy
+
+networks:
+  internal:
+    driver: bridge
+  proxy:
+    external: true
+    name: AutomaNet
+
+volumes:
+  gmapscrap_postgres_data:
+    name: gmapscrap_postgres_data

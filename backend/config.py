@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     app_username: str = "cleiton.carvalho@automasoluct.com.br"
     app_password: str = "change-this-password"
     session_secret: str = "change-this-local-secret"
+    session_cookie_secure: bool = False
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     chrome_bin: str | None = None
     chromedriver_bin: str | None = None

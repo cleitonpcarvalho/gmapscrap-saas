@@ -18,13 +18,14 @@ def create_session_token(username: str) -> str:
 
 
 def set_session_cookie(response: Response, token: str) -> None:
+    settings = get_settings()
     response.set_cookie(
         COOKIE_NAME,
         token,
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=settings.session_cookie_secure,
         path="/",
     )
 
