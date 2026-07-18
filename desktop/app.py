@@ -4,7 +4,7 @@ import sys
 from datetime import datetime
 
 from PySide6.QtCore import QThread, QTimer, Qt
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QBrush, QColor, QCloseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -174,6 +174,11 @@ class MainWindow(QMainWindow):
         self.progress_bar.setFormat("Aguardando")
         execution_layout.addWidget(self.progress_bar)
 
+        self.current_message = QLabel("Aguardando uma nova busca.")
+        self.current_message.setObjectName("runMessage")
+        self.current_message.setWordWrap(True)
+        execution_layout.addWidget(self.current_message)
+
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setPlaceholderText("Os logs da busca aparecem aqui.")
@@ -281,17 +286,26 @@ class MainWindow(QMainWindow):
                 background: #f7faf9;
                 border: 1px solid #dce8e4;
                 border-radius: 8px;
+                color: #10211d;
                 padding: 12px;
                 font-size: 22px;
                 font-weight: 900;
+            }
+            QLabel#runMessage {
+                color: #52635f;
+                font-weight: 750;
             }
             QLineEdit, QSpinBox {
                 min-height: 42px;
                 background: #ffffff;
                 border: 1px solid #d8e4df;
                 border-radius: 8px;
+                color: #10211d;
                 padding: 0 12px;
                 font-weight: 700;
+                selection-background-color: #cceee8;
+                selection-color: #10211d;
+                placeholder-text-color: #84958f;
             }
             QLineEdit:focus, QSpinBox:focus {
                 border: 2px solid #008996;
@@ -302,8 +316,28 @@ class MainWindow(QMainWindow):
                 border-radius: 8px;
             }
             QCheckBox {
+                color: #10211d;
+                background: transparent;
                 font-weight: 800;
                 spacing: 10px;
+            }
+            QCheckBox:disabled {
+                color: #6f807a;
+            }
+            QCheckBox::indicator {
+                width: 15px;
+                height: 15px;
+                background: #ffffff;
+                border: 1px solid #a8b9b4;
+                border-radius: 3px;
+            }
+            QCheckBox::indicator:checked {
+                background: #008996;
+                border: 1px solid #008996;
+            }
+            QCheckBox::indicator:disabled {
+                background: #edf4f2;
+                border: 1px solid #cbdad5;
             }
             QPushButton {
                 min-height: 44px;
@@ -320,6 +354,7 @@ class MainWindow(QMainWindow):
             QPushButton#primaryButton:disabled {
                 background: #9cb8b6;
                 border: 1px solid #9cb8b6;
+                color: #f5fbfa;
             }
             QPushButton#secondaryButton {
                 background: #ffffff;
@@ -357,8 +392,17 @@ class MainWindow(QMainWindow):
                 alternate-background-color: #f7faf9;
                 border: 1px solid #dce8e4;
                 border-radius: 8px;
+                color: #13201d;
                 gridline-color: #e6efeb;
                 selection-background-color: #d7f3ee;
+                selection-color: #10211d;
+            }
+            QTableWidget::item {
+                color: #13201d;
+                padding: 6px;
+            }
+            QTableWidget::item:alternate {
+                background: #f7faf9;
             }
             QHeaderView::section {
                 background: #edf4f2;
@@ -461,6 +505,7 @@ class MainWindow(QMainWindow):
     def _reset_current(self) -> None:
         self.current_run = None
         self.log_view.clear()
+        self.current_message.setText("Preparando busca local...")
         self._set_metric(self.scanned_value, 0)
         self._set_metric(self.saved_value, 0)
         self._set_metric(self.skipped_value, 0)
@@ -476,9 +521,11 @@ class MainWindow(QMainWindow):
         scanned = int(run.get("scanned_count") or 0)
         saved = int(run.get("saved_count") or 0)
         skipped = int(run.get("skipped_count") or 0)
+        message = str(run.get("message") or "")
         self._set_metric(self.scanned_value, scanned)
         self._set_metric(self.saved_value, saved)
         self._set_metric(self.skipped_value, skipped)
+        self.current_message.setText(message or "Busca em andamento...")
 
         status = str(run.get("status") or "running")
         if status == "completed":
@@ -495,17 +542,25 @@ class MainWindow(QMainWindow):
             target_value = int(target)
             self.progress_bar.setRange(0, target_value)
             self.progress_bar.setValue(min(saved, target_value))
-            self.progress_bar.setFormat(f"{saved}/{target_value} salvos")
+            if status == "completed":
+                self.progress_bar.setFormat(f"Concluída: {saved}/{target_value} salvos")
+            elif status == "failed":
+                self.progress_bar.setFormat(f"Falhou: {saved}/{target_value} salvos")
+            elif status == "paused":
+                self.progress_bar.setFormat(f"Pausada: {saved}/{target_value} salvos")
+            else:
+                self.progress_bar.setFormat(f"{saved}/{target_value} salvos")
         elif status in {"completed", "failed", "paused"}:
             self.progress_bar.setRange(0, 1)
             self.progress_bar.setValue(1)
-            self.progress_bar.setFormat(status)
+            self.progress_bar.setFormat(_status_label(status))
         else:
             self.progress_bar.setRange(0, 0)
             self.progress_bar.setFormat("Máximo possível")
 
     def _finish_search(self, ok: bool, message: str) -> None:
         self._append_log(message)
+        self.current_message.setText(message)
         self._set_running(False)
         if ok:
             self._set_status("Concluída", "#dff8e9", "#16834a")
@@ -541,6 +596,7 @@ class MainWindow(QMainWindow):
 
             for column, value in enumerate((query, _status_label(status), saved, created)):
                 cell = QTableWidgetItem(value)
+                cell.setForeground(QBrush(QColor("#13201d")))
                 cell.setToolTip(value)
                 self.history_table.setItem(row, column, cell)
 
@@ -576,6 +632,7 @@ def _format_date(raw: str) -> str:
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     window = MainWindow()
     window.show()
     return app.exec()

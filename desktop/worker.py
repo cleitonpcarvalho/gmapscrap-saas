@@ -38,6 +38,7 @@ class SearchWorker(QObject):
     def run(self) -> None:
         client: GmapScrapApiClient | None = None
         run_id: int | None = None
+        last_run: dict | None = None
         finish_status = "completed"
         finish_message = "Busca concluída."
         scanned_count = 0
@@ -49,6 +50,7 @@ class SearchWorker(QObject):
             self.log.emit("API conectada.")
 
             run = client.create_search(self.niche, self.location, self.quantity, self.max_results)
+            last_run = run
             run_id = int(run["id"])
             self.progress.emit(run)
             self.log.emit(f"Execução #{run_id} criada.")
@@ -65,7 +67,7 @@ class SearchWorker(QObject):
                 scanned_count = max(scanned_count, event.scanned)
 
                 if event.kind == "done":
-                    finish_message = event.message
+                    finish_message = _completion_message(event.message, target_quantity, last_run)
                     self.log.emit(event.message)
                     break
 
@@ -77,6 +79,7 @@ class SearchWorker(QObject):
                         scanned_count=scanned_count,
                         skipped_delta=1,
                     )
+                    last_run = run
                     self.progress.emit(run)
                     self.log.emit(event.message)
                     continue
@@ -92,6 +95,7 @@ class SearchWorker(QObject):
                         scanned_count=scanned_count,
                         skipped_delta=1,
                     )
+                    last_run = run
                     self.progress.emit(run)
                     self.log.emit(f"{event.lead.name} ignorado: erro ao buscar e-mail.")
                     continue
@@ -104,6 +108,7 @@ class SearchWorker(QObject):
                         scanned_count=scanned_count,
                         skipped_delta=1,
                     )
+                    last_run = run
                     self.progress.emit(run)
                     self.log.emit(f"{event.lead.name} ignorado: e-mail não encontrado.")
                     continue
@@ -118,6 +123,7 @@ class SearchWorker(QObject):
                     email=email_result.email,
                 )
                 run = response["run"]
+                last_run = run
                 self.progress.emit(run)
                 self.log.emit(response["message"])
 
@@ -136,6 +142,7 @@ class SearchWorker(QObject):
                     message=finish_message,
                     scanned_count=scanned_count,
                 )
+                last_run = run
                 self.progress.emit(run)
 
             self.finished.emit(finish_status == "completed", finish_message)
@@ -170,3 +177,15 @@ def _friendly_error(exc: Exception) -> str:
         return clean(getattr(exc, "msg", "") or str(exc)) or "Google Maps não conseguiu completar a busca no Chrome local."
 
     return clean(str(exc)) or "Busca falhou por um erro inesperado."
+
+
+def _completion_message(base_message: str, target_quantity: int | None, run: dict | None) -> str:
+    message = base_message.strip() or "Busca concluída."
+    if not target_quantity or not run:
+        return message
+
+    saved = int(run.get("saved_count") or 0)
+    if saved >= target_quantity:
+        return "Quantidade solicitada concluída."
+
+    return f"{message} Foram salvos {saved} de {target_quantity} leads solicitados."
