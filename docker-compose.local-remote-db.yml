@@ -1,0 +1,37 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      DB_HOST: host.docker.internal
+      DB_PORT: "${REMOTE_DB_LOCAL_PORT:-5433}"
+      DB_NAME: "${POSTGRES_DB:-gmapscrap}"
+      DB_USER: "${POSTGRES_USER:-gmapscrap}"
+      DB_PASSWORD: "${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no arquivo .env.local-remote-db}"
+      APP_USERNAME: "${APP_USERNAME:-cleiton.carvalho@automasoluct.com.br}"
+      APP_PASSWORD: "${APP_PASSWORD:-change-this-password}"
+      SESSION_SECRET: "${SESSION_SECRET:-local-remote-db-session-secret-change-me}"
+      SESSION_COOKIE_SECURE: "false"
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001
+      CHROME_BIN: /usr/bin/chromium
+      CHROMEDRIVER_BIN: /usr/bin/chromedriver
+      SELENIUM_HEADLESS: "true"
+      CONTACT_EMAIL: "${CONTACT_EMAIL:-contato@automasoluct.com.br}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5.6}"
+      PUBLIC_BASE_URL: http://localhost:8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    ports:
+      - "3001:3000"
