@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,8 +40,17 @@ def _read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def _desktop_env_paths() -> tuple[Path, ...]:
+    paths = [PROJECT_ROOT / ".env", Path.cwd() / ".env", Path.home() / ".gmapscrap-desktop.env"]
+    if getattr(sys, "frozen", False):
+        executable = Path(sys.executable).resolve()
+        bundle_root = executable.parents[2] if len(executable.parents) > 2 else executable.parent
+        paths.extend((bundle_root.parent / ".gmapscrap-desktop.env", bundle_root / "Contents" / "Resources" / ".env"))
+    return tuple(dict.fromkeys(paths))
+
+
 def load_local_environment() -> None:
-    for path in (PROJECT_ROOT / ".env", Path.home() / ".gmapscrap-desktop.env"):
+    for path in _desktop_env_paths():
         for key, value in _read_env_file(path).items():
             os.environ.setdefault(key, value)
 
