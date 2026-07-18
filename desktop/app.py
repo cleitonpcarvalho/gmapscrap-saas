@@ -123,10 +123,10 @@ class MainWindow(QMainWindow):
         self.start_button = QPushButton("Iniciar busca")
         self.start_button.setObjectName("primaryButton")
         self.start_button.clicked.connect(self.start_search)
-        self.stop_button = QPushButton("Parar")
+        self.stop_button = QPushButton("Pausar")
         self.stop_button.setObjectName("secondaryButton")
         self.stop_button.setEnabled(False)
-        self.stop_button.clicked.connect(self.stop_search)
+        self.stop_button.clicked.connect(self.handle_secondary_action)
         button_row.addWidget(self.start_button, 1)
         button_row.addWidget(self.stop_button)
         form_layout.addLayout(button_row)
@@ -464,9 +464,20 @@ class MainWindow(QMainWindow):
         self._reset_current()
         self.current_title.setText(f"{niche} · {location}")
         self._set_status("Rodando", "#fff4d7", "#916400")
+        self._start_worker(niche, location, quantity, max_results)
 
+    def _start_worker(
+        self,
+        niche: str,
+        location: str,
+        quantity: int | None,
+        max_results: bool,
+        *,
+        run_id: int | None = None,
+        start_index: int = 1,
+    ) -> None:
         self.thread = QThread(self)
-        self.worker = SearchWorker(niche, location, quantity, max_results)
+        self.worker = SearchWorker(niche, location, quantity, max_results, run_id=run_id, start_index=start_index)
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.log.connect(self._append_log)
@@ -474,13 +485,40 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self._finish_search)
         self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
+        self.thread.finished.connect(self._clear_worker_refs)
         self.thread.finished.connect(self.thread.deleteLater)
         self.thread.start()
 
-    def stop_search(self) -> None:
+    def handle_secondary_action(self) -> None:
+        if self.thread and self.thread.isRunning():
+            self.pause_search()
+            return
+
+        if self.current_run and self.current_run.get("status") == "paused":
+            self.resume_search()
+
+    def pause_search(self) -> None:
         if self.worker:
             self.worker.stop()
             self.stop_button.setEnabled(False)
+
+    def resume_search(self) -> None:
+        if not self.current_run:
+            return
+
+        run_id = int(self.current_run["id"])
+        niche = str(self.current_run.get("niche") or self.niche_input.text().strip())
+        location = str(self.current_run.get("location") or self.location_input.text().strip())
+        max_results = bool(self.current_run.get("max_results"))
+        target_quantity = self.current_run.get("target_quantity")
+        quantity = None if max_results else int(target_quantity or self.quantity_input.value())
+        start_index = int(self.current_run.get("scanned_count") or 0) + 1
+
+        self._append_log(f"Retomando do resultado #{start_index}.")
+        self.current_message.setText("Retomando busca local...")
+        self._set_status("Rodando", "#fff4d7", "#916400")
+        self._set_running(True)
+        self._start_worker(niche, location, quantity, max_results, run_id=run_id, start_index=start_index)
 
     def refresh_history(self) -> None:
         try:
@@ -495,12 +533,17 @@ class MainWindow(QMainWindow):
         self._fill_history(searches[:8])
 
     def _set_running(self, running: bool) -> None:
+        paused = bool(self.current_run and self.current_run.get("status") == "paused")
         self.start_button.setEnabled(not running)
-        self.stop_button.setEnabled(running)
-        self.niche_input.setEnabled(not running)
-        self.location_input.setEnabled(not running)
-        self.quantity_input.setEnabled(not running and not self.max_checkbox.isChecked())
-        self.max_checkbox.setEnabled(not running)
+        self.stop_button.setEnabled(running or paused)
+        self.stop_button.setText("Pausar" if running else ("Retomar" if paused else "Pausar"))
+        if paused and not running:
+            self.start_button.setEnabled(False)
+        fields_enabled = not running and not paused
+        self.niche_input.setEnabled(fields_enabled)
+        self.location_input.setEnabled(fields_enabled)
+        self.quantity_input.setEnabled(fields_enabled and not self.max_checkbox.isChecked())
+        self.max_checkbox.setEnabled(fields_enabled)
 
     def _reset_current(self) -> None:
         self.current_run = None
@@ -599,6 +642,10 @@ class MainWindow(QMainWindow):
                 cell.setForeground(QBrush(QColor("#13201d")))
                 cell.setToolTip(value)
                 self.history_table.setItem(row, column, cell)
+
+    def _clear_worker_refs(self) -> None:
+        self.thread = None
+        self.worker = None
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.worker and self.thread and self.thread.isRunning():

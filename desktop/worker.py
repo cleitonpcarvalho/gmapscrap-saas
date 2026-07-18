@@ -22,12 +22,22 @@ class SearchWorker(QObject):
     progress = Signal(dict)
     finished = Signal(bool, str)
 
-    def __init__(self, niche: str, location: str, quantity: int | None, max_results: bool):
+    def __init__(
+        self,
+        niche: str,
+        location: str,
+        quantity: int | None,
+        max_results: bool,
+        run_id: int | None = None,
+        start_index: int = 1,
+    ):
         super().__init__()
         self.niche = niche
         self.location = location
         self.quantity = quantity
         self.max_results = max_results
+        self.resume_run_id = run_id
+        self.start_index = max(1, start_index)
         self._stop_requested = False
 
     def stop(self) -> None:
@@ -49,16 +59,25 @@ class SearchWorker(QObject):
             client.login()
             self.log.emit("API conectada.")
 
-            run = client.create_search(self.niche, self.location, self.quantity, self.max_results)
+            if self.resume_run_id:
+                run_id = self.resume_run_id
+                run = client.update_search(
+                    run_id,
+                    status="running",
+                    message="Retomando busca local no aplicativo desktop...",
+                )
+            else:
+                run = client.create_search(self.niche, self.location, self.quantity, self.max_results)
+                run_id = int(run["id"])
+
             last_run = run
-            run_id = int(run["id"])
             self.progress.emit(run)
-            self.log.emit(f"Execução #{run_id} criada.")
+            self.log.emit(f"Execução #{run_id} {'retomada' if self.resume_run_id else 'criada'}.")
             self.log.emit("Abrindo Google Maps no Chrome headless local...")
 
             target_quantity = None if self.max_results else self.quantity
 
-            for event in scrape_google_maps(self.niche, self.location):
+            for event in scrape_google_maps(self.niche, self.location, start_index=self.start_index):
                 if self._stop_requested:
                     finish_status = "paused"
                     finish_message = "Busca interrompida no aplicativo desktop."

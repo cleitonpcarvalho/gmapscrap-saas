@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,14 +76,12 @@ class GmapScrapApiClient:
         return cls(load_api_config())
 
     def login(self) -> None:
-        try:
-            response = self.session.post(
-                f"{self.config.base_url}/api/auth/login",
-                json={"username": self.config.username, "password": self.config.password},
-                timeout=20,
-            )
-        except requests.RequestException as exc:
-            raise ApiClientError(f"Não foi possível conectar na API: {exc}") from None
+        response = self._send_with_retries(
+            "POST",
+            "/api/auth/login",
+            json={"username": self.config.username, "password": self.config.password},
+            timeout=20,
+        )
 
         if not response.ok:
             raise ApiClientError(self._error_message(response, "Login na API falhou."))
@@ -147,10 +146,7 @@ class GmapScrapApiClient:
         if not self._authenticated:
             self.login()
 
-        try:
-            response = self.session.request(method, f"{self.config.base_url}{path}", timeout=timeout, **kwargs)
-        except requests.RequestException as exc:
-            raise ApiClientError(f"Falha ao chamar a API: {exc}") from None
+        response = self._send_with_retries(method, path, timeout=timeout, **kwargs)
 
         if response.status_code == 401 and retry:
             self._authenticated = False
@@ -163,6 +159,27 @@ class GmapScrapApiClient:
         if not response.content:
             return None
         return response.json()
+
+    def _send_with_retries(self, method: str, path: str, *, timeout: int, **kwargs: Any) -> requests.Response:
+        transient_statuses = {502, 503, 504}
+        last_error: requests.RequestException | None = None
+
+        for attempt in range(4):
+            try:
+                response = self.session.request(method, f"{self.config.base_url}{path}", timeout=timeout, **kwargs)
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt == 3:
+                    break
+                time.sleep(1.5 * (attempt + 1))
+                continue
+
+            if response.status_code not in transient_statuses or attempt == 3:
+                return response
+
+            time.sleep(1.5 * (attempt + 1))
+
+        raise ApiClientError(f"Falha ao chamar a API: {last_error}") from None
 
     @staticmethod
     def _error_message(response: requests.Response, fallback: str) -> str:
