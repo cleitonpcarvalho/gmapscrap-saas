@@ -697,6 +697,8 @@ def _format_date(raw: str) -> str:
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setApplicationName("GmapScrap Desktop")
+    app.setWindowIcon(QIcon(asset_path("gmapscrap-favicon.png")))
     app.setStyle("Fusion")
     window = MainWindow()
     window.show()

@@ -15,6 +15,8 @@ from backend.services.template_seeds import DEFAULT_LOGO_URL
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 GENERIC_CONTEXT_TERMS = {"all", "todos", "todas", "any", "all niches", "all locations"}
+EM_DASH_PATTERN = re.compile(r"\s*[\u2014\u2015]\s*")
+SPACED_EN_DASH_PATTERN = re.compile(r"\s+\u2013\s+")
 
 
 def _template_html(paragraphs: list[str], cta_paragraph: str) -> str:
@@ -115,6 +117,12 @@ def _enforce_dynamic_context(text: str, payload: AiTemplateGenerateRequest) -> s
     return _replace_context_terms(next_text, _context_terms(payload.location), "{{location}}")
 
 
+def _avoid_ai_dashes(text: str) -> str:
+    next_text = EM_DASH_PATTERN.sub(", ", text or "")
+    next_text = SPACED_EN_DASH_PATTERN.sub(", ", next_text)
+    return next_text.replace("\u2013", "-").replace(" ,", ",").strip()
+
+
 def _unique_name(db: Session, base_name: str) -> str:
     name = base_name.strip()[:240] or f"AI Template {datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     candidate = name
@@ -195,6 +203,9 @@ Rules:
 - Do not promise guaranteed results.
 - Do not mention scraping or Google Maps.
 - For sequences, make each email feel connected but not repetitive.
+- Never use U+2014 em dash or U+2015 horizontal bar in any subject, title, paragraph, or CTA.
+- Do not use long dashes as comma or parenthetical punctuation. Use commas, periods, colons, semicolons, or parentheses instead.
+- Normal ASCII hyphens inside compound words are allowed when grammatically needed.
 - Return only the JSON that matches the schema.
 """
 
@@ -210,7 +221,10 @@ def generate_email_templates(db: Session, payload: AiTemplateGenerateRequest) ->
         "input": [
             {
                 "role": "system",
-                "content": "You write concise, compliant B2B email templates as structured JSON.",
+                "content": (
+                    "You write concise, compliant B2B email templates as structured JSON. "
+                    "Do not use U+2014 em dash or U+2015 horizontal bar in generated email copy."
+                ),
             },
             {"role": "user", "content": _prompt(payload)},
         ],
@@ -250,7 +264,7 @@ def generate_email_templates(db: Session, payload: AiTemplateGenerateRequest) ->
     saved_templates: list[EmailTemplate] = []
     for index, item in enumerate(templates_data, start=1):
         paragraphs = [
-            _enforce_dynamic_context(str(paragraph).strip(), payload)
+            _avoid_ai_dashes(_enforce_dynamic_context(str(paragraph).strip(), payload))
             for paragraph in item.get("paragraphs", [])
             if str(paragraph).strip()
         ]
@@ -259,13 +273,15 @@ def generate_email_templates(db: Session, payload: AiTemplateGenerateRequest) ->
                 "I wanted to share a practical resource that may help your team reduce manual work and keep follow-ups organized.",
             ]
 
-        cta_paragraph = _enforce_dynamic_context(str(item.get("cta_paragraph") or payload.call_to_action).strip(), payload)
-        base_name = str(item.get("name") or f"{payload.campaign_name or 'AI Campaign'} Email {index}")
-        content_title = str(payload.content_title or item.get("content_title") or "{{content_title}}").strip()
-        subject = _enforce_dynamic_context(
+        cta_paragraph = _avoid_ai_dashes(
+            _enforce_dynamic_context(str(item.get("cta_paragraph") or payload.call_to_action).strip(), payload)
+        )
+        base_name = _avoid_ai_dashes(str(item.get("name") or f"{payload.campaign_name or 'AI Campaign'} Email {index}"))
+        content_title = _avoid_ai_dashes(str(payload.content_title or item.get("content_title") or "{{content_title}}").strip())
+        subject = _avoid_ai_dashes(_enforce_dynamic_context(
             str(item.get("subject") or f"Useful automation resource for {{company_name}}").strip(),
             payload,
-        )
+        ))
 
         template = EmailTemplate(
             name=_unique_name(db, base_name),

@@ -637,6 +637,7 @@ export default function Home() {
   const [contentPreviews, setContentPreviews] = useState<Record<string, ContentPreview>>({});
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
   const [editingTemplateId, setEditingTemplateId] = useState<number | null>(null);
+  const [templateDeleteDialog, setTemplateDeleteDialog] = useState<EmailTemplate | null>(null);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
@@ -940,6 +941,7 @@ export default function Home() {
     setSelectedLeadNiches([]);
     setSelectedLeadLocations([]);
     setLeadPage(1);
+    setTemplateDeleteDialog(null);
     setEmailMessage("");
     setEmailError("");
     setStats(emptyStats);
@@ -1058,8 +1060,16 @@ export default function Home() {
     }
   }
 
-  async function handleDeleteTemplate(template: EmailTemplate) {
-    if (!window.confirm(`Excluir o template "${template.name}"?`)) return;
+  function handleDeleteTemplate(template: EmailTemplate) {
+    setEmailError("");
+    setEmailMessage("");
+    setTemplateDeleteDialog(template);
+  }
+
+  async function confirmDeleteTemplate() {
+    if (!templateDeleteDialog) return;
+
+    const template = templateDeleteDialog;
 
     setEmailError("");
     setEmailMessage("");
@@ -1073,6 +1083,7 @@ export default function Home() {
         resetTemplateEditor();
       }
       setSelectedTemplateId(null);
+      setTemplateDeleteDialog(null);
       setEmailMessage("Template excluído.");
       await refreshEmailData();
     } catch (error) {
@@ -3054,6 +3065,43 @@ export default function Home() {
               </button>
               <button className="danger-button" disabled={deleting} onClick={confirmDelete} type="button">
                 {deleting ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+                Excluir
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {templateDeleteDialog ? (
+        <div className="modal-backdrop">
+          <section className="confirm-modal">
+            <div className="confirm-icon">
+              <Trash2 size={22} />
+            </div>
+            <div>
+              <p className="eyebrow">Confirmar exclusão</p>
+              <h2>Excluir template?</h2>
+              <p className="confirm-copy">
+                O template "{templateDeleteDialog.name}" será removido da biblioteca. Se alguma campanha estiver usando este template, o sistema pode impedir a exclusão.
+              </p>
+            </div>
+
+            {emailError ? <p className="error-text">{emailError}</p> : null}
+
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                disabled={emailBusy}
+                onClick={() => {
+                  setEmailError("");
+                  setTemplateDeleteDialog(null);
+                }}
+                type="button"
+              >
+                Cancelar
+              </button>
+              <button className="danger-button" disabled={emailBusy} onClick={confirmDeleteTemplate} type="button">
+                {emailBusy ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
                 Excluir
               </button>
             </div>
