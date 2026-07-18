@@ -27,7 +27,11 @@ services:
   backend:
     image: ghcr.io/cleitonpcarvalho/gmapscrap-saas-backend:latest
     environment:
-      DATABASE_URL: "postgresql+psycopg://gmapscrap:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no Portainer}@postgres:5432/gmapscrap"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: gmapscrap
+      DB_USER: gmapscrap
+      DB_PASSWORD: "${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no Portainer}"
       APP_USERNAME: "${APP_USERNAME:?defina APP_USERNAME no Portainer}"
       APP_PASSWORD: "${APP_PASSWORD:?defina APP_PASSWORD no Portainer}"
       SESSION_SECRET: "${SESSION_SECRET:?defina SESSION_SECRET no Portainer}"
@@ -52,6 +56,7 @@ services:
       labels:
         - traefik.enable=true
         - traefik.docker.network=AutomaNet
+        - traefik.swarm.network=AutomaNet
         - traefik.http.routers.gmapscrap-api.rule=Host(`api.automasoluct.com.br`)
         - traefik.http.routers.gmapscrap-api.entrypoints=websecure
         - traefik.http.routers.gmapscrap-api.tls=true
@@ -73,6 +78,7 @@ services:
       labels:
         - traefik.enable=true
         - traefik.docker.network=AutomaNet
+        - traefik.swarm.network=AutomaNet
         - traefik.http.routers.gmapscrap-web.rule=Host(`gmapscrap.automasoluct.com.br`)
         - traefik.http.routers.gmapscrap-web.entrypoints=websecure
         - traefik.http.routers.gmapscrap-web.tls=true

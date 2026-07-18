@@ -5,6 +5,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://gmapscrap:gmapscrap@localhost:5432/gmapscrap"
+    db_host: str = ""
+    db_port: int = 5432
+    db_name: str = ""
+    db_user: str = ""
+    db_password: str = ""
     app_username: str = "cleiton.carvalho@automasoluct.com.br"
     app_password: str = "change-this-password"
     session_secret: str = "change-this-local-secret"

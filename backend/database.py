@@ -2,6 +2,7 @@ from collections.abc import Generator
 import time
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import URL
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -13,7 +14,22 @@ class Base(DeclarativeBase):
 
 
 settings = get_settings()
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+
+
+def _database_url() -> str | URL:
+    if settings.db_host and settings.db_name and settings.db_user:
+        return URL.create(
+            "postgresql+psycopg",
+            username=settings.db_user,
+            password=settings.db_password,
+            host=settings.db_host,
+            port=settings.db_port,
+            database=settings.db_name,
+        )
+    return settings.database_url
+
+
+engine = create_engine(_database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
