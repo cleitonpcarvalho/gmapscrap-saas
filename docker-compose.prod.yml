@@ -36,7 +36,7 @@ services:
       - traefik.http.routers.gmapscrap-api.tls.certresolver=letsencryptresolver
       - traefik.http.services.gmapscrap-api.loadbalancer.server.port=8000
     environment:
-      DB_HOST: postgres
+      DB_HOST: gmapscrap_postgres
       DB_PORT: "5432"
       DB_NAME: gmapscrap
       DB_USER: gmapscrap
