@@ -34,33 +34,28 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push backend image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.backend
-          push: true
-          labels: |
-            org.opencontainers.image.source=https://github.com/cleitonpcarvalho/gmapscrap-saas
-            org.opencontainers.image.description=GmapScrap SaaS backend
-          tags: |
-            ${{ env.BACKEND_IMAGE }}:latest
-            ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,mode=max,scope=backend
+        run: |
+          docker build \
+            --pull \
+            --file Dockerfile.backend \
+            --label org.opencontainers.image.source=https://github.com/cleitonpcarvalho/gmapscrap-saas \
+            --label org.opencontainers.image.description="GmapScrap SaaS backend" \
+            --tag "${BACKEND_IMAGE}:latest" \
+            --tag "${BACKEND_IMAGE}:${GITHUB_SHA}" \
+            .
+          docker push "${BACKEND_IMAGE}:latest"
+          docker push "${BACKEND_IMAGE}:${GITHUB_SHA}"
 
       - name: Build and push frontend image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: true
-          build-args: |
-            NEXT_PUBLIC_API_BASE_URL=${{ env.NEXT_PUBLIC_API_BASE_URL }}
-          labels: |
-            org.opencontainers.image.source=https://github.com/cleitonpcarvalho/gmapscrap-saas
-            org.opencontainers.image.description=GmapScrap SaaS frontend
-          tags: |
-            ${{ env.FRONTEND_IMAGE }}:latest
-            ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,mode=max,scope=frontend
+        run: |
+          docker build \
+            --pull \
+            --file ./frontend/Dockerfile \
+            --build-arg NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL}" \
+            --label org.opencontainers.image.source=https://github.com/cleitonpcarvalho/gmapscrap-saas \
+            --label org.opencontainers.image.description="GmapScrap SaaS frontend" \
+            --tag "${FRONTEND_IMAGE}:latest" \
+            --tag "${FRONTEND_IMAGE}:${GITHUB_SHA}" \
+            ./frontend
+          docker push "${FRONTEND_IMAGE}:latest"
+          docker push "${FRONTEND_IMAGE}:${GITHUB_SHA}"
