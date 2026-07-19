@@ -239,6 +239,16 @@ const CAMPAIGN_TIMEZONES = [
   { value: "Europe/Paris", label: "Europa Ocidental - França/Espanha/Alemanha/Itália" }
 ];
 
+const CAMPAIGN_SEND_DAYS = [
+  { value: "0", label: "Segunda", shortLabel: "Seg" },
+  { value: "1", label: "Terça", shortLabel: "Ter" },
+  { value: "2", label: "Quarta", shortLabel: "Qua" },
+  { value: "3", label: "Quinta", shortLabel: "Qui" },
+  { value: "4", label: "Sexta", shortLabel: "Sex" },
+  { value: "5", label: "Sábado", shortLabel: "Sáb" },
+  { value: "6", label: "Domingo", shortLabel: "Dom" }
+];
+
 const defaultAiTemplateForm: AiTemplateForm = {
   mode: "sequence",
   count: 3,
@@ -361,6 +371,17 @@ function campaignStatusLabel(status: EmailCampaign["status"]) {
     failed: "Falhou"
   };
   return labels[status];
+}
+
+function parseCampaignSendDays(value: string) {
+  const allowedValues = new Set(CAMPAIGN_SEND_DAYS.map((day) => day.value));
+  return new Set(value.split(",").map((day) => day.trim()).filter((day) => allowedValues.has(day)));
+}
+
+function formatCampaignSendDays(days: Set<string>) {
+  return Array.from(days)
+    .sort((left, right) => Number(left) - Number(right))
+    .join(",");
 }
 
 function percent(part: number, total: number) {
@@ -738,6 +759,7 @@ export default function Home() {
     () => templates.find((template) => template.id === selectedTemplateId) || templates[0] || null,
     [templates, selectedTemplateId]
   );
+  const selectedCampaignSendDays = useMemo(() => parseCampaignSendDays(campaignForm.send_days), [campaignForm.send_days]);
   const previewTemplate = selectedTemplate || templateForm;
   const previewContentLink = previewTemplate.content_link.trim();
   const previewContentData = contentPreviews[previewContentLink];
@@ -1247,6 +1269,21 @@ export default function Home() {
         ? current.template_ids.filter((id) => id !== templateId)
         : [...current.template_ids, templateId]
     }));
+  }
+
+  function toggleCampaignSendDay(day: string) {
+    setCampaignForm((current) => {
+      const nextDays = parseCampaignSendDays(current.send_days);
+
+      if (nextDays.has(day)) {
+        if (nextDays.size === 1) return current;
+        nextDays.delete(day);
+      } else {
+        nextDays.add(day);
+      }
+
+      return { ...current, send_days: formatCampaignSendDays(nextDays) };
+    });
   }
 
   async function handleSaveCampaign(event: FormEvent<HTMLFormElement>) {
@@ -2719,13 +2756,20 @@ export default function Home() {
                   ))}
                 </select>
               </label>
-              <label className="wide-field">
-                Dias de envio
-                <input
-                  value={campaignForm.send_days}
-                  onChange={(event) => setCampaignForm({ ...campaignForm, send_days: event.target.value })}
-                />
-              </label>
+              <fieldset className="wide-field day-picker-field">
+                <legend>Dias de envio</legend>
+                <div className="send-day-picker">
+                  {CAMPAIGN_SEND_DAYS.map((day) => {
+                    const checked = selectedCampaignSendDays.has(day.value);
+                    return (
+                      <label className={`send-day-option ${checked ? "active" : ""}`} key={day.value} title={day.label}>
+                        <input checked={checked} onChange={() => toggleCampaignSendDay(day.value)} type="checkbox" />
+                        <span>{day.shortLabel}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
             </div>
 
             <div className="template-picker modal-template-picker">
@@ -2742,8 +2786,7 @@ export default function Home() {
             </div>
 
             <p className="helper-text modal-helper">
-              A janela de envio é calculada no fuso escolhido. Dias de envio usa 0 a 6, onde 0 é segunda-feira.
-              Ex.: 0,1,2,3,4 envia de segunda a sexta. O título e o link do conteúdo vêm de cada template selecionado.
+              A janela de envio é calculada no fuso escolhido. O título e o link do conteúdo vêm de cada template selecionado.
             </p>
 
             <div className="modal-actions">

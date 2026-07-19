@@ -2,7 +2,7 @@ from datetime import datetime
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class LoginRequest(BaseModel):
@@ -279,6 +279,32 @@ class EmailCampaignCreate(BaseModel):
     send_window_end: str = Field(default="17:00", max_length=5)
     timezone_name: str = Field(default="America/New_York", max_length=80)
     send_days: str = Field(default="0,1,2,3,4", max_length=20)
+
+    @field_validator("send_days")
+    @classmethod
+    def validate_send_days(cls, value: str) -> str:
+        seen: set[int] = set()
+        days: list[int] = []
+
+        for raw_day in (value or "").split(","):
+            day = raw_day.strip()
+            if not day:
+                continue
+            if not day.isdigit():
+                raise ValueError("Dias de envio devem ser números de 0 a 6.")
+
+            day_number = int(day)
+            if day_number < 0 or day_number > 6:
+                raise ValueError("Dias de envio devem ficar entre 0 (segunda) e 6 (domingo).")
+
+            if day_number not in seen:
+                seen.add(day_number)
+                days.append(day_number)
+
+        if not days:
+            raise ValueError("Escolha ao menos um dia de envio.")
+
+        return ",".join(str(day) for day in sorted(days))
 
 
 class EmailCampaignUpdate(EmailCampaignCreate):

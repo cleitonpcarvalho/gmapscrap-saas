@@ -780,6 +780,68 @@ td span {
   accent-color: var(--accent);
 }
 
+.day-picker-field {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.day-picker-field legend {
+  padding: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.send-day-picker {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.send-day-option {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: #fff;
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.send-day-option:hover,
+.send-day-option.active {
+  border-color: rgba(8, 127, 140, 0.46);
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+}
+
+.send-day-option input {
+  position: absolute;
+  width: 1px;
+  min-height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.send-day-option span {
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.send-day-option input:focus-visible + span {
+  outline: 3px solid rgba(8, 127, 140, 0.18);
+  outline-offset: 5px;
+}
+
 .jobs-list {
   display: grid;
   gap: 10px;
@@ -1181,16 +1243,20 @@ td a {
     margin-left: 0;
   }
 
-    .nav-list,
-    .content-grid,
-    .metrics-grid,
-    .dashboard-metrics,
-    .dashboard-grid,
-    .template-layout,
-    .quantity-row,
-    .edit-grid {
+  .nav-list,
+  .content-grid,
+  .metrics-grid,
+  .dashboard-metrics,
+  .dashboard-grid,
+  .template-layout,
+  .quantity-row,
+  .edit-grid {
     width: 100%;
     grid-template-columns: 1fr;
+  }
+
+  .send-day-picker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .lead-actions,
