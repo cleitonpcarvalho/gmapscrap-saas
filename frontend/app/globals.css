@@ -640,6 +640,17 @@ input:disabled {
   padding: 14px;
 }
 
+.list-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.list-card-header strong {
+  min-width: 0;
+}
+
 .campaign-card {
   display: grid;
   gap: 10px;

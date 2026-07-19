@@ -531,10 +531,84 @@ function withPreviewBaseTarget(html: string) {
   return `${base}${html}`;
 }
 
+const SEGMENT_ACRONYMS: Record<string, string> = {
+  ai: "AI",
+  api: "API",
+  b2b: "B2B",
+  b2c: "B2C",
+  crm: "CRM",
+  erp: "ERP",
+  hvac: "HVAC",
+  ia: "IA",
+  it: "IT",
+  ny: "NY",
+  nyc: "NYC",
+  ppc: "PPC",
+  ptac: "PTAC",
+  saas: "SaaS",
+  seo: "SEO",
+  uk: "UK",
+  us: "US",
+  usa: "USA"
+};
+
+const SEGMENT_LOWERCASE_WORDS = new Set([
+  "a",
+  "and",
+  "as",
+  "da",
+  "das",
+  "de",
+  "do",
+  "dos",
+  "e",
+  "em",
+  "for",
+  "in",
+  "na",
+  "nas",
+  "no",
+  "nos",
+  "of",
+  "on",
+  "the"
+]);
+
+function normalizeSegmentToken(token: string, isFirst: boolean) {
+  if (!/[A-Za-z0-9À-ÿ]/.test(token)) return token;
+
+  return token
+    .split("-")
+    .map((part, index) => {
+      const lower = part.toLocaleLowerCase();
+      if (SEGMENT_ACRONYMS[lower]) return SEGMENT_ACRONYMS[lower];
+      if (SEGMENT_LOWERCASE_WORDS.has(lower) && !(isFirst && index === 0)) return lower;
+      return `${lower.slice(0, 1).toLocaleUpperCase()}${lower.slice(1)}`;
+    })
+    .join("-");
+}
+
+function normalizeSegmentLabel(value: string) {
+  const text = value.trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  return text
+    .split(" ")
+    .map((token, index) => normalizeSegmentToken(token, index === 0))
+    .join(" ");
+}
+
 function uniqueSortedValues(values: string[]) {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort((left, right) =>
-    left.localeCompare(right)
-  );
+  const byKey = new Map<string, string>();
+  values.forEach((value) => {
+    const normalized = normalizeSegmentLabel(value);
+    if (!normalized) return;
+
+    const key = normalized.toLocaleLowerCase();
+    if (!byKey.has(key)) {
+      byKey.set(key, normalized);
+    }
+  });
+  return Array.from(byKey.values()).sort((left, right) => left.localeCompare(right));
 }
 
 function encodeListFilterValues(values: string[]) {
@@ -544,12 +618,9 @@ function encodeListFilterValues(values: string[]) {
 function decodeListFilterValues(value: string) {
   if (!value.trim()) return [];
   if (value.includes(LIST_FILTER_SEPARATOR)) {
-    return value
-      .split(LIST_FILTER_SEPARATOR)
-      .map((item) => item.trim())
-      .filter(Boolean);
+    return uniqueSortedValues(value.split(LIST_FILTER_SEPARATOR));
   }
-  return [value.trim()];
+  return uniqueSortedValues([value]);
 }
 
 function formatListFilter(value: string, fallback: string) {
@@ -703,11 +774,20 @@ export default function Home() {
   const [leadLists, setLeadLists] = useState<LeadList[]>([]);
   const [selectedListNiches, setSelectedListNiches] = useState<string[]>([]);
   const [selectedListLocations, setSelectedListLocations] = useState<string[]>([]);
+  const [editingLeadList, setEditingLeadList] = useState<LeadList | null>(null);
+  const [leadListDeleteDialog, setLeadListDeleteDialog] = useState<LeadList | null>(null);
+  const [selectedEditListNiches, setSelectedEditListNiches] = useState<string[]>([]);
+  const [selectedEditListLocations, setSelectedEditListLocations] = useState<string[]>([]);
   const [leadListForm, setLeadListForm] = useState({
     name: "",
     niche_filter: "",
     location_filter: "",
     search_run_id: "",
+    only_never_emailed: false,
+    never_received_template_id: ""
+  });
+  const [editLeadListForm, setEditLeadListForm] = useState({
+    name: "",
     only_never_emailed: false,
     never_received_template_id: ""
   });
@@ -1224,6 +1304,88 @@ export default function Home() {
       await refreshEmailData();
     } catch (error) {
       setEmailError(error instanceof Error ? error.message : "Não foi possível criar a lista.");
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  function openEditLeadListModal(list: LeadList) {
+    setEmailError("");
+    setEmailMessage("");
+    setEditingLeadList(list);
+    setEditLeadListForm({
+      name: list.name,
+      only_never_emailed: list.only_never_emailed,
+      never_received_template_id: list.never_received_template_id ? String(list.never_received_template_id) : ""
+    });
+    setSelectedEditListNiches(decodeListFilterValues(list.niche_filter));
+    setSelectedEditListLocations(decodeListFilterValues(list.location_filter));
+  }
+
+  function closeEditLeadListModal() {
+    setEmailError("");
+    setEditingLeadList(null);
+    setSelectedEditListNiches([]);
+    setSelectedEditListLocations([]);
+    setEditLeadListForm({
+      name: "",
+      only_never_emailed: false,
+      never_received_template_id: ""
+    });
+  }
+
+  function handleDeleteLeadList(list: LeadList) {
+    setEmailError("");
+    setEmailMessage("");
+    setLeadListDeleteDialog(list);
+  }
+
+  async function handleSaveLeadList(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editingLeadList) return;
+
+    setEmailError("");
+    setEmailMessage("");
+    setEmailBusy(true);
+
+    try {
+      await apiFetch<LeadList>(`/api/email/lists/${editingLeadList.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: editLeadListForm.name,
+          niche_filter: encodeListFilterValues(selectedEditListNiches),
+          location_filter: encodeListFilterValues(selectedEditListLocations),
+          search_run_id: null,
+          only_never_emailed: editLeadListForm.only_never_emailed,
+          never_received_template_id: editLeadListForm.never_received_template_id
+            ? Number(editLeadListForm.never_received_template_id)
+            : null
+        })
+      });
+      closeEditLeadListModal();
+      setEmailMessage("Lista atualizada.");
+      await refreshEmailData();
+    } catch (error) {
+      setEmailError(error instanceof Error ? error.message : "Não foi possível atualizar a lista.");
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  async function confirmDeleteLeadList() {
+    if (!leadListDeleteDialog) return;
+
+    setEmailError("");
+    setEmailMessage("");
+    setEmailBusy(true);
+
+    try {
+      await apiFetch(`/api/email/lists/${leadListDeleteDialog.id}`, { method: "DELETE" });
+      setLeadListDeleteDialog(null);
+      setEmailMessage("Lista excluída.");
+      await refreshEmailData();
+    } catch (error) {
+      setEmailError(error instanceof Error ? error.message : "Não foi possível excluir a lista.");
     } finally {
       setEmailBusy(false);
     }
@@ -2420,11 +2582,37 @@ export default function Home() {
                   {leadLists.length === 0 ? <p className="empty-state">Nenhuma lista criada.</p> : null}
                   {leadLists.map((list) => (
                     <article className="list-card" key={list.id}>
-                      <strong>{list.name}</strong>
+                      <div className="list-card-header">
+                        <strong>{list.name}</strong>
+                        <div className="row-actions">
+                          <button
+                            className="icon-button"
+                            onClick={() => openEditLeadListModal(list)}
+                            title="Editar lista"
+                            type="button"
+                          >
+                            <Edit3 size={16} />
+                          </button>
+                          <button
+                            className="icon-button danger"
+                            onClick={() => handleDeleteLeadList(list)}
+                            title="Excluir lista"
+                            type="button"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </div>
                       <span>{list.lead_count} leads</span>
                       <small>
                         {formatListFilter(list.niche_filter, "Todos os nichos")} · {formatListFilter(list.location_filter, "Todas as localidades")}
                       </small>
+                      {list.only_never_emailed ? <small>Nunca recebeu e-mail</small> : null}
+                      {list.never_received_template_id ? (
+                        <small>
+                          Nunca recebeu: {templates.find((template) => template.id === list.never_received_template_id)?.name || "template selecionado"}
+                        </small>
+                      ) : null}
                     </article>
                   ))}
                 </div>
@@ -2700,6 +2888,124 @@ export default function Home() {
           </section>
         ) : null}
       </section>
+
+      {editingLeadList ? (
+        <div className="modal-backdrop">
+          <form className="edit-modal" onSubmit={handleSaveLeadList}>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Editar lista</p>
+                <h2>{editingLeadList.name}</h2>
+              </div>
+              <button className="icon-button" onClick={closeEditLeadListModal} title="Fechar" type="button">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="edit-grid">
+              <label className="wide-field">
+                Nome
+                <input
+                  required
+                  value={editLeadListForm.name}
+                  onChange={(event) => setEditLeadListForm({ ...editLeadListForm, name: event.target.value })}
+                />
+              </label>
+              <TagDropdown
+                allLabel="Todos os nichos"
+                label="Nichos"
+                options={leadNicheOptions}
+                placeholder="Adicionar nicho"
+                selected={selectedEditListNiches}
+                onChange={setSelectedEditListNiches}
+              />
+              <TagDropdown
+                allLabel="Todas as localidades"
+                label="Localidades"
+                options={leadLocationOptions}
+                placeholder="Adicionar localidade"
+                selected={selectedEditListLocations}
+                onChange={setSelectedEditListLocations}
+              />
+              <label>
+                Nunca recebeu template
+                <select
+                  value={editLeadListForm.never_received_template_id}
+                  onChange={(event) =>
+                    setEditLeadListForm({ ...editLeadListForm, never_received_template_id: event.target.value })
+                  }
+                >
+                  <option value="">Ignorar</option>
+                  {templates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="checkbox-label">
+                <input
+                  checked={editLeadListForm.only_never_emailed}
+                  onChange={(event) =>
+                    setEditLeadListForm({ ...editLeadListForm, only_never_emailed: event.target.checked })
+                  }
+                  type="checkbox"
+                />
+                Nunca recebeu e-mail
+              </label>
+            </div>
+
+            {emailError ? <p className="error-text">{emailError}</p> : null}
+
+            <div className="modal-actions">
+              <button className="secondary-button" disabled={emailBusy} onClick={closeEditLeadListModal} type="button">
+                Cancelar
+              </button>
+              <button className="primary-button" disabled={emailBusy} type="submit">
+                {emailBusy ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+                Salvar lista
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {leadListDeleteDialog ? (
+        <div className="modal-backdrop">
+          <section className="confirm-modal">
+            <div className="confirm-icon">
+              <Trash2 size={22} />
+            </div>
+            <div>
+              <p className="eyebrow">Confirmar exclusão</p>
+              <h2>Excluir lista?</h2>
+              <p className="confirm-copy">
+                A lista "{leadListDeleteDialog.name}" será removida. Se alguma campanha estiver usando esta lista, o sistema pode impedir a exclusão.
+              </p>
+            </div>
+
+            {emailError ? <p className="error-text">{emailError}</p> : null}
+
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                disabled={emailBusy}
+                onClick={() => {
+                  setEmailError("");
+                  setLeadListDeleteDialog(null);
+                }}
+                type="button"
+              >
+                Cancelar
+              </button>
+              <button className="danger-button" disabled={emailBusy} onClick={confirmDeleteLeadList} type="button">
+                {emailBusy ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+                Excluir
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {campaignModalOpen ? (
         <div className="modal-backdrop">

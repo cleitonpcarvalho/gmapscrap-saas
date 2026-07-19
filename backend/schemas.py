@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from backend.services.text_normalization import normalize_label, normalize_list_filter
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -24,6 +26,11 @@ class SearchCreate(BaseModel):
     location: str = Field(min_length=2, max_length=255)
     quantity: int | None = Field(default=None, ge=1, le=500)
     max_results: bool = False
+
+    @field_validator("niche", "location", mode="before")
+    @classmethod
+    def normalize_segment(cls, value: str) -> str:
+        return normalize_label(value) if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def validate_quantity(self) -> "SearchCreate":
@@ -56,6 +63,11 @@ class LeadCreate(BaseModel):
     website: str = Field(min_length=1, max_length=500)
     email: str = Field(default="", max_length=255)
 
+    @field_validator("niche", "location", mode="before")
+    @classmethod
+    def normalize_segment(cls, value: str) -> str:
+        return normalize_label(value) if isinstance(value, str) else value
+
 
 class LeadUpdate(BaseModel):
     niche: str | None = Field(default=None, min_length=1, max_length=255)
@@ -65,6 +77,11 @@ class LeadUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=80)
     website: str | None = Field(default=None, min_length=1, max_length=500)
     email: str | None = Field(default=None, max_length=255)
+
+    @field_validator("niche", "location", mode="before")
+    @classmethod
+    def normalize_segment(cls, value: str | None) -> str | None:
+        return normalize_label(value) if isinstance(value, str) else value
 
 
 class BulkDeleteRequest(BaseModel):
@@ -239,6 +256,11 @@ class LeadListCreate(BaseModel):
     only_never_emailed: bool = False
     never_received_template_id: int | None = None
 
+    @field_validator("niche_filter", "location_filter", mode="before")
+    @classmethod
+    def normalize_filter(cls, value: str) -> str:
+        return normalize_list_filter(value) if isinstance(value, str) else value
+
 
 class LeadListUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=255)
@@ -247,6 +269,11 @@ class LeadListUpdate(BaseModel):
     search_run_id: int | None = None
     only_never_emailed: bool | None = None
     never_received_template_id: int | None = None
+
+    @field_validator("niche_filter", "location_filter", mode="before")
+    @classmethod
+    def normalize_filter(cls, value: str | None) -> str | None:
+        return normalize_list_filter(value) if isinstance(value, str) else value
 
 
 class LeadListRead(BaseModel):
