@@ -881,6 +881,8 @@ def delete_email_campaign(
     if campaign.status == "running":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pause a campanha antes de excluir")
 
+    db.execute(delete(EmailSend).where(EmailSend.campaign_id == campaign.id))
+    db.execute(delete(EmailCampaignTemplate).where(EmailCampaignTemplate.campaign_id == campaign.id))
     db.delete(campaign)
     db.commit()
     return {"status": "ok"}

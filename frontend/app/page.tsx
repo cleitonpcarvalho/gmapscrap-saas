@@ -713,6 +713,7 @@ export default function Home() {
   const [emailSends, setEmailSends] = useState<EmailSendLog[]>([]);
   const [campaignModalOpen, setCampaignModalOpen] = useState(false);
   const [editingCampaignId, setEditingCampaignId] = useState<number | null>(null);
+  const [campaignDeleteDialog, setCampaignDeleteDialog] = useState<EmailCampaign | null>(null);
   const [campaignForm, setCampaignForm] = useState(defaultCampaignForm);
   const [emailBusy, setEmailBusy] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
@@ -1329,6 +1330,39 @@ export default function Home() {
       await refreshEmailData();
     } catch (error) {
       setEmailError(error instanceof Error ? error.message : "Não foi possível atualizar a campanha.");
+    } finally {
+      setEmailBusy(false);
+    }
+  }
+
+  function handleDeleteCampaign(campaign: EmailCampaign) {
+    setEmailError("");
+    setEmailMessage("");
+    setCampaignDeleteDialog(campaign);
+  }
+
+  async function confirmDeleteCampaign() {
+    if (!campaignDeleteDialog) return;
+
+    const campaign = campaignDeleteDialog;
+
+    setEmailError("");
+    setEmailMessage("");
+    setEmailBusy(true);
+
+    try {
+      await apiFetch<{ status: string }>(`/api/email/campaigns/${campaign.id}`, {
+        method: "DELETE"
+      });
+      if (editingCampaignId === campaign.id) {
+        resetCampaignEditor();
+        setCampaignModalOpen(false);
+      }
+      setCampaignDeleteDialog(null);
+      setEmailMessage("Campanha excluída.");
+      await refreshEmailData();
+    } catch (error) {
+      setEmailError(error instanceof Error ? error.message : "Não foi possível excluir a campanha.");
     } finally {
       setEmailBusy(false);
     }
@@ -2470,6 +2504,15 @@ export default function Home() {
                                 <Pause size={16} />
                               </button>
                             ) : null}
+                            <button
+                              className="icon-button danger"
+                              disabled={campaign.status === "running"}
+                              onClick={() => handleDeleteCampaign(campaign)}
+                              title={campaign.status === "running" ? "Pause a campanha antes de excluir" : "Excluir campanha"}
+                              type="button"
+                            >
+                              <Trash2 size={16} />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -3309,6 +3352,43 @@ export default function Home() {
                 Cancelar
               </button>
               <button className="danger-button" disabled={emailBusy} onClick={confirmDeleteTemplate} type="button">
+                {emailBusy ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+                Excluir
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {campaignDeleteDialog ? (
+        <div className="modal-backdrop">
+          <section className="confirm-modal">
+            <div className="confirm-icon">
+              <Trash2 size={22} />
+            </div>
+            <div>
+              <p className="eyebrow">Confirmar exclusão</p>
+              <h2>Excluir campanha?</h2>
+              <p className="confirm-copy">
+                A campanha "{campaignDeleteDialog.name}" será removida junto com a fila e o histórico de envios dela.
+              </p>
+            </div>
+
+            {emailError ? <p className="error-text">{emailError}</p> : null}
+
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                disabled={emailBusy}
+                onClick={() => {
+                  setEmailError("");
+                  setCampaignDeleteDialog(null);
+                }}
+                type="button"
+              >
+                Cancelar
+              </button>
+              <button className="danger-button" disabled={emailBusy} onClick={confirmDeleteCampaign} type="button">
                 {emailBusy ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
                 Excluir
               </button>
