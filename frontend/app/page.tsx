@@ -1355,7 +1355,7 @@ export default function Home() {
           name: editLeadListForm.name,
           niche_filter: encodeListFilterValues(selectedEditListNiches),
           location_filter: encodeListFilterValues(selectedEditListLocations),
-          search_run_id: null,
+          search_run_id: editingLeadList.search_run_id,
           only_never_emailed: editLeadListForm.only_never_emailed,
           never_received_template_id: editLeadListForm.never_received_template_id
             ? Number(editLeadListForm.never_received_template_id)
