@@ -58,8 +58,10 @@ class LeadCreate(BaseModel):
 
 
 class LeadUpdate(BaseModel):
+    niche: str | None = Field(default=None, min_length=1, max_length=255)
+    location: str | None = Field(default=None, min_length=1, max_length=255)
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    address: str | None = Field(default=None, min_length=1)
+    address: str | None = Field(default=None, max_length=1000)
     phone: str | None = Field(default=None, max_length=80)
     website: str | None = Field(default=None, min_length=1, max_length=500)
     email: str | None = Field(default=None, max_length=255)

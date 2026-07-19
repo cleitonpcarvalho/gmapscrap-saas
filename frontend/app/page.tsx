@@ -391,6 +391,8 @@ function percent(part: number, total: number) {
 
 function leadPayload(lead: Lead) {
   return {
+    niche: lead.niche.trim(),
+    location: lead.location.trim(),
     name: lead.name.trim(),
     address: lead.address.trim(),
     phone: lead.phone.trim(),
@@ -2039,6 +2041,7 @@ export default function Home() {
                         type="checkbox"
                       />
                     </th>
+                    <th>Ações</th>
                     <th>Nome</th>
                     <th>Nicho</th>
                     <th>Localidade</th>
@@ -2046,7 +2049,6 @@ export default function Home() {
                     <th>Telefone</th>
                     <th>Site</th>
                     <th>E-mail</th>
-                    <th>Ações</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2068,20 +2070,6 @@ export default function Home() {
                           type="checkbox"
                         />
                       </td>
-                      <td>
-                        <strong>{lead.name}</strong>
-                      </td>
-                      <td>{lead.niche}</td>
-                      <td>{lead.location}</td>
-                      <td>{lead.address}</td>
-                      <td>{lead.phone || "-"}</td>
-                      <td>
-                        <a href={lead.website} target="_blank" rel="noreferrer">
-                          <Globe2 size={15} />
-                          {lead.website.replace(/^https?:\/\//, "")}
-                        </a>
-                      </td>
-                      <td>{lead.email || "-"}</td>
                       <td>
                         <div className="row-actions">
                           <button
@@ -2105,6 +2093,20 @@ export default function Home() {
                           </button>
                         </div>
                       </td>
+                      <td>
+                        <strong>{lead.name}</strong>
+                      </td>
+                      <td>{lead.niche}</td>
+                      <td>{lead.location}</td>
+                      <td>{lead.address}</td>
+                      <td>{lead.phone || "-"}</td>
+                      <td>
+                        <a href={lead.website} target="_blank" rel="noreferrer">
+                          <Globe2 size={15} />
+                          {lead.website.replace(/^https?:\/\//, "")}
+                        </a>
+                      </td>
+                      <td>{lead.email || "-"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -3226,6 +3228,20 @@ export default function Home() {
                 <input
                   value={editingLead.name}
                   onChange={(event) => setEditingLead({ ...editingLead, name: event.target.value })}
+                />
+              </label>
+              <label>
+                Nicho
+                <input
+                  value={editingLead.niche}
+                  onChange={(event) => setEditingLead({ ...editingLead, niche: event.target.value })}
+                />
+              </label>
+              <label>
+                Localidade
+                <input
+                  value={editingLead.location}
+                  onChange={(event) => setEditingLead({ ...editingLead, location: event.target.value })}
                 />
               </label>
               <label>
