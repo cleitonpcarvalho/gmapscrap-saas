@@ -448,6 +448,8 @@ def update_lead(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
 
     data = payload.model_dump(exclude_unset=True)
+    next_niche = data.pop("niche", None)
+    next_location = data.pop("location", None)
     if "website" in data:
         website = normalize_site_url(data["website"] or "")
         if not website:
@@ -458,6 +460,44 @@ def update_lead(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um lead com esse site")
 
         data["website"] = website
+
+    if next_niche is not None or next_location is not None:
+        niche = (next_niche if next_niche is not None else lead.niche).strip()
+        location = (next_location if next_location is not None else lead.location).strip()
+        if not niche or not location:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Nicho e localidade são obrigatórios")
+
+        if niche != lead.niche or location != lead.location:
+            now = utc_now()
+            manual_message = "Leads cadastrados manualmente."
+            run = db.scalar(
+                select(SearchRun)
+                .where(
+                    SearchRun.niche == niche,
+                    SearchRun.location == location,
+                    SearchRun.message == manual_message,
+                    SearchRun.status == "completed",
+                )
+                .order_by(desc(SearchRun.created_at))
+            )
+
+            if not run:
+                run = SearchRun(
+                    niche=niche,
+                    location=location,
+                    target_quantity=None,
+                    max_results=True,
+                    status="completed",
+                    message=manual_message,
+                    scanned_count=0,
+                    saved_count=0,
+                    skipped_count=0,
+                    started_at=now,
+                    finished_at=now,
+                )
+                db.add(run)
+
+            lead.search_run = run
 
     for field, value in data.items():
         setattr(lead, field, value.strip() if isinstance(value, str) else value)
