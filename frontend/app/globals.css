@@ -987,6 +987,10 @@ td span {
   margin-top: 18px;
 }
 
+.history-filters-row {
+  grid-template-columns: repeat(4, minmax(170px, 1fr)) auto;
+}
+
 .tag-filter {
   align-self: stretch;
 }

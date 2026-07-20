@@ -228,6 +228,7 @@ const defaultSmtpForm: SmtpConfig = {
 const DEFAULT_TEMPLATE_LOGO = "https://automasoluct.com.br/wp-content/uploads/2025/06/Automa_Soluct_Logo_Sem_Fundo.png";
 const DEFAULT_CONTACT_EMAIL = "contato@automasoluct.com.br";
 const LEADS_PAGE_SIZE = 30;
+const HISTORY_PAGE_SIZE = 30;
 const SEARCH_RUNS_PAGE_SIZE = 4;
 const LIST_FILTER_SEPARATOR = "||";
 
@@ -250,6 +251,8 @@ const CAMPAIGN_SEND_DAYS = [
   { value: "5", label: "Sábado", shortLabel: "Sáb" },
   { value: "6", label: "Domingo", shortLabel: "Dom" }
 ];
+
+const HISTORY_ENGAGEMENT_OPTIONS = ["Aberto", "Clicado", "Sem abertura", "Sem clique"];
 
 const defaultAiTemplateForm: AiTemplateForm = {
   mode: "sequence",
@@ -373,6 +376,15 @@ function campaignStatusLabel(status: EmailCampaign["status"]) {
     failed: "Falhou"
   };
   return labels[status];
+}
+
+function emailSendStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    pending: "Pendente",
+    sent: "Enviado",
+    failed: "Falhou"
+  };
+  return labels[status] || normalizeSegmentLabel(status.replace(/_/g, " ")) || "-";
 }
 
 function parseCampaignSendDays(value: string) {
@@ -797,6 +809,11 @@ export default function Home() {
   });
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
   const [emailSends, setEmailSends] = useState<EmailSendLog[]>([]);
+  const [selectedHistoryCampaigns, setSelectedHistoryCampaigns] = useState<string[]>([]);
+  const [selectedHistoryTemplates, setSelectedHistoryTemplates] = useState<string[]>([]);
+  const [selectedHistoryStatuses, setSelectedHistoryStatuses] = useState<string[]>([]);
+  const [selectedHistoryEngagements, setSelectedHistoryEngagements] = useState<string[]>([]);
+  const [historyPage, setHistoryPage] = useState(1);
   const [campaignModalOpen, setCampaignModalOpen] = useState(false);
   const [editingCampaignId, setEditingCampaignId] = useState<number | null>(null);
   const [campaignDeleteDialog, setCampaignDeleteDialog] = useState<EmailCampaign | null>(null);
@@ -893,6 +910,65 @@ export default function Home() {
     };
   }, [campaigns, emailSends, templates]);
 
+  const historyCampaignOptions = useMemo(
+    () => uniqueSortedValues(emailSends.map((sendLog) => sendLog.campaign_name)),
+    [emailSends]
+  );
+  const historyTemplateOptions = useMemo(
+    () => uniqueSortedValues(emailSends.map((sendLog) => sendLog.template_name)),
+    [emailSends]
+  );
+  const historyStatusOptions = useMemo(
+    () => uniqueSortedValues(emailSends.map((sendLog) => emailSendStatusLabel(sendLog.status))),
+    [emailSends]
+  );
+  const filteredEmailSends = useMemo(() => {
+    return emailSends.filter((sendLog) => {
+      const campaignName = normalizeSegmentLabel(sendLog.campaign_name);
+      const templateName = normalizeSegmentLabel(sendLog.template_name);
+      const status = emailSendStatusLabel(sendLog.status);
+      const matchesCampaign =
+        selectedHistoryCampaigns.length === 0 || selectedHistoryCampaigns.includes(campaignName);
+      const matchesTemplate =
+        selectedHistoryTemplates.length === 0 || selectedHistoryTemplates.includes(templateName);
+      const matchesStatus =
+        selectedHistoryStatuses.length === 0 || selectedHistoryStatuses.includes(status);
+      const matchesEngagement =
+        selectedHistoryEngagements.length === 0 ||
+        selectedHistoryEngagements.some((engagement) => {
+          if (engagement === "Aberto") return sendLog.open_count > 0;
+          if (engagement === "Clicado") return sendLog.click_count > 0;
+          if (engagement === "Sem abertura") return sendLog.open_count === 0;
+          if (engagement === "Sem clique") return sendLog.click_count === 0;
+          return false;
+        });
+
+      return matchesCampaign && matchesTemplate && matchesStatus && matchesEngagement;
+    });
+  }, [
+    emailSends,
+    selectedHistoryCampaigns,
+    selectedHistoryEngagements,
+    selectedHistoryStatuses,
+    selectedHistoryTemplates
+  ]);
+  const historyMetrics = useMemo(
+    () => ({
+      opens: filteredEmailSends.reduce((total, sendLog) => total + sendLog.open_count, 0),
+      clicks: filteredEmailSends.reduce((total, sendLog) => total + sendLog.click_count, 0)
+    }),
+    [filteredEmailSends]
+  );
+  const historyPageCount = Math.max(1, Math.ceil(filteredEmailSends.length / HISTORY_PAGE_SIZE));
+  const currentHistoryPage = Math.min(historyPage, historyPageCount);
+  const historyPageStartIndex = (currentHistoryPage - 1) * HISTORY_PAGE_SIZE;
+  const paginatedEmailSends = filteredEmailSends.slice(
+    historyPageStartIndex,
+    historyPageStartIndex + HISTORY_PAGE_SIZE
+  );
+  const historyPageStart = filteredEmailSends.length === 0 ? 0 : historyPageStartIndex + 1;
+  const historyPageEnd = Math.min(historyPageStartIndex + HISTORY_PAGE_SIZE, filteredEmailSends.length);
+
   async function refreshData() {
     const [nextStats, nextSearches, nextLeads] = await Promise.all([
       apiFetch<Stats>("/api/stats"),
@@ -971,10 +1047,20 @@ export default function Home() {
   }, [leadNameQuery, selectedLeadNiches, selectedLeadLocations]);
 
   useEffect(() => {
+    setHistoryPage(1);
+  }, [selectedHistoryCampaigns, selectedHistoryEngagements, selectedHistoryStatuses, selectedHistoryTemplates]);
+
+  useEffect(() => {
     if (leadPage > leadPageCount) {
       setLeadPage(leadPageCount);
     }
   }, [leadPage, leadPageCount]);
+
+  useEffect(() => {
+    if (historyPage > historyPageCount) {
+      setHistoryPage(historyPageCount);
+    }
+  }, [historyPage, historyPageCount]);
 
   useEffect(() => {
     if (runPage > runPageCount) {
@@ -2756,10 +2842,60 @@ export default function Home() {
                   <h2>Histórico de envios</h2>
                 </div>
                 <div className="lead-actions">
-                  <span className="muted-count">{emailSends.length} registros</span>
-                  <span className="muted-count">{emailDashboard.opens} aberturas totais</span>
-                  <span className="muted-count">{emailDashboard.clicks} cliques totais</span>
+                  <span className="muted-count">{filteredEmailSends.length} visíveis</span>
+                  {filteredEmailSends.length !== emailSends.length ? (
+                    <span className="muted-count">{emailSends.length} totais</span>
+                  ) : null}
+                  <span className="muted-count">{historyMetrics.opens} aberturas</span>
+                  <span className="muted-count">{historyMetrics.clicks} cliques</span>
                 </div>
+              </div>
+              <div className="filters-row history-filters-row">
+                <TagDropdown
+                  allLabel="Todas as campanhas"
+                  label="Filtrar por campanha"
+                  options={historyCampaignOptions}
+                  placeholder="Adicionar campanha"
+                  selected={selectedHistoryCampaigns}
+                  onChange={setSelectedHistoryCampaigns}
+                />
+                <TagDropdown
+                  allLabel="Todos os templates"
+                  label="Filtrar por template"
+                  options={historyTemplateOptions}
+                  placeholder="Adicionar template"
+                  selected={selectedHistoryTemplates}
+                  onChange={setSelectedHistoryTemplates}
+                />
+                <TagDropdown
+                  allLabel="Todos os status"
+                  label="Filtrar por status"
+                  options={historyStatusOptions}
+                  placeholder="Adicionar status"
+                  selected={selectedHistoryStatuses}
+                  onChange={setSelectedHistoryStatuses}
+                />
+                <TagDropdown
+                  allLabel="Todo engajamento"
+                  label="Filtrar por engajamento"
+                  options={HISTORY_ENGAGEMENT_OPTIONS}
+                  placeholder="Adicionar engajamento"
+                  selected={selectedHistoryEngagements}
+                  onChange={setSelectedHistoryEngagements}
+                />
+                <button
+                  className="secondary-button"
+                  onClick={() => {
+                    setSelectedHistoryCampaigns([]);
+                    setSelectedHistoryTemplates([]);
+                    setSelectedHistoryStatuses([]);
+                    setSelectedHistoryEngagements([]);
+                    setHistoryPage(1);
+                  }}
+                  type="button"
+                >
+                  Limpar filtros
+                </button>
               </div>
               <div className="table-wrap">
                 <table className="history-table">
@@ -2777,14 +2913,14 @@ export default function Home() {
                     </tr>
                   </thead>
                   <tbody>
-                    {emailSends.length === 0 ? (
+                    {filteredEmailSends.length === 0 ? (
                       <tr>
                         <td className="empty-cell" colSpan={9}>
-                          Nenhum envio registrado.
+                          Nenhum envio encontrado para os filtros.
                         </td>
                       </tr>
                     ) : null}
-                    {emailSends.map((sendLog) => (
+                    {paginatedEmailSends.map((sendLog) => (
                       <tr key={sendLog.id}>
                         <td>
                           <strong>{sendLog.lead_name}</strong>
@@ -2792,7 +2928,7 @@ export default function Home() {
                         </td>
                         <td>{sendLog.campaign_name}</td>
                         <td>{sendLog.template_name}</td>
-                        <td>{sendLog.error || sendLog.status}</td>
+                        <td>{sendLog.error || emailSendStatusLabel(sendLog.status)}</td>
                         <td>{sendLog.open_count}</td>
                         <td>{sendLog.click_count}</td>
                         <td>{formatDate(sendLog.opened_at)}</td>
@@ -2802,6 +2938,34 @@ export default function Home() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="pagination-row">
+                <span className="helper-text">
+                  Mostrando {historyPageStart}-{historyPageEnd} de {filteredEmailSends.length}
+                </span>
+                <div className="row-actions">
+                  <button
+                    className="secondary-button compact-button"
+                    disabled={currentHistoryPage <= 1}
+                    onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
+                    type="button"
+                  >
+                    <ChevronLeft size={16} />
+                    Anterior
+                  </button>
+                  <span className="muted-count">
+                    Página {currentHistoryPage} de {historyPageCount}
+                  </span>
+                  <button
+                    className="secondary-button compact-button"
+                    disabled={currentHistoryPage >= historyPageCount}
+                    onClick={() => setHistoryPage((page) => Math.min(historyPageCount, page + 1))}
+                    type="button"
+                  >
+                    Próxima
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
               </div>
             </section>
           </section>
