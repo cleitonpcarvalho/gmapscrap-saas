@@ -256,7 +256,7 @@ def render_email(template: EmailTemplate, lead: Lead, campaign: EmailCampaign, s
         "company_name": company_name,
         "name": company_name,
         "email": lead.email,
-        "website": lead.website,
+        "website": lead.website or "",
         "phone": lead.phone,
         "address": lead.address,
         "niche": lead.niche,

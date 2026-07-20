@@ -3,7 +3,7 @@ import time
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from backend.config import get_settings
@@ -47,6 +47,8 @@ def init_db() -> None:
 
     _wait_for_database()
     Base.metadata.create_all(bind=engine)
+    _ensure_search_run_columns()
+    _ensure_lead_columns()
     _ensure_email_template_columns()
     _ensure_email_campaign_columns()
 
@@ -77,9 +79,45 @@ def _ensure_email_template_columns() -> None:
     }
 
     with engine.begin() as connection:
+        connection.execute(text("SET lock_timeout = '10s'"))
         for column_name, statement in migrations.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
+
+
+def _ensure_search_run_columns() -> None:
+    inspector = inspect(engine)
+    if "search_runs" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("search_runs")}
+    migrations = {
+        "skip_without_website": "ALTER TABLE search_runs ADD COLUMN skip_without_website BOOLEAN NOT NULL DEFAULT TRUE",
+        "validate_whatsapp": "ALTER TABLE search_runs ADD COLUMN validate_whatsapp BOOLEAN NOT NULL DEFAULT FALSE",
+    }
+
+    with engine.begin() as connection:
+        connection.execute(text("SET lock_timeout = '10s'"))
+        for column_name, statement in migrations.items():
+            if column_name not in existing_columns:
+                connection.execute(text(statement))
+
+
+def _ensure_lead_columns() -> None:
+    inspector = inspect(engine)
+    if "leads" not in inspector.get_table_names():
+        return
+
+    website_column = next((column for column in inspector.get_columns("leads") if column["name"] == "website"), None)
+    if not website_column or website_column.get("nullable", True):
+        return
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("SET lock_timeout = '10s'"))
+            connection.execute(text("ALTER TABLE leads ALTER COLUMN website DROP NOT NULL"))
+    except SQLAlchemyError:
+        return
 
 
 def _ensure_email_campaign_columns() -> None:
@@ -93,6 +131,7 @@ def _ensure_email_campaign_columns() -> None:
     }
 
     with engine.begin() as connection:
+        connection.execute(text("SET lock_timeout = '10s'"))
         for column_name, statement in migrations.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))

@@ -98,11 +98,26 @@ class GmapScrapApiClient:
 
         self._authenticated = True
 
-    def create_search(self, niche: str, location: str, quantity: int | None, max_results: bool) -> dict[str, Any]:
+    def create_search(
+        self,
+        niche: str,
+        location: str,
+        quantity: int | None,
+        max_results: bool,
+        skip_without_website: bool,
+        validate_whatsapp: bool,
+    ) -> dict[str, Any]:
         return self._request(
             "POST",
             "/api/desktop/searches",
-            json={"niche": niche, "location": location, "quantity": quantity, "max_results": max_results},
+            json={
+                "niche": niche,
+                "location": location,
+                "quantity": quantity,
+                "max_results": max_results,
+                "skip_without_website": skip_without_website,
+                "validate_whatsapp": validate_whatsapp,
+            },
         )
 
     def update_search(

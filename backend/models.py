@@ -14,6 +14,8 @@ class SearchRun(Base):
     location: Mapped[str] = mapped_column(String(255), nullable=False)
     target_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_results: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    skip_without_website: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    validate_whatsapp: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False)
     message: Mapped[str] = mapped_column(Text, default="Na fila", nullable=False)
     scanned_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -40,7 +42,7 @@ class Lead(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     address: Mapped[str] = mapped_column(Text, nullable=False)
     phone: Mapped[str] = mapped_column(String(80), default="", nullable=False)
-    website: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    website: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
     email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

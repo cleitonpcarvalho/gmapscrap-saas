@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.auth import clear_session_cookie, create_session_token, get_current_username, set_session_cookie
 from backend.config import get_settings
-from backend.database import SessionLocal, get_db, init_db
+from backend.database import get_db, init_db
 from backend.models import (
     EmailCampaign,
     EmailCampaignTemplate,
@@ -67,6 +67,7 @@ from backend.services.email_campaigns import (
     submit_campaign_job,
 )
 from backend.services.email_delivery import get_or_create_smtp_config, send_email, send_test_email, update_smtp_config
+from backend.services.email_validation import validate_email_address
 from backend.services.ai_templates import generate_email_templates
 from backend.services.jobs import (
     create_search_run,
@@ -75,7 +76,7 @@ from backend.services.jobs import (
     save_scraped_lead,
     submit_search_job,
 )
-from backend.services.template_seeds import seed_default_email_templates
+from backend.services.whatsapp_validation import is_whatsapp_validation_configured
 from backend.scrapers.maps_scraper import MapLead
 
 
@@ -94,11 +95,6 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
-    db = SessionLocal()
-    try:
-        seed_default_email_templates(db)
-    finally:
-        db.close()
     resume_unfinished_search_runs()
     resume_running_campaigns()
     start_campaign_scheduler()
@@ -110,6 +106,14 @@ def require_user(request: Request) -> str:
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def ensure_whatsapp_validation_available(validate_whatsapp: bool) -> None:
+    if validate_whatsapp and not is_whatsapp_validation_configured():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Validação de WhatsApp não configurada no servidor.",
+        )
 
 
 @app.get("/api/health")
@@ -168,6 +172,7 @@ def start_search(
     username: str = Depends(require_user),
 ) -> SearchRun:
     _ = username
+    ensure_whatsapp_validation_available(payload.validate_whatsapp)
     return create_search_run(db, payload)
 
 
@@ -201,11 +206,14 @@ def create_desktop_search(
     username: str = Depends(require_user),
 ) -> SearchRun:
     _ = username
+    ensure_whatsapp_validation_available(payload.validate_whatsapp)
     run = SearchRun(
         niche=payload.niche.strip(),
         location=payload.location.strip(),
         target_quantity=None if payload.max_results else payload.quantity,
         max_results=payload.max_results,
+        skip_without_website=payload.skip_without_website,
+        validate_whatsapp=payload.validate_whatsapp,
         status="running",
         message="Busca local iniciada no aplicativo desktop.",
         started_at=utc_now(),
@@ -276,7 +284,7 @@ def ingest_desktop_lead(
     )
     run.status = "running"
     run.scanned_count = max(run.scanned_count, payload.scanned)
-    run.message = f"Salvando {lead.name}..." if payload.email.strip() else f"Buscando e-mail em {lead.website}..."
+    run.message = f"Salvando {lead.name}..." if payload.email.strip() or not lead.website else f"Buscando e-mail em {lead.website}..."
     db.commit()
 
     if payload.email.strip():
@@ -373,13 +381,20 @@ def create_manual_lead(
     username: str = Depends(require_user),
 ) -> Lead:
     _ = username
-    website = normalize_site_url(payload.website)
-    if not website:
+    raw_website = payload.website.strip()
+    website = normalize_site_url(raw_website) if raw_website else ""
+    if raw_website and not website:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Site inválido")
 
-    existing = db.scalar(select(Lead).where(Lead.website == website))
-    if existing:
+    if website and db.scalar(select(Lead).where(Lead.website == website)):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um lead com esse site")
+
+    email = payload.email.strip().lower()
+    if email:
+        validation = validate_email_address(email, website)
+        if not validation.is_valid:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="E-mail inválido")
+        email = validation.normalized_email
 
     niche = payload.niche.strip()
     location = payload.location.strip()
@@ -417,8 +432,8 @@ def create_manual_lead(
         name=payload.name.strip(),
         address=payload.address.strip() or "Não informado",
         phone=payload.phone.strip(),
-        website=website,
-        email=payload.email.strip(),
+        website=website or None,
+        email=email,
     )
     run.scanned_count += 1
     run.saved_count += 1
@@ -451,15 +466,29 @@ def update_lead(
     next_niche = data.pop("niche", None)
     next_location = data.pop("location", None)
     if "website" in data:
-        website = normalize_site_url(data["website"] or "")
-        if not website:
+        raw_website = (data["website"] or "").strip()
+        website = normalize_site_url(raw_website) if raw_website else ""
+        if raw_website and not website:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Site inválido")
 
-        existing = db.scalar(select(Lead).where(Lead.website == website, Lead.id != lead_id))
+        existing = db.scalar(select(Lead).where(Lead.website == website, Lead.id != lead_id)) if website else None
         if existing:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um lead com esse site")
 
-        data["website"] = website
+        data["website"] = website or None
+
+    if "email" in data:
+        email = (data["email"] or "").strip().lower()
+        if email:
+            website_for_validation = data.get("website")
+            if website_for_validation is None:
+                website_for_validation = lead.website or ""
+            validation = validate_email_address(email, str(website_for_validation or ""))
+            if not validation.is_valid:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="E-mail inválido")
+            data["email"] = validation.normalized_email
+        else:
+            data["email"] = ""
 
     if next_niche is not None or next_location is not None:
         niche = (next_niche if next_niche is not None else lead.niche).strip()
@@ -976,7 +1005,7 @@ def export_leads(
 
     stmt = select(Lead).options(selectinload(Lead.search_run)).order_by(desc(Lead.created_at))
     for lead in db.scalars(stmt).all():
-        writer.writerow([lead.niche, lead.location, lead.name, lead.address, lead.phone, lead.website, lead.email])
+        writer.writerow([lead.niche, lead.location, lead.name, lead.address, lead.phone, lead.website or "", lead.email])
 
     output.seek(0)
     headers = {"Content-Disposition": "attachment; filename=leads.csv"}

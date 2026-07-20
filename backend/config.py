@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
     supabase_storage_bucket: str = "gmapscrap"
+    evolution_api_base_url: str = ""
+    evolution_api_key: str = ""
+    evolution_instance_name: str = ""
+    whatsapp_validation_timeout_seconds: float = 6.0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

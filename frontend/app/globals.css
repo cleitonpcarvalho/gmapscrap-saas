@@ -773,6 +773,12 @@ td span {
   align-items: end;
 }
 
+.search-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .checkbox-label {
   min-height: 44px;
   display: flex;
@@ -783,6 +789,7 @@ td span {
   border-radius: 8px;
   color: var(--ink);
   background: var(--surface-soft);
+  line-height: 1.2;
 }
 
 .checkbox-label input {
@@ -1260,6 +1267,7 @@ td a {
   .dashboard-metrics,
   .dashboard-grid,
   .template-layout,
+  .search-options,
   .quantity-row,
   .edit-grid {
     width: 100%;

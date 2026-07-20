@@ -5,15 +5,10 @@ from urllib.parse import unquote, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from backend.services.email_validation import select_best_email
+
 
 EMAIL_REGEX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-BLOCKED_EMAIL_PATTERN = re.compile(
-    r"(2x|3x|logo|icon|sprite|wixpress|sentry|schema\.org|w3\.org|godaddy|"
-    r"placeholder|@\d|example\.com|domain\.com|yourdomain|yourcompany|yoursite|"
-    r"test\.com|email\.com|company\.com|sample\.com|mydomain)",
-    re.IGNORECASE,
-)
-BLOCKED_EXT_PATTERN = re.compile(r"\.(png|jpg|jpeg|gif|svg|webp|ico)$", re.IGNORECASE)
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -101,21 +96,16 @@ def _decode_cloudflare_emails(html: str) -> list[str]:
     return emails
 
 
-def find_email(html: str) -> str:
+def find_email(html: str, site_url: str = "") -> str:
     if not html:
         return ""
 
     soup_text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
     text = _deobfuscate_email_text(unquote(f"{html} {soup_text}"))
     matches = [*_decode_cloudflare_emails(html), *EMAIL_REGEX.findall(text)]
+    result = select_best_email(matches, site_url)
 
-    for match in matches:
-        email = match.strip().strip(".,;:()[]{}<>").lower()
-        if BLOCKED_EMAIL_PATTERN.search(email) or BLOCKED_EXT_PATTERN.search(email):
-            continue
-        return email
-
-    return ""
+    return result.normalized_email if result else ""
 
 
 def _same_site(candidate_url: str, base_url: str) -> bool:
@@ -203,7 +193,7 @@ def extract_email_from_site(site_url: str) -> EmailResult:
     html = fetch_html(site)
     checked_urls.append(site)
 
-    email = find_email(html)
+    email = find_email(html, site)
     if email:
         return EmailResult(email=email, contact_url=site, checked_urls=tuple(checked_urls))
 
@@ -215,7 +205,7 @@ def extract_email_from_site(site_url: str) -> EmailResult:
             continue
 
         checked_urls.append(url)
-        email = find_email(fetch_html(url))
+        email = find_email(fetch_html(url), site)
         if email:
             return EmailResult(email=email, contact_url=url, checked_urls=tuple(checked_urls))
 

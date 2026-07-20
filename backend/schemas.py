@@ -26,6 +26,8 @@ class SearchCreate(BaseModel):
     location: str = Field(min_length=2, max_length=255)
     quantity: int | None = Field(default=None, ge=1, le=500)
     max_results: bool = False
+    skip_without_website: bool = True
+    validate_whatsapp: bool = False
 
     @field_validator("niche", "location", mode="before")
     @classmethod
@@ -47,7 +49,7 @@ class LeadRead(BaseModel):
     name: str
     address: str
     phone: str
-    website: str
+    website: str | None
     email: str
     created_at: datetime
 
@@ -60,7 +62,7 @@ class LeadCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     address: str = Field(default="", max_length=1000)
     phone: str = Field(default="", max_length=80)
-    website: str = Field(min_length=1, max_length=500)
+    website: str = Field(default="", max_length=500)
     email: str = Field(default="", max_length=255)
 
     @field_validator("niche", "location", mode="before")
@@ -75,7 +77,7 @@ class LeadUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     address: str | None = Field(default=None, max_length=1000)
     phone: str | None = Field(default=None, max_length=80)
-    website: str | None = Field(default=None, min_length=1, max_length=500)
+    website: str | None = Field(default=None, max_length=500)
     email: str | None = Field(default=None, max_length=255)
 
     @field_validator("niche", "location", mode="before")
@@ -98,6 +100,8 @@ class SearchRunRead(BaseModel):
     location: str
     target_quantity: int | None
     max_results: bool
+    skip_without_website: bool
+    validate_whatsapp: bool
     status: str
     message: str
     scanned_count: int
@@ -116,7 +120,7 @@ class DesktopSearchLead(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     address: str = Field(default="", max_length=1000)
     phone: str = Field(default="", max_length=80)
-    website: str = Field(min_length=1, max_length=500)
+    website: str = Field(default="", max_length=500)
     email: str = Field(default="", max_length=255)
 
 

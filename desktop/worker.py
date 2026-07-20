@@ -28,6 +28,8 @@ class SearchWorker(QObject):
         location: str,
         quantity: int | None,
         max_results: bool,
+        skip_without_website: bool = True,
+        validate_whatsapp: bool = False,
         run_id: int | None = None,
         start_index: int = 1,
     ):
@@ -36,6 +38,8 @@ class SearchWorker(QObject):
         self.location = location
         self.quantity = quantity
         self.max_results = max_results
+        self.skip_without_website = skip_without_website
+        self.validate_whatsapp = validate_whatsapp
         self.resume_run_id = run_id
         self.start_index = max(1, start_index)
         self._stop_requested = False
@@ -67,7 +71,14 @@ class SearchWorker(QObject):
                     message="Retomando busca local no aplicativo desktop...",
                 )
             else:
-                run = client.create_search(self.niche, self.location, self.quantity, self.max_results)
+                run = client.create_search(
+                    self.niche,
+                    self.location,
+                    self.quantity,
+                    self.max_results,
+                    self.skip_without_website,
+                    self.validate_whatsapp,
+                )
                 run_id = int(run["id"])
 
             last_run = run
@@ -77,7 +88,12 @@ class SearchWorker(QObject):
 
             target_quantity = None if self.max_results else self.quantity
 
-            for event in scrape_google_maps(self.niche, self.location, start_index=self.start_index):
+            for event in scrape_google_maps(
+                self.niche,
+                self.location,
+                start_index=self.start_index,
+                skip_without_website=self.skip_without_website,
+            ):
                 if self._stop_requested:
                     finish_status = "paused"
                     finish_message = "Busca interrompida no aplicativo desktop."
@@ -103,34 +119,39 @@ class SearchWorker(QObject):
                     self.log.emit(event.message)
                     continue
 
-                self.log.emit(f"{event.lead.name} encontrado. Buscando e-mail em {event.lead.website}...")
-                try:
-                    email_result = extract_email_from_site(event.lead.website)
-                except Exception:
-                    run = client.update_search(
-                        run_id,
-                        status="running",
-                        message=f"{event.lead.name} ignorado: erro ao buscar e-mail.",
-                        scanned_count=scanned_count,
-                        skipped_delta=1,
-                    )
-                    last_run = run
-                    self.progress.emit(run)
-                    self.log.emit(f"{event.lead.name} ignorado: erro ao buscar e-mail.")
-                    continue
+                if event.lead.website:
+                    self.log.emit(f"{event.lead.name} encontrado. Buscando e-mail em {event.lead.website}...")
+                    try:
+                        email_result = extract_email_from_site(event.lead.website)
+                    except Exception:
+                        run = client.update_search(
+                            run_id,
+                            status="running",
+                            message=f"{event.lead.name} ignorado: erro ao buscar e-mail.",
+                            scanned_count=scanned_count,
+                            skipped_delta=1,
+                        )
+                        last_run = run
+                        self.progress.emit(run)
+                        self.log.emit(f"{event.lead.name} ignorado: erro ao buscar e-mail.")
+                        continue
 
-                if not email_result.email:
-                    run = client.update_search(
-                        run_id,
-                        status="running",
-                        message=f"{event.lead.name} ignorado: e-mail não encontrado.",
-                        scanned_count=scanned_count,
-                        skipped_delta=1,
-                    )
-                    last_run = run
-                    self.progress.emit(run)
-                    self.log.emit(f"{event.lead.name} ignorado: e-mail não encontrado.")
-                    continue
+                    if not email_result.email:
+                        run = client.update_search(
+                            run_id,
+                            status="running",
+                            message=f"{event.lead.name} ignorado: e-mail não encontrado ou inválido.",
+                            scanned_count=scanned_count,
+                            skipped_delta=1,
+                        )
+                        last_run = run
+                        self.progress.emit(run)
+                        self.log.emit(f"{event.lead.name} ignorado: e-mail não encontrado ou inválido.")
+                        continue
+                    email = email_result.email
+                else:
+                    self.log.emit(f"{event.lead.name} encontrado sem site. Salvando lead sem e-mail.")
+                    email = ""
 
                 response = client.ingest_lead(
                     run_id,
@@ -139,7 +160,7 @@ class SearchWorker(QObject):
                     address=event.lead.address,
                     phone=event.lead.phone,
                     website=event.lead.website,
-                    email=email_result.email,
+                    email=email,
                 )
                 run = response["run"]
                 last_run = run

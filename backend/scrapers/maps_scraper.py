@@ -365,7 +365,7 @@ def _extract_current_place(driver: WebDriver, wait: WebDriverWait) -> MapLead:
     return MapLead(name=name, address=address, phone=phone, website=website)
 
 
-def scrape_google_maps(niche: str, location: str, start_index: int = 1):
+def scrape_google_maps(niche: str, location: str, start_index: int = 1, *, skip_without_website: bool = True):
     driver = _create_driver()
     wait = WebDriverWait(driver, 15)
 
@@ -425,7 +425,7 @@ def scrape_google_maps(niche: str, location: str, start_index: int = 1):
             time.sleep(2.5)
             lead = _extract_current_place(driver, wait)
 
-            if not lead.website:
+            if not lead.website and skip_without_website:
                 yield ScrapeEvent(kind="skip", scanned=index, message=f"{lead.name} ignorado: sem site.")
             else:
                 yield ScrapeEvent(kind="lead", scanned=index, message=f"{lead.name} encontrado.", lead=lead)

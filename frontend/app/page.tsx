@@ -55,6 +55,8 @@ type SearchRun = {
   location: string;
   target_quantity: number | null;
   max_results: boolean;
+  skip_without_website: boolean;
+  validate_whatsapp: boolean;
   status: "queued" | "running" | "paused" | "completed" | "failed";
   message: string;
   scanned_count: number;
@@ -74,7 +76,7 @@ type Lead = {
   name: string;
   address: string;
   phone: string;
-  website: string;
+  website: string | null;
   email: string;
   created_at: string;
 };
@@ -396,7 +398,7 @@ function leadPayload(lead: Lead) {
     name: lead.name.trim(),
     address: lead.address.trim(),
     phone: lead.phone.trim(),
-    website: lead.website.trim(),
+    website: (lead.website || "").trim(),
     email: lead.email.trim()
   };
 }
@@ -727,6 +729,8 @@ export default function Home() {
   const [location, setLocation] = useState("");
   const [quantity, setQuantity] = useState("10");
   const [maxResults, setMaxResults] = useState(false);
+  const [skipWithoutWebsite, setSkipWithoutWebsite] = useState(true);
+  const [validateWhatsapp, setValidateWhatsapp] = useState(false);
   const [formError, setFormError] = useState("");
   const [runError, setRunError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -1554,7 +1558,9 @@ export default function Home() {
           niche: niche.trim(),
           location: location.trim(),
           quantity: maxResults ? null : Number(quantity),
-          max_results: maxResults
+          max_results: maxResults,
+          skip_without_website: skipWithoutWebsite,
+          validate_whatsapp: validateWhatsapp
         })
       });
       setRunPage(1);
@@ -1605,10 +1611,9 @@ export default function Home() {
     if (
       !manualLeadForm.niche.trim() ||
       !manualLeadForm.location.trim() ||
-      !manualLeadForm.name.trim() ||
-      !manualLeadForm.website.trim()
+      !manualLeadForm.name.trim()
     ) {
-      setActionError("Preencha nome, nicho, localidade e site.");
+      setActionError("Preencha nome, nicho e localidade.");
       return;
     }
 
@@ -1960,6 +1965,24 @@ export default function Home() {
                     Máximo possível
                   </label>
                 </div>
+                <div className="search-options">
+                  <label className="checkbox-label">
+                    <input
+                      checked={skipWithoutWebsite}
+                      onChange={(event) => setSkipWithoutWebsite(event.target.checked)}
+                      type="checkbox"
+                    />
+                    Ignorar sem site
+                  </label>
+                  <label className="checkbox-label">
+                    <input
+                      checked={validateWhatsapp}
+                      onChange={(event) => setValidateWhatsapp(event.target.checked)}
+                      type="checkbox"
+                    />
+                    Validar WhatsApp
+                  </label>
+                </div>
                 {formError ? <p className="error-text">{formError}</p> : null}
                 <button className="primary-button" disabled={submitting} type="submit">
                   {submitting ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
@@ -2105,10 +2128,14 @@ export default function Home() {
                         <td>{lead.niche}</td>
                         <td>{lead.location}</td>
                         <td>
-                          <a href={lead.website} target="_blank" rel="noreferrer">
-                            <Globe2 size={15} />
-                            {lead.website.replace(/^https?:\/\//, "")}
-                          </a>
+                          {lead.website ? (
+                            <a href={lead.website} target="_blank" rel="noreferrer">
+                              <Globe2 size={15} />
+                              {lead.website.replace(/^https?:\/\//, "")}
+                            </a>
+                          ) : (
+                            "-"
+                          )}
                         </td>
                         <td>{lead.email}</td>
                         <td>{lead.phone || "-"}</td>
@@ -2263,10 +2290,14 @@ export default function Home() {
                       <td>{lead.address}</td>
                       <td>{lead.phone || "-"}</td>
                       <td>
-                        <a href={lead.website} target="_blank" rel="noreferrer">
-                          <Globe2 size={15} />
-                          {lead.website.replace(/^https?:\/\//, "")}
-                        </a>
+                        {lead.website ? (
+                          <a href={lead.website} target="_blank" rel="noreferrer">
+                            <Globe2 size={15} />
+                            {lead.website.replace(/^https?:\/\//, "")}
+                          </a>
+                        ) : (
+                          "-"
+                        )}
                       </td>
                       <td>{lead.email || "-"}</td>
                     </tr>
@@ -3469,7 +3500,6 @@ export default function Home() {
               <label>
                 Site
                 <input
-                  required
                   placeholder="https://empresa.com"
                   value={manualLeadForm.website}
                   onChange={(event) => setManualLeadForm({ ...manualLeadForm, website: event.target.value })}
@@ -3560,7 +3590,7 @@ export default function Home() {
               <label>
                 Site
                 <input
-                  value={editingLead.website}
+                  value={editingLead.website || ""}
                   onChange={(event) => setEditingLead({ ...editingLead, website: event.target.value })}
                 />
               </label>

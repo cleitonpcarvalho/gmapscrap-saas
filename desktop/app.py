@@ -124,6 +124,11 @@ class MainWindow(QMainWindow):
         self.quantity_input.setValue(10)
         self.max_checkbox = QCheckBox("Máximo possível")
         self.max_checkbox.toggled.connect(self._toggle_quantity)
+        self.skip_without_website_checkbox = QCheckBox("Ignorar sem site")
+        self.skip_without_website_checkbox.setChecked(True)
+        self.skip_without_website_checkbox.setToolTip("Quando desmarcado, empresas sem site também serão salvas.")
+        self.validate_whatsapp_checkbox = QCheckBox("Validar WhatsApp")
+        self.validate_whatsapp_checkbox.setToolTip("Quando marcado, só salva leads cujo telefone for confirmado no WhatsApp.")
 
         form_layout.addWidget(self._field("Nicho", self.niche_input))
         form_layout.addWidget(self._field("Cidade, estado ou país", self.location_input))
@@ -138,6 +143,15 @@ class MainWindow(QMainWindow):
         quantity_box_layout.addWidget(self.max_checkbox)
         quantity_row.addWidget(quantity_box)
         form_layout.addLayout(quantity_row)
+
+        options_box = QFrame()
+        options_box.setObjectName("checkBoxFrame")
+        options_layout = QVBoxLayout(options_box)
+        options_layout.setContentsMargins(14, 12, 14, 12)
+        options_layout.setSpacing(10)
+        options_layout.addWidget(self.skip_without_website_checkbox)
+        options_layout.addWidget(self.validate_whatsapp_checkbox)
+        form_layout.addWidget(options_box)
 
         button_row = QHBoxLayout()
         button_row.setSpacing(10)
@@ -473,6 +487,8 @@ class MainWindow(QMainWindow):
         location = self.location_input.text().strip()
         max_results = self.max_checkbox.isChecked()
         quantity = None if max_results else self.quantity_input.value()
+        skip_without_website = self.skip_without_website_checkbox.isChecked()
+        validate_whatsapp = self.validate_whatsapp_checkbox.isChecked()
 
         if len(niche) < 2 or len(location) < 2:
             self._append_log("Informe nicho e cidade antes de iniciar.")
@@ -482,7 +498,7 @@ class MainWindow(QMainWindow):
         self._reset_current()
         self.current_title.setText(f"{niche} · {location}")
         self._set_status("Rodando", "#fff4d7", "#916400")
-        self._start_worker(niche, location, quantity, max_results)
+        self._start_worker(niche, location, quantity, max_results, skip_without_website, validate_whatsapp)
 
     def _start_worker(
         self,
@@ -490,12 +506,23 @@ class MainWindow(QMainWindow):
         location: str,
         quantity: int | None,
         max_results: bool,
+        skip_without_website: bool,
+        validate_whatsapp: bool,
         *,
         run_id: int | None = None,
         start_index: int = 1,
     ) -> None:
         self.thread = QThread(self)
-        self.worker = SearchWorker(niche, location, quantity, max_results, run_id=run_id, start_index=start_index)
+        self.worker = SearchWorker(
+            niche,
+            location,
+            quantity,
+            max_results,
+            skip_without_website=skip_without_website,
+            validate_whatsapp=validate_whatsapp,
+            run_id=run_id,
+            start_index=start_index,
+        )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.log.connect(self._append_log)
@@ -528,6 +555,8 @@ class MainWindow(QMainWindow):
         niche = str(self.current_run.get("niche") or self.niche_input.text().strip())
         location = str(self.current_run.get("location") or self.location_input.text().strip())
         max_results = bool(self.current_run.get("max_results"))
+        skip_without_website = bool(self.current_run.get("skip_without_website", True))
+        validate_whatsapp = bool(self.current_run.get("validate_whatsapp", False))
         target_quantity = self.current_run.get("target_quantity")
         quantity = None if max_results else int(target_quantity or self.quantity_input.value())
         start_index = int(self.current_run.get("scanned_count") or 0) + 1
@@ -536,7 +565,16 @@ class MainWindow(QMainWindow):
         self.current_message.setText("Retomando busca local...")
         self._set_status("Rodando", "#fff4d7", "#916400")
         self._set_running(True)
-        self._start_worker(niche, location, quantity, max_results, run_id=run_id, start_index=start_index)
+        self._start_worker(
+            niche,
+            location,
+            quantity,
+            max_results,
+            skip_without_website,
+            validate_whatsapp,
+            run_id=run_id,
+            start_index=start_index,
+        )
 
     def refresh_history(self) -> None:
         try:
@@ -562,6 +600,8 @@ class MainWindow(QMainWindow):
         self.location_input.setEnabled(fields_enabled)
         self.quantity_input.setEnabled(fields_enabled and not self.max_checkbox.isChecked())
         self.max_checkbox.setEnabled(fields_enabled)
+        self.skip_without_website_checkbox.setEnabled(fields_enabled)
+        self.validate_whatsapp_checkbox.setEnabled(fields_enabled)
 
     def _reset_current(self) -> None:
         self.current_run = None
