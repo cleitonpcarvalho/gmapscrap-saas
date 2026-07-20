@@ -116,6 +116,34 @@ def ensure_whatsapp_validation_available(validate_whatsapp: bool) -> None:
         )
 
 
+def _count_saved_leads_for_run(db: Session, run_id: int) -> int:
+    return int(db.scalar(select(func.count(Lead.id)).where(Lead.run_id == run_id)) or 0)
+
+
+def _find_existing_desktop_lead(db: Session, run_id: int, lead: MapLead) -> Lead | None:
+    raw_website = (lead.website or "").strip()
+    website = normalize_site_url(raw_website) if raw_website else ""
+    if website:
+        return db.scalar(select(Lead).where(Lead.run_id == run_id, Lead.website == website))
+
+    phone = (lead.phone or "").strip()
+    name = (lead.name or "").strip()
+    address = (lead.address or "").strip() or "Não encontrado"
+    if not name:
+        return None
+
+    stmt = select(Lead).where(
+        Lead.run_id == run_id,
+        Lead.website.is_(None),
+        Lead.name == name,
+        Lead.address == address,
+    )
+    if phone:
+        stmt = stmt.where(Lead.phone == phone)
+
+    return db.scalar(stmt)
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -282,6 +310,17 @@ def ingest_desktop_lead(
         phone=payload.phone.strip(),
         website=payload.website.strip(),
     )
+
+    existing_lead = _find_existing_desktop_lead(db, run.id, lead)
+    if existing_lead:
+        run.status = "running"
+        run.scanned_count = max(run.scanned_count, payload.scanned)
+        run.saved_count = max(run.saved_count, _count_saved_leads_for_run(db, run.id))
+        run.message = f"{lead.name} já estava salvo nesta execução."
+        db.commit()
+        db.refresh(run)
+        return DesktopLeadIngestResponse(saved=True, message=run.message, run=run)
+
     run.status = "running"
     run.scanned_count = max(run.scanned_count, payload.scanned)
     run.message = f"Salvando {lead.name}..." if payload.email.strip() or not lead.website else f"Buscando e-mail em {lead.website}..."

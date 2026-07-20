@@ -30,3 +30,11 @@ def test_select_best_email_prefers_site_domain() -> None:
 
 def test_phone_normalization_for_brazil() -> None:
     assert normalize_phone_e164("(85) 99999-9999", "Fortaleza, Ceara, Brasil") == "+5585999999999"
+
+
+def test_phone_normalization_infers_brazil_from_sao_paulo_location() -> None:
+    assert normalize_phone_e164("(11) 99999-9999", "São Paulo, SP") == "+5511999999999"
+
+
+def test_phone_normalization_infers_brazil_from_cep() -> None:
+    assert normalize_phone_e164("(11) 3333-4444", "Av. Paulista, 1000 - 01310-100") == "+551133334444"

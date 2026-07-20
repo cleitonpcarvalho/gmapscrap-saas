@@ -16,6 +16,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
 from backend.config import get_settings
+from backend.services.phone_region import infer_phone_region
 
 
 PHONE_XPATH_FALLBACK = "/html/body/div[1]/div[2]/div[9]/div[9]/div/div/div[1]/div[3]/div/div[1]/div/div/div[2]/div[7]/div[6]/button/div/div[2]/div[1]"
@@ -177,15 +178,6 @@ def _wait_for_results_panel(driver: WebDriver, wait: WebDriverWait):
     raise RuntimeError(_diagnose_maps_page(driver))
 
 
-def _infer_region(address: str) -> str:
-    normalized = (address or "").lower()
-    if any(value in normalized for value in ("estados unidos", "united states", "eua", " usa")):
-        return "US"
-    if any(value in normalized for value in ("brasil", "brazil")):
-        return "BR"
-    return "US"
-
-
 def _format_phone_number(raw: str, address: str) -> str:
     if not raw:
         return ""
@@ -194,7 +186,7 @@ def _format_phone_number(raw: str, address: str) -> str:
     candidate = re.sub(r"^(phone:tel:|tel:)", "", candidate, flags=re.IGNORECASE)
     candidate = candidate.replace("\u202a", "").replace("\u202c", "")
 
-    region = None if candidate.startswith("+") else _infer_region(address)
+    region = None if candidate.startswith("+") else infer_phone_region(address)
 
     try:
         parsed = phonenumbers.parse(candidate, region)

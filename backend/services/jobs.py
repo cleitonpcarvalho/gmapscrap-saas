@@ -121,7 +121,8 @@ def _validate_whatsapp_or_skip(db: Session, run: SearchRun, lead: MapLead) -> bo
     if not run.validate_whatsapp:
         return True
 
-    result = validate_whatsapp_number(lead.phone, lead.address)
+    validation_context = " ".join(value for value in (lead.address, run.location) if value)
+    result = validate_whatsapp_number(lead.phone, validation_context)
     if result.is_valid:
         return True
 

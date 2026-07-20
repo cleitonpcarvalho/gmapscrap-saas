@@ -8,6 +8,7 @@ import phonenumbers
 import requests
 
 from backend.config import get_settings
+from backend.services.phone_region import infer_phone_region
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +57,7 @@ def normalize_phone_e164(phone: str, address: str = "") -> str:
 
     cleaned = re.sub(r"^(phone:tel:|tel:)", "", raw, flags=re.IGNORECASE)
     cleaned = cleaned.replace("\u202a", "").replace("\u202c", "")
-    region = None if cleaned.startswith("+") else _infer_region(address)
+    region = None if cleaned.startswith("+") else infer_phone_region(address)
 
     try:
         parsed = phonenumbers.parse(cleaned, region)
@@ -70,16 +71,6 @@ def normalize_phone_e164(phone: str, address: str = "") -> str:
         return ""
 
     return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-
-
-def _infer_region(address: str) -> str:
-    normalized = (address or "").lower()
-    if any(value in normalized for value in ("brasil", "brazil")):
-        return "BR"
-    if any(value in normalized for value in ("estados unidos", "united states", "eua", " usa")):
-        return "US"
-    return "US"
-
 
 @lru_cache(maxsize=4096)
 def _check_whatsapp_number(normalized_phone: str) -> bool | None:

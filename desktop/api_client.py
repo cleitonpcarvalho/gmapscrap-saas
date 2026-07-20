@@ -194,6 +194,7 @@ class GmapScrapApiClient:
                 response = self.session.request(method, f"{self.config.base_url}{path}", timeout=timeout, **kwargs)
             except requests.RequestException as exc:
                 last_error = exc
+                self._reset_connections()
                 if attempt == 3:
                     break
                 time.sleep(1.5 * (attempt + 1))
@@ -202,9 +203,14 @@ class GmapScrapApiClient:
             if response.status_code not in transient_statuses or attempt == 3:
                 return response
 
+            response.close()
+            self._reset_connections()
             time.sleep(1.5 * (attempt + 1))
 
         raise ApiClientError(f"Falha ao chamar a API: {last_error}") from None
+
+    def _reset_connections(self) -> None:
+        self.session.close()
 
     @staticmethod
     def _error_message(response: requests.Response, fallback: str) -> str:
