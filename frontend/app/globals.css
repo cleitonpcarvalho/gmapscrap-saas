@@ -1115,6 +1115,11 @@ td a {
   text-decoration: none;
 }
 
+.phone-link {
+  display: inline;
+  overflow-wrap: anywhere;
+}
+
 .empty-cell {
   height: 96px;
   text-align: center;
