@@ -2539,7 +2539,7 @@ export default function Home() {
                           <span>{sendLog.recipient_email}</span>
                         </td>
                         <td>{sendLog.campaign_name}</td>
-                        <td>{sendLog.error || sendLog.status}</td>
+                        <td>{sendLog.error || emailSendStatusLabel(sendLog.status)}</td>
                         <td>{sendLog.open_count}</td>
                         <td>{sendLog.click_count}</td>
                         <td>{formatDate(sendLog.sent_at)}</td>
