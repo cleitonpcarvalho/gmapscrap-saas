@@ -78,6 +78,8 @@ type Lead = {
   phone: string;
   website: string | null;
   email: string;
+  validate_whatsapp: boolean;
+  whatsapp_url: string;
   created_at: string;
 };
 
@@ -415,51 +417,14 @@ function leadPayload(lead: Lead) {
   };
 }
 
-function whatsappWebUrl(lead: Lead) {
-  const rawPhone = (lead.phone || "").trim();
-  if (!rawPhone) return "";
-
-  const hasExplicitCountryCode = rawPhone.startsWith("+");
-  const digits = rawPhone.replace(/\D/g, "");
-  if (digits.length < 10) return "";
-
-  if (hasExplicitCountryCode) {
-    return `https://web.whatsapp.com/send?phone=${digits}`;
-  }
-
-  const context = `${lead.location} ${lead.address}`.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const isBrazil = /\b(sao paulo|rio de janeiro|belo horizonte|brasilia|fortaleza|salvador|curitiba|recife|porto alegre|manaus|belem|goiania|florianopolis|vitoria|campinas|santos|brasil|brazil)\b/.test(
-    context
-  );
-  const isUnitedStates = /\b(united states|estados unidos|eua|usa|pennsylvania)\b/.test(context);
-
-  if (isBrazil) {
-    if ((digits.length === 12 || digits.length === 13) && digits.startsWith("55")) {
-      return `https://web.whatsapp.com/send?phone=${digits}`;
-    }
-    if (digits.length === 10 || digits.length === 11) {
-      return `https://web.whatsapp.com/send?phone=55${digits}`;
-    }
-  }
-
-  if (isUnitedStates || digits.length === 10 || (digits.length === 11 && digits.startsWith("1"))) {
-    const normalized = digits.length === 10 ? `1${digits}` : digits;
-    if (normalized.length === 11 && normalized.startsWith("1")) {
-      return `https://web.whatsapp.com/send?phone=${normalized}`;
-    }
-  }
-
-  return "";
-}
-
 function PhoneCell({ lead }: { lead: Lead }) {
-  const url = whatsappWebUrl(lead);
+  const url = lead.validate_whatsapp ? lead.whatsapp_url : "";
 
   if (!lead.phone) return <>-</>;
   if (!url) return <>{lead.phone}</>;
 
   return (
-    <a className="phone-link" href={url} target="_blank" rel="noreferrer" title="Abrir conversa no WhatsApp Web">
+    <a className="phone-link" href={url} target="_blank" rel="noreferrer" title="Abrir conversa no WhatsApp">
       {lead.phone}
     </a>
   );

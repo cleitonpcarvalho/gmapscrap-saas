@@ -51,6 +51,8 @@ class LeadRead(BaseModel):
     phone: str
     website: str | None
     email: str
+    validate_whatsapp: bool = False
+    whatsapp_url: str = ""
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

@@ -56,6 +56,23 @@ class Lead(Base):
     def location(self) -> str:
         return self.search_run.location if self.search_run else ""
 
+    @property
+    def validate_whatsapp(self) -> bool:
+        return bool(self.search_run and self.search_run.validate_whatsapp)
+
+    @property
+    def whatsapp_url(self) -> str:
+        if not self.validate_whatsapp:
+            return ""
+
+        from backend.services.whatsapp_validation import normalize_phone_e164
+
+        normalized_phone = normalize_phone_e164(self.phone, f"{self.address} {self.location}")
+        if not normalized_phone:
+            return ""
+
+        return f"https://wa.me/{normalized_phone.lstrip('+')}"
+
 
 class SmtpConfig(Base):
     __tablename__ = "smtp_configs"
