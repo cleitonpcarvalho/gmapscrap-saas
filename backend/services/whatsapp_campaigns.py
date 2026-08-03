@@ -1,0 +1,442 @@
+import random
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, time as dt_time, timedelta, timezone
+from threading import Lock, Thread
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, selectinload
+
+from backend.database import SessionLocal
+from backend.models import (
+    Lead,
+    LeadList,
+    SearchRun,
+    WhatsAppCampaign,
+    WhatsAppCampaignTemplate,
+    WhatsAppInstance,
+    WhatsAppMessageTemplate,
+    WhatsAppSend,
+)
+from backend.services.whatsapp_providers.evolution import EvolutionProvider
+from backend.services.whatsapp_validation import normalize_phone_e164
+
+
+campaign_executor = ThreadPoolExecutor(max_workers=1)
+_active_campaign_ids: set[int] = set()
+_active_campaign_ids_lock = Lock()
+_scheduler_started = False
+_scheduler_lock = Lock()
+VARIABLE_PATTERN = re.compile(r"{\s*([a-zA-Z0-9_]+)\s*}")
+LIST_FILTER_SEPARATOR = "||"
+SUCCESS_STATUSES = ("sent", "delivered", "read")
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _split_list_filter(value: str) -> list[str]:
+    if not value:
+        return []
+
+    if LIST_FILTER_SEPARATOR in value:
+        return [item.strip() for item in value.split(LIST_FILTER_SEPARATOR) if item.strip()]
+
+    return [value.strip()] if value.strip() else []
+
+
+def submit_campaign_job(campaign_id: int) -> bool:
+    with _active_campaign_ids_lock:
+        if campaign_id in _active_campaign_ids:
+            return False
+
+        _active_campaign_ids.add(campaign_id)
+
+    campaign_executor.submit(_run_campaign_and_release, campaign_id)
+    return True
+
+
+def _run_campaign_and_release(campaign_id: int) -> None:
+    try:
+        run_campaign(campaign_id)
+    finally:
+        with _active_campaign_ids_lock:
+            _active_campaign_ids.discard(campaign_id)
+
+
+def resume_running_campaigns() -> None:
+    db = SessionLocal()
+    try:
+        campaign_ids = list(
+            db.scalars(select(WhatsAppCampaign.id).where(WhatsAppCampaign.status == "running")).all()
+        )
+    finally:
+        db.close()
+
+    for campaign_id in campaign_ids:
+        submit_campaign_job(campaign_id)
+
+
+def start_campaign_scheduler(interval_seconds: int = 60) -> None:
+    global _scheduler_started
+
+    with _scheduler_lock:
+        if _scheduler_started:
+            return
+
+        _scheduler_started = True
+
+    thread = Thread(target=_campaign_scheduler_loop, args=(interval_seconds,), daemon=True)
+    thread.start()
+
+
+def _campaign_scheduler_loop(interval_seconds: int) -> None:
+    while True:
+        try:
+            resume_running_campaigns()
+        except Exception:
+            pass
+
+        time.sleep(interval_seconds)
+
+
+def lead_query_for_list(lead_list: LeadList):
+    stmt = (
+        select(Lead)
+        .join(SearchRun)
+        .options(selectinload(Lead.search_run))
+        .where(Lead.phone != "")
+        .order_by(Lead.created_at)
+    )
+
+    niche_filters = _split_list_filter(lead_list.niche_filter)
+    if niche_filters:
+        stmt = stmt.where(or_(*(SearchRun.niche.ilike(f"%{value}%") for value in niche_filters)))
+
+    location_filters = _split_list_filter(lead_list.location_filter)
+    if location_filters:
+        stmt = stmt.where(or_(*(SearchRun.location.ilike(f"%{value}%") for value in location_filters)))
+
+    if lead_list.search_run_id:
+        stmt = stmt.where(Lead.run_id == lead_list.search_run_id)
+
+    return stmt
+
+
+def render_message(template: WhatsAppMessageTemplate, lead: Lead) -> str:
+    variables = {
+        "lead_name": lead.name,
+        "nome_empresa": lead.name,
+        "company_name": lead.name,
+        "empresa": lead.name,
+        "name": lead.name,
+        "email": lead.email or "",
+        "website": lead.website or "",
+        "phone": lead.phone or "",
+        "address": lead.address or "",
+        "niche": lead.niche,
+        "location": lead.location,
+        "localidade": lead.location,
+    }
+
+    def replace(match: re.Match[str]) -> str:
+        return variables.get(match.group(1), "")
+
+    return VARIABLE_PATTERN.sub(replace, template.content or "")
+
+
+def _choose_template(campaign: WhatsAppCampaign) -> WhatsAppCampaignTemplate:
+    choices = campaign.templates
+    weights = [max(1, item.weight) for item in choices]
+    return random.choices(choices, weights=weights, k=1)[0]
+
+
+def _recipient_phone(lead: Lead) -> str:
+    normalized = normalize_phone_e164(lead.phone or "", f"{lead.address or ''} {lead.location}")
+    return normalized.lstrip("+") if normalized else ""
+
+
+def ensure_campaign_queue(db: Session, campaign: WhatsAppCampaign) -> None:
+    existing_count = db.scalar(select(func.count(WhatsAppSend.id)).where(WhatsAppSend.campaign_id == campaign.id)) or 0
+    if existing_count:
+        return
+
+    lead_list = db.get(LeadList, campaign.list_id)
+    if not lead_list:
+        campaign.status = "paused"
+        campaign.error = "Lista não encontrada."
+        campaign.message = "Campanha pausada."
+        db.commit()
+        return
+
+    queued = 0
+    leads = list(db.scalars(lead_query_for_list(lead_list)).all())
+    for lead in leads:
+        recipient_phone = _recipient_phone(lead)
+        if not recipient_phone:
+            continue
+
+        campaign_template = _choose_template(campaign)
+        db.add(
+            WhatsAppSend(
+                campaign_id=campaign.id,
+                lead_id=lead.id,
+                template_id=campaign_template.template_id,
+                recipient_phone=recipient_phone,
+                status="pending",
+            )
+        )
+        queued += 1
+
+    campaign.pending_count = queued
+    campaign.message = f"{queued} leads na fila."
+    db.commit()
+
+
+def refresh_campaign_counts(db: Session, campaign: WhatsAppCampaign) -> None:
+    campaign.pending_count = db.scalar(
+        select(func.count(WhatsAppSend.id)).where(
+            WhatsAppSend.campaign_id == campaign.id,
+            WhatsAppSend.status == "pending",
+        )
+    ) or 0
+    campaign.sent_count = db.scalar(
+        select(func.count(WhatsAppSend.id)).where(
+            WhatsAppSend.campaign_id == campaign.id,
+            WhatsAppSend.status == "sent",
+        )
+    ) or 0
+    campaign.delivered_count = db.scalar(
+        select(func.count(WhatsAppSend.id)).where(
+            WhatsAppSend.campaign_id == campaign.id,
+            WhatsAppSend.status == "delivered",
+        )
+    ) or 0
+    campaign.read_count = db.scalar(
+        select(func.count(WhatsAppSend.id)).where(
+            WhatsAppSend.campaign_id == campaign.id,
+            WhatsAppSend.status == "read",
+        )
+    ) or 0
+    campaign.failed_count = db.scalar(
+        select(func.count(WhatsAppSend.id)).where(
+            WhatsAppSend.campaign_id == campaign.id,
+            WhatsAppSend.status == "failed",
+        )
+    ) or 0
+
+
+def _parse_time(value: str) -> dt_time:
+    try:
+        hour, minute = value.split(":", 1)
+        return dt_time(int(hour), int(minute))
+    except (TypeError, ValueError):
+        return dt_time(9, 0)
+
+
+def _campaign_timezone(campaign: WhatsAppCampaign) -> ZoneInfo:
+    try:
+        return ZoneInfo(campaign.timezone_name or "America/New_York")
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("America/New_York")
+
+
+def _allowed_send_days(campaign: WhatsAppCampaign) -> set[int]:
+    return {int(day) for day in campaign.send_days.split(",") if day.strip().isdigit()}
+
+
+def _inside_send_window(campaign: WhatsAppCampaign) -> bool:
+    campaign_timezone = _campaign_timezone(campaign)
+    now = datetime.now(campaign_timezone)
+    allowed_days = _allowed_send_days(campaign)
+    if allowed_days and now.weekday() not in allowed_days:
+        return False
+
+    start = _parse_time(campaign.send_window_start)
+    end = _parse_time(campaign.send_window_end)
+    return start <= now.time() <= end
+
+
+def _next_send_window_start(campaign: WhatsAppCampaign, earliest: datetime | None = None) -> datetime | None:
+    campaign_timezone = _campaign_timezone(campaign)
+    now = earliest.astimezone(campaign_timezone) if earliest else datetime.now(campaign_timezone)
+    allowed_days = _allowed_send_days(campaign)
+    start = _parse_time(campaign.send_window_start)
+    end = _parse_time(campaign.send_window_end)
+
+    for offset in range(14):
+        candidate_date = (now + timedelta(days=offset)).date()
+        if allowed_days and candidate_date.weekday() not in allowed_days:
+            continue
+
+        candidate_start = datetime.combine(candidate_date, start, tzinfo=campaign_timezone)
+        candidate_end = datetime.combine(candidate_date, end, tzinfo=campaign_timezone)
+        if candidate_end < now:
+            continue
+
+        if candidate_start <= now <= candidate_end:
+            return now
+
+        return candidate_start
+
+    return None
+
+
+def _format_wait_until(value: datetime | None, campaign: WhatsAppCampaign) -> str:
+    if value is None:
+        return ""
+
+    local_value = value.astimezone(_campaign_timezone(campaign))
+    return f" Retoma em {local_value.strftime('%d/%m %H:%M')} ({campaign.timezone_name})."
+
+
+def _wait_for_next_window(db: Session, campaign: WhatsAppCampaign, reason: str, next_time: datetime | None) -> None:
+    campaign.message = f"Aguardando: {reason}.{_format_wait_until(next_time, campaign)}"
+    campaign.error = None
+    db.commit()
+
+
+def _limit_status(db: Session, campaign: WhatsAppCampaign) -> tuple[str, datetime | None]:
+    campaign_timezone = _campaign_timezone(campaign)
+    now = datetime.now(campaign_timezone)
+    daily_since = now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    weekly_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    weekly_since = weekly_start.astimezone(timezone.utc)
+    daily_sent = db.scalar(
+        select(func.count(WhatsAppSend.id)).where(
+            WhatsAppSend.campaign_id == campaign.id,
+            WhatsAppSend.status.in_(SUCCESS_STATUSES),
+            WhatsAppSend.sent_at >= daily_since,
+        )
+    ) or 0
+    weekly_sent = db.scalar(
+        select(func.count(WhatsAppSend.id)).where(
+            WhatsAppSend.campaign_id == campaign.id,
+            WhatsAppSend.status.in_(SUCCESS_STATUSES),
+            WhatsAppSend.sent_at >= weekly_since,
+        )
+    ) or 0
+
+    if daily_sent >= campaign.daily_limit:
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return "limite diário atingido", _next_send_window_start(campaign, tomorrow)
+    if weekly_sent >= campaign.weekly_limit:
+        next_week = (weekly_start + timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return "limite semanal atingido", _next_send_window_start(campaign, next_week)
+    return "", None
+
+
+def _sleep_with_pause_checks(db: Session, campaign_id: int, seconds: int) -> None:
+    for _ in range(seconds):
+        campaign = db.get(WhatsAppCampaign, campaign_id)
+        if not campaign or campaign.status != "running":
+            return
+        time.sleep(1)
+
+
+def _provider_message_id(response: dict) -> str:
+    key = response.get("key") if isinstance(response.get("key"), dict) else {}
+    message = response.get("message") if isinstance(response.get("message"), dict) else {}
+    value = key.get("id") or response.get("messageId") or response.get("id") or message.get("id")
+    return str(value or "")
+
+
+def _instance_provider_id(instance: WhatsAppInstance | None) -> str:
+    if not instance:
+        return ""
+    return (instance.evolution_instance_name or instance.name or "").strip()
+
+
+def run_campaign(campaign_id: int) -> None:
+    db = SessionLocal()
+
+    try:
+        campaign = db.get(WhatsAppCampaign, campaign_id)
+        if not campaign or campaign.status != "running":
+            return
+
+        campaign.started_at = campaign.started_at or _now()
+        campaign.message = "Preparando fila de envio..."
+        db.commit()
+        ensure_campaign_queue(db, campaign)
+
+        while True:
+            campaign = db.get(WhatsAppCampaign, campaign_id)
+            if not campaign or campaign.status != "running":
+                return
+
+            refresh_campaign_counts(db, campaign)
+            if campaign.pending_count <= 0:
+                campaign.status = "completed"
+                campaign.finished_at = _now()
+                campaign.message = "Campanha concluída."
+                db.commit()
+                return
+
+            if not _inside_send_window(campaign):
+                _wait_for_next_window(
+                    db,
+                    campaign,
+                    "fora da janela de envio",
+                    _next_send_window_start(campaign),
+                )
+                return
+
+            limit_message, next_send_time = _limit_status(db, campaign)
+            if limit_message:
+                _wait_for_next_window(db, campaign, limit_message, next_send_time)
+                return
+
+            instance = db.get(WhatsAppInstance, campaign.instance_id)
+            provider_instance_id = _instance_provider_id(instance)
+            if not provider_instance_id:
+                campaign.status = "paused"
+                campaign.error = "Instância de WhatsApp não configurada."
+                campaign.message = "Campanha pausada."
+                db.commit()
+                return
+
+            send = db.scalars(
+                select(WhatsAppSend)
+                .options(
+                    selectinload(WhatsAppSend.lead).selectinload(Lead.search_run),
+                    selectinload(WhatsAppSend.template),
+                )
+                .where(WhatsAppSend.campaign_id == campaign.id, WhatsAppSend.status == "pending")
+                .order_by(WhatsAppSend.created_at)
+                .limit(1)
+            ).first()
+
+            if not send:
+                refresh_campaign_counts(db, campaign)
+                db.commit()
+                continue
+
+            try:
+                rendered_text = render_message(send.template, send.lead)
+                response = EvolutionProvider().send_text_message(
+                    provider_instance_id,
+                    send.recipient_phone,
+                    rendered_text,
+                )
+                send.status = "sent"
+                send.sent_at = _now()
+                send.provider_message_id = _provider_message_id(response)
+                send.error = None
+                campaign.message = f"Enviado para {send.recipient_phone}."
+            except Exception as exc:
+                send.status = "failed"
+                send.failed_at = _now()
+                send.error = str(exc)
+                campaign.message = f"Falha ao enviar para {send.recipient_phone}."
+
+            refresh_campaign_counts(db, campaign)
+            db.commit()
+
+            delay = random.randint(campaign.min_delay_seconds, campaign.max_delay_seconds)
+            _sleep_with_pause_checks(db, campaign.id, delay)
+    finally:
+        db.close()

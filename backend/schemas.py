@@ -433,3 +433,75 @@ class WhatsAppInstanceStatusRead(BaseModel):
     connected_at: datetime | None
     provider_state: str
     provider_response: dict[str, Any]
+
+
+class WhatsAppCampaignCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+    list_id: int
+    instance_id: int
+    templates: list[CampaignTemplateInput] = Field(min_length=1)
+    min_delay_seconds: int = Field(default=120, ge=1, le=86400)
+    max_delay_seconds: int = Field(default=300, ge=1, le=86400)
+    daily_limit: int = Field(default=30, ge=1, le=500)
+    weekly_limit: int = Field(default=150, ge=1, le=3000)
+    send_window_start: str = Field(default="09:00", max_length=5)
+    send_window_end: str = Field(default="17:00", max_length=5)
+    timezone_name: str = Field(default="America/New_York", max_length=80)
+    send_days: str = Field(default="0,1,2,3,4", max_length=20)
+
+    @field_validator("send_days")
+    @classmethod
+    def validate_send_days(cls, value: str) -> str:
+        seen: set[int] = set()
+        days: list[int] = []
+
+        for raw_day in (value or "").split(","):
+            day = raw_day.strip()
+            if not day:
+                continue
+            if not day.isdigit():
+                raise ValueError("Dias de envio devem ser números de 0 a 6.")
+
+            day_number = int(day)
+            if day_number < 0 or day_number > 6:
+                raise ValueError("Dias de envio devem ficar entre 0 (segunda) e 6 (domingo).")
+
+            if day_number not in seen:
+                seen.add(day_number)
+                days.append(day_number)
+
+        if not days:
+            raise ValueError("Escolha ao menos um dia de envio.")
+
+        return ",".join(str(day) for day in sorted(days))
+
+
+class WhatsAppCampaignRead(BaseModel):
+    id: int
+    name: str
+    list_id: int
+    list_name: str
+    instance_id: int
+    instance_name: str
+    status: str
+    message: str
+    error: str | None
+    min_delay_seconds: int
+    max_delay_seconds: int
+    daily_limit: int
+    weekly_limit: int
+    send_window_start: str
+    send_window_end: str
+    timezone_name: str
+    send_days: str
+    template_ids: list[int]
+    pending_count: int
+    sent_count: int
+    delivered_count: int
+    read_count: int
+    failed_count: int
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+    model_config = ConfigDict(from_attributes=True)

@@ -163,3 +163,31 @@ def test_whatsapp_create_returns_502_when_provider_is_unavailable(
 
     listed = main.list_whatsapp_instances(db=db_session, username="test-user")
     assert listed == []
+
+
+def test_evolution_provider_sends_text_message(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = db_session
+    captured: dict[str, Any] = {}
+
+    def fake_request(method: str, url: str, **kwargs) -> FakeEvolutionResponse:
+        captured["method"] = method
+        captured["url"] = url
+        captured["json"] = kwargs["json"]
+        return FakeEvolutionResponse(200, {"key": {"id": "message-1"}, "status": "PENDING"})
+
+    monkeypatch.setattr("backend.services.whatsapp_providers.evolution.requests.request", fake_request)
+
+    response = main.EvolutionProvider().send_text_message("sales-main", "5511999999999", "Hello")
+
+    assert response["key"]["id"] == "message-1"
+    assert captured == {
+        "method": "POST",
+        "url": "https://evolution.example.test/message/sendText/sales-main",
+        "json": {
+            "number": "5511999999999",
+            "textMessage": {"text": "Hello"},
+        },
+    }

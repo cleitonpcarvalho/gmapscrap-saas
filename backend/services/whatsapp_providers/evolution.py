@@ -43,7 +43,14 @@ class EvolutionProvider(WhatsAppProvider):
         return self._request("DELETE", f"/instance/delete/{instance_id}")
 
     def send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
-        raise NotImplementedError("Envio de texto via Evolution ainda não implementado.")
+        return self._request(
+            "POST",
+            f"/message/sendText/{instance_id}",
+            json={
+                "number": phone,
+                "textMessage": {"text": text},
+            },
+        )
 
     def send_audio_message(self, instance_id: str, phone: str, audio_url: str) -> dict[str, Any]:
         raise NotImplementedError("Envio de audio via Evolution ainda não implementado.")

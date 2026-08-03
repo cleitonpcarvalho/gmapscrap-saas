@@ -22,7 +22,11 @@ from backend.models import (
     Lead,
     LeadList,
     SearchRun,
+    WhatsAppCampaign,
+    WhatsAppCampaignTemplate,
     WhatsAppInstance,
+    WhatsAppMessageTemplate,
+    WhatsAppSend,
 )
 from backend.schemas import (
     AiTemplateGenerateRequest,
@@ -55,6 +59,8 @@ from backend.schemas import (
     SmtpTestRequest,
     StatsRead,
     UserRead,
+    WhatsAppCampaignCreate,
+    WhatsAppCampaignRead,
     WhatsAppInstanceCreate,
     WhatsAppInstanceRead,
     WhatsAppInstanceStatusRead,
@@ -67,9 +73,9 @@ from backend.services.email_campaigns import (
     mark_clicked,
     mark_opened,
     render_email,
-    resume_running_campaigns,
-    start_campaign_scheduler,
-    submit_campaign_job,
+    resume_running_campaigns as resume_running_email_campaigns,
+    start_campaign_scheduler as start_email_campaign_scheduler,
+    submit_campaign_job as submit_email_campaign_job,
 )
 from backend.services.email_delivery import get_or_create_smtp_config, send_email, send_test_email, update_smtp_config
 from backend.services.email_validation import validate_email_address
@@ -82,6 +88,11 @@ from backend.services.jobs import (
     submit_search_job,
 )
 from backend.services.whatsapp_validation import is_whatsapp_validation_configured
+from backend.services.whatsapp_campaigns import (
+    resume_running_campaigns as resume_running_whatsapp_campaigns,
+    start_campaign_scheduler as start_whatsapp_campaign_scheduler,
+    submit_campaign_job as submit_whatsapp_campaign_job,
+)
 from backend.services.whatsapp_providers.evolution import EvolutionApiError, EvolutionProvider
 from backend.scrapers.maps_scraper import MapLead
 
@@ -102,8 +113,10 @@ app.add_middleware(
 def on_startup() -> None:
     init_db()
     resume_unfinished_search_runs()
-    resume_running_campaigns()
-    start_campaign_scheduler()
+    resume_running_email_campaigns()
+    start_email_campaign_scheduler()
+    resume_running_whatsapp_campaigns()
+    start_whatsapp_campaign_scheduler()
 
 
 def require_user(request: Request) -> str:
@@ -843,6 +856,122 @@ def delete_whatsapp_instance(
     return {"status": "ok"}
 
 
+@app.get("/api/whatsapp/campaigns", response_model=list[WhatsAppCampaignRead])
+def list_whatsapp_campaigns(
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> list[WhatsAppCampaign]:
+    _ = username
+    stmt = (
+        select(WhatsAppCampaign)
+        .options(selectinload(WhatsAppCampaign.lead_list), selectinload(WhatsAppCampaign.instance))
+        .order_by(desc(WhatsAppCampaign.created_at))
+    )
+    return list(db.scalars(stmt).all())
+
+
+@app.post("/api/whatsapp/campaigns", response_model=WhatsAppCampaignRead)
+def create_whatsapp_campaign(
+    payload: WhatsAppCampaignCreate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppCampaign:
+    _ = username
+    if payload.min_delay_seconds > payload.max_delay_seconds:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Delay mínimo maior que o máximo")
+    if not db.get(LeadList, payload.list_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lista não encontrada")
+    if not db.get(WhatsAppInstance, payload.instance_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instância de WhatsApp não encontrada")
+
+    template_ids = [item.template_id for item in payload.templates]
+    templates_found = db.scalar(
+        select(func.count(WhatsAppMessageTemplate.id)).where(WhatsAppMessageTemplate.id.in_(template_ids))
+    ) or 0
+    if templates_found != len(set(template_ids)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Um ou mais templates não foram encontrados")
+
+    data = payload.model_dump(exclude={"templates"})
+    campaign = WhatsAppCampaign(**data, status="draft", message="Campanha criada.")
+    db.add(campaign)
+    db.flush()
+
+    for item in payload.templates:
+        db.add(WhatsAppCampaignTemplate(campaign_id=campaign.id, template_id=item.template_id, weight=item.weight))
+
+    db.commit()
+    db.refresh(campaign)
+    return campaign
+
+
+@app.post("/api/whatsapp/campaigns/{campaign_id}/start", response_model=WhatsAppCampaignRead)
+def start_whatsapp_campaign(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppCampaign:
+    _ = username
+    campaign = db.get(WhatsAppCampaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campanha não encontrada")
+    if campaign.status not in ("draft", "paused"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta campanha não pode ser iniciada")
+
+    instance = db.get(WhatsAppInstance, campaign.instance_id)
+    if not instance:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instância de WhatsApp não encontrada")
+    if instance.status != "connected":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Conecte a instância antes de iniciar a campanha")
+
+    campaign.status = "running"
+    campaign.message = "Campanha iniciada."
+    campaign.error = None
+    campaign.finished_at = None
+    db.commit()
+    submit_whatsapp_campaign_job(campaign.id)
+    db.refresh(campaign)
+    return campaign
+
+
+@app.post("/api/whatsapp/campaigns/{campaign_id}/pause", response_model=WhatsAppCampaignRead)
+def pause_whatsapp_campaign(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppCampaign:
+    _ = username
+    campaign = db.get(WhatsAppCampaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campanha não encontrada")
+    if campaign.status != "running":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta campanha não está rodando")
+
+    campaign.status = "paused"
+    campaign.message = "Campanha pausada."
+    db.commit()
+    db.refresh(campaign)
+    return campaign
+
+
+@app.delete("/api/whatsapp/campaigns/{campaign_id}")
+def delete_whatsapp_campaign(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> dict[str, str]:
+    _ = username
+    campaign = db.get(WhatsAppCampaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campanha não encontrada")
+    if campaign.status == "running":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pause a campanha antes de excluir")
+
+    db.execute(delete(WhatsAppSend).where(WhatsAppSend.campaign_id == campaign.id))
+    db.delete(campaign)
+    db.commit()
+    return {"status": "ok"}
+
+
 @app.get("/api/email/smtp", response_model=SmtpConfigRead)
 def read_smtp_config(
     db: Session = Depends(get_db),
@@ -1181,7 +1310,7 @@ def start_email_campaign(
     campaign.error = None
     campaign.finished_at = None
     db.commit()
-    submit_campaign_job(campaign.id)
+    submit_email_campaign_job(campaign.id)
     db.refresh(campaign)
     return campaign
 
