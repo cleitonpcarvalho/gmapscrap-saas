@@ -247,9 +247,14 @@ type WhatsAppMessageTemplate = {
   created_at: string;
 };
 
+type WhatsAppTemplateGenerateResponse = {
+  content: string;
+};
+
 type WhatsAppCampaign = {
   id: number;
   name: string;
+  objective: string;
   list_id: number;
   list_name: string;
   instance_id: number;
@@ -434,6 +439,7 @@ const defaultWhatsappInstanceForm = {
 
 const defaultWhatsappCampaignForm = {
   name: "",
+  objective: "",
   list_id: "",
   instance_id: "",
   template_id: "",
@@ -1085,6 +1091,7 @@ export default function Home() {
   const [whatsappInstanceForm, setWhatsappInstanceForm] = useState(defaultWhatsappInstanceForm);
   const [whatsappInstanceFormErrors, setWhatsappInstanceFormErrors] = useState<WhatsAppInstanceFormErrors>({});
   const [whatsappTemplateForm, setWhatsappTemplateForm] = useState(defaultWhatsappTemplateForm);
+  const [whatsappTemplateObjective, setWhatsappTemplateObjective] = useState("");
   const [whatsappTemplateFormErrors, setWhatsappTemplateFormErrors] = useState<WhatsAppTemplateFormErrors>({});
   const [editingWhatsappTemplateId, setEditingWhatsappTemplateId] = useState<number | null>(null);
   const [whatsappTemplateDeleteDialog, setWhatsappTemplateDeleteDialog] = useState<WhatsAppMessageTemplate | null>(null);
@@ -2222,6 +2229,35 @@ export default function Home() {
       await refreshWhatsappData();
     } catch (error) {
       setWhatsappError(error instanceof Error ? error.message : "Não foi possível excluir o template.");
+    } finally {
+      setWhatsappBusyAction("");
+    }
+  }
+
+  async function handleGenerateWhatsappTemplateWithAi() {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    const objective = whatsappTemplateObjective.trim();
+
+    if (!objective) {
+      setWhatsappError("Descreva o objetivo antes de gerar o template.");
+      return;
+    }
+
+    setWhatsappBusyAction("generate-template-ai");
+    try {
+      const generated = await apiFetch<WhatsAppTemplateGenerateResponse>("/api/whatsapp/templates/generate", {
+        method: "POST",
+        body: JSON.stringify({ objective })
+      });
+      setWhatsappTemplateForm((current) => ({
+        ...current,
+        content: generated.content
+      }));
+      setWhatsappTemplateFormErrors((current) => ({ ...current, content: "" }));
+      setWhatsappMessage("Sugestão gerada. Revise o texto antes de salvar.");
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível gerar o template com IA.");
     } finally {
       setWhatsappBusyAction("");
     }
@@ -3485,6 +3521,24 @@ export default function Home() {
                     {whatsappTemplateFormErrors.name ? <small className="field-error">{whatsappTemplateFormErrors.name}</small> : null}
                   </label>
                   <label>
+                    Objetivo
+                    <textarea
+                      rows={3}
+                      value={whatsappTemplateObjective}
+                      onChange={(event) => setWhatsappTemplateObjective(event.target.value)}
+                      placeholder="Ex: vender criação de site grátis, paga só se gostar"
+                    />
+                  </label>
+                  <button
+                    className="secondary-button compact-button"
+                    disabled={whatsappBusyAction === "generate-template-ai"}
+                    onClick={handleGenerateWhatsappTemplateWithAi}
+                    type="button"
+                  >
+                    {whatsappBusyAction === "generate-template-ai" ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+                    Gerar com IA
+                  </button>
+                  <label>
                     Conteúdo
                     <textarea
                       rows={8}
@@ -3606,6 +3660,15 @@ export default function Home() {
                       }}
                     />
                     {whatsappCampaignFormErrors.name ? <small className="field-error">{whatsappCampaignFormErrors.name}</small> : null}
+                  </label>
+                  <label className="wide-field">
+                    Objetivo da campanha
+                    <textarea
+                      rows={3}
+                      value={whatsappCampaignForm.objective}
+                      onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, objective: event.target.value })}
+                      placeholder="Ex: vender criação de site grátis, paga só se gostar"
+                    />
                   </label>
                   <label>
                     Lista de leads
@@ -3802,6 +3865,7 @@ export default function Home() {
                           <tr key={campaign.id}>
                             <td>
                               <strong>{campaign.name}</strong>
+                              {campaign.objective ? <span>{campaign.objective}</span> : null}
                               <span>{campaign.message || campaign.error}</span>
                             </td>
                             <td>{campaign.instance_name}</td>

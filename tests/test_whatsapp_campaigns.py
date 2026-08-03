@@ -23,6 +23,7 @@ from backend.schemas import (
     WhatsAppCampaignCreate,
     WhatsAppMessageTemplateCreate,
     WhatsAppMessageTemplateUpdate,
+    WhatsAppTemplateGenerateRequest,
 )
 from backend.services import whatsapp_campaigns
 
@@ -54,6 +55,10 @@ def db_session(monkeypatch: pytest.MonkeyPatch) -> Generator[Session, None, None
             evolution_api_key="test-api-key",
             whatsapp_validation_timeout_seconds=5,
         ),
+    )
+    monkeypatch.setattr(
+        "backend.services.ai_templates.get_settings",
+        lambda: SimpleNamespace(openai_api_key="test-openai-key", openai_model="gpt-test"),
     )
 
     db = testing_session_local()
@@ -115,6 +120,7 @@ def test_whatsapp_campaign_endpoint_lifecycle(
     campaign = main.create_whatsapp_campaign(
         WhatsAppCampaignCreate(
             name="Campanha WhatsApp",
+            objective="Vender criação de site grátis, paga só se gostar.",
             list_id=ids["list_id"],
             instance_id=ids["instance_id"],
             templates=[{"template_id": ids["template_id"], "weight": 1}],
@@ -126,6 +132,7 @@ def test_whatsapp_campaign_endpoint_lifecycle(
     )
 
     assert campaign.status == "draft"
+    assert campaign.objective == "Vender criação de site grátis, paga só se gostar."
     assert campaign.template_ids == [ids["template_id"]]
     assert [item.id for item in main.list_whatsapp_campaigns(db=db_session, username="test-user")] == [campaign.id]
 
@@ -164,6 +171,35 @@ def test_whatsapp_template_crud_endpoints(db_session: Session) -> None:
     deleted = main.delete_whatsapp_template(created.id, db=db_session, username="test-user")
     assert deleted == {"status": "ok"}
     assert main.list_whatsapp_templates(db=db_session, username="test-user") == []
+
+
+def test_whatsapp_template_generate_endpoint_uses_openai(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeEvolutionResponse:
+        captured["payload"] = kwargs["json"]
+        return FakeEvolutionResponse(
+            200,
+            {"output_text": '{"content":"Oi {nome_empresa}, vi que vocês atuam em {niche}. Posso te mostrar uma ideia simples para melhorar seu site?"}'},
+        )
+
+    monkeypatch.setattr("backend.services.ai_templates.requests.post", fake_openai_post)
+
+    response = main.generate_ai_whatsapp_template(
+        WhatsAppTemplateGenerateRequest(objective="vender criação de site grátis, paga só se gostar"),
+        username="test-user",
+    )
+
+    assert response.content == (
+        "Oi {nome_empresa}, vi que vocês atuam em {niche}. "
+        "Posso te mostrar uma ideia simples para melhorar seu site?"
+    )
+    assert captured["payload"]["model"] == "gpt-test"
+    assert captured["payload"]["text"]["format"]["name"] == "whatsapp_template_generation"
+    assert "sem fechar detalhes" in captured["payload"]["input"][1]["content"]
 
 
 def test_whatsapp_campaign_runner_sends_pending_messages(

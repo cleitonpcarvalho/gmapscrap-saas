@@ -281,6 +281,7 @@ class WhatsAppCampaign(Base):
     list_id: Mapped[int] = mapped_column(ForeignKey("lead_lists.id", ondelete="RESTRICT"), nullable=False)
     instance_id: Mapped[int] = mapped_column(ForeignKey("whatsapp_instances.id", ondelete="RESTRICT"), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
+    objective: Mapped[str] = mapped_column(Text, default="", nullable=False)
     message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     min_delay_seconds: Mapped[int] = mapped_column(Integer, default=120, nullable=False)

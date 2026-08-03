@@ -79,6 +79,8 @@ from backend.schemas import (
     WhatsAppMessageTemplateRead,
     WhatsAppMessageTemplateUpdate,
     WhatsAppQrCodeRead,
+    WhatsAppTemplateGenerateRequest,
+    WhatsAppTemplateGenerateResponse,
 )
 from backend.scrapers.email_scraper import normalize_site_url
 from backend.services.crm import CRM_STAGES, get_or_create_crm_lead, update_crm_stage
@@ -94,7 +96,7 @@ from backend.services.email_campaigns import (
 )
 from backend.services.email_delivery import get_or_create_smtp_config, send_email, send_test_email, update_smtp_config
 from backend.services.email_validation import validate_email_address
-from backend.services.ai_templates import generate_email_templates
+from backend.services.ai_templates import generate_email_templates, generate_whatsapp_template_content
 from backend.services.jobs import (
     create_search_run,
     resume_unfinished_search_runs,
@@ -1120,6 +1122,19 @@ def create_whatsapp_template(
     return template
 
 
+@app.post("/api/whatsapp/templates/generate", response_model=WhatsAppTemplateGenerateResponse)
+def generate_ai_whatsapp_template(
+    payload: WhatsAppTemplateGenerateRequest,
+    username: str = Depends(require_user),
+) -> WhatsAppTemplateGenerateResponse:
+    _ = username
+    try:
+        content = generate_whatsapp_template_content(payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
+    return WhatsAppTemplateGenerateResponse(content=content)
+
+
 @app.patch("/api/whatsapp/templates/{template_id}", response_model=WhatsAppMessageTemplateRead)
 def update_whatsapp_template(
     template_id: int,
@@ -1200,6 +1215,7 @@ def create_whatsapp_campaign(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Um ou mais templates não foram encontrados")
 
     data = payload.model_dump(exclude={"templates"})
+    data["objective"] = (data.get("objective") or "").strip()
     campaign = WhatsAppCampaign(**data, status="draft", message="Campanha criada.")
     db.add(campaign)
     db.flush()

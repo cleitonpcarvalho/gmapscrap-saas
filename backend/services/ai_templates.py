@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import get_settings
 from backend.models import EmailTemplate
-from backend.schemas import AiTemplateGenerateRequest
+from backend.schemas import AiTemplateGenerateRequest, WhatsAppTemplateGenerateRequest
 from backend.services.template_seeds import DEFAULT_LOGO_URL
 
 
@@ -17,6 +17,7 @@ OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 GENERIC_CONTEXT_TERMS = {"all", "todos", "todas", "any", "all niches", "all locations"}
 EM_DASH_PATTERN = re.compile(r"\s*[\u2014\u2015]\s*")
 SPACED_EN_DASH_PATTERN = re.compile(r"\s+\u2013\s+")
+WHATSAPP_VARIABLES = ["nome_empresa", "lead_name", "website", "phone", "niche", "location"]
 
 
 def _template_html(paragraphs: list[str], cta_paragraph: str) -> str:
@@ -143,6 +144,104 @@ def _extract_output_text(response_payload: dict) -> str:
             if content.get("type") in {"output_text", "text"} and content.get("text"):
                 chunks.append(content["text"])
     return "\n".join(chunks)
+
+
+def _whatsapp_json_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["content"],
+        "properties": {
+            "content": {"type": "string"},
+        },
+    }
+
+
+def _whatsapp_prompt(payload: WhatsAppTemplateGenerateRequest) -> str:
+    return f"""
+Gere uma mensagem única de abordagem inicial para WhatsApp.
+
+Objetivo da campanha:
+{payload.objective}
+
+Regras:
+- Responda em português do Brasil.
+- Escreva uma mensagem curta, natural e genuína para WhatsApp.
+- Deve parecer uma abordagem pesquisada e humana, não um disparo em massa.
+- Use no máximo 4 frases curtas.
+- Use variáveis quando fizer sentido: {{nome_empresa}}, {{lead_name}}, {{website}}, {{phone}}, {{niche}}, {{location}}.
+- Use chaves simples, por exemplo {{nome_empresa}}, nunca {{{{nome_empresa}}}}.
+- Não invente nome, cidade, site, nicho ou telefone fora das variáveis.
+- Pode mencionar a oferta/objetivo, mas não trate de valores, preço, pagamento ou negociação na primeira mensagem.
+- Se o objetivo citar preço, pagamento ou condição comercial, transforme isso em interesse/benefício sem fechar detalhes.
+- Não prometa resultado garantido.
+- Não mencione scraping, automação de disparo, base de leads ou Google Maps.
+- Não use markdown, título, assunto, assinatura longa, listas ou JSON no conteúdo.
+- Retorne somente JSON compatível com o schema.
+"""
+
+
+def _normalize_whatsapp_template_content(content: str) -> str:
+    next_content = _avoid_ai_dashes(content).strip().strip('"')
+    for variable in WHATSAPP_VARIABLES:
+        next_content = next_content.replace(f"{{{{{variable}}}}}", f"{{{variable}}}")
+    return next_content
+
+
+def generate_whatsapp_template_content(payload: WhatsAppTemplateGenerateRequest) -> str:
+    settings = get_settings()
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY não está configurada no backend.")
+
+    request_payload = {
+        "model": settings.openai_model,
+        "input": [
+            {
+                "role": "system",
+                "content": (
+                    "Você escreve mensagens B2B curtas para WhatsApp em JSON estruturado. "
+                    "A mensagem deve soar humana, pesquisada e respeitosa."
+                ),
+            },
+            {"role": "user", "content": _whatsapp_prompt(payload)},
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "whatsapp_template_generation",
+                "strict": True,
+                "schema": _whatsapp_json_schema(),
+            }
+        },
+        "max_output_tokens": 350,
+    }
+
+    response = requests.post(
+        OPENAI_RESPONSES_URL,
+        headers={
+            "Authorization": f"Bearer {settings.openai_api_key}",
+            "Content-Type": "application/json",
+        },
+        json=request_payload,
+        timeout=60,
+    )
+    if response.status_code >= 400:
+        detail = response.text[:600]
+        raise RuntimeError(f"OpenAI retornou erro {response.status_code}: {detail}")
+
+    output_text = _extract_output_text(response.json())
+    if not output_text:
+        raise RuntimeError("A OpenAI não retornou conteúdo.")
+
+    try:
+        generated = json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("A OpenAI retornou um JSON inválido.") from exc
+
+    content = _normalize_whatsapp_template_content(str(generated.get("content") or ""))
+    if not content:
+        raise RuntimeError("A OpenAI retornou um template vazio.")
+    return content
 
 
 def _json_schema() -> dict:

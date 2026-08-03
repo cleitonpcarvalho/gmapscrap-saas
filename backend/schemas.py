@@ -249,6 +249,14 @@ class WhatsAppMessageTemplateRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WhatsAppTemplateGenerateRequest(BaseModel):
+    objective: str = Field(min_length=3, max_length=1000)
+
+
+class WhatsAppTemplateGenerateResponse(BaseModel):
+    content: str
+
+
 CrmStage = Literal["new", "responded", "qualified", "not_interested", "converted"]
 
 
@@ -502,6 +510,7 @@ class WhatsAppInstanceStatusRead(BaseModel):
 
 class WhatsAppCampaignCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
+    objective: str | None = Field(default="", max_length=2000)
     list_id: int
     instance_id: int
     templates: list[CampaignTemplateInput] = Field(min_length=1)
@@ -544,6 +553,7 @@ class WhatsAppCampaignCreate(BaseModel):
 class WhatsAppCampaignRead(BaseModel):
     id: int
     name: str
+    objective: str
     list_id: int
     list_name: str
     instance_id: int

@@ -49,6 +49,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_whatsapp_crm_tables()
     _ensure_whatsapp_ai_settings_columns()
+    _ensure_whatsapp_campaign_columns()
     _ensure_whatsapp_conversation_columns()
     _ensure_search_run_columns()
     _ensure_lead_columns()
@@ -121,6 +122,30 @@ def _ensure_whatsapp_ai_settings_columns() -> None:
             "ALTER TABLE whatsapp_ai_settings "
             "ADD COLUMN services_description TEXT NOT NULL DEFAULT ''"
         ),
+    }
+    missing_migrations = {
+        column_name: statement
+        for column_name, statement in migrations.items()
+        if column_name not in existing_columns
+    }
+    if not missing_migrations:
+        return
+
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("SET lock_timeout = '10s'"))
+        for statement in missing_migrations.values():
+            connection.execute(text(statement))
+
+
+def _ensure_whatsapp_campaign_columns() -> None:
+    inspector = inspect(engine)
+    if "whatsapp_campaigns" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("whatsapp_campaigns")}
+    migrations = {
+        "objective": "ALTER TABLE whatsapp_campaigns ADD COLUMN objective TEXT NOT NULL DEFAULT ''",
     }
     missing_migrations = {
         column_name: statement
