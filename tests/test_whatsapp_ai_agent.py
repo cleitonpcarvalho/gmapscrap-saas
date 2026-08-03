@@ -204,6 +204,9 @@ def test_whatsapp_ai_generates_and_sends_reply(
     assert captured["openai_payload"]["tools"][0]["name"] == "update_lead_stage"
     assert "Automatizamos atendimento para clínicas e operações locais." in system_content
     assert "detalhes de investimento são tratados na reunião" in system_content
+    assert "Proponha ativamente uma reunião" in system_content
+    assert "stage converted" in system_content
+    assert "stage not_interested" in system_content
     assert "Site para clínica odontológica com agendamento" in system_content
     assert "no máximo 1 item de portfólio relevante" in system_content
     assert "Nunca mencione portfólio no disparo inicial" in system_content
@@ -279,6 +282,118 @@ def test_whatsapp_ai_function_call_updates_crm_stage_and_history(
     assert history.from_stage == "new"
     assert history.to_stage == "qualified"
     assert history.changed_by == "ai"
+
+
+def test_whatsapp_ai_marks_converted_when_lead_accepts_meeting(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = seed_lead_and_instance(db_session)
+    enable_ai(db_session)
+    captured: dict[str, Any] = {}
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
+        captured["openai_payload"] = kwargs["json"]
+        return FakeOpenAIResponse(
+            {
+                "output_text": "Perfeito, vou pedir para alguém entrar em contato e combinar o melhor horário com você.",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "update_lead_stage",
+                        "arguments": json.dumps(
+                            {
+                                "stage": "converted",
+                                "reason": "Lead aceitou marcar uma reunião.",
+                            }
+                        ),
+                    }
+                ],
+            }
+        )
+
+    def fake_send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
+        captured["send"] = {"instance_id": instance_id, "phone": phone, "text": text}
+        return {"key": {"id": "OUTBOUND_CONVERTED"}}
+
+    monkeypatch.setattr(whatsapp_ai_agent.requests, "post", fake_openai_post)
+    monkeypatch.setattr(whatsapp_ai_agent.EvolutionProvider, "send_text_message", fake_send_text_message)
+
+    main.receive_evolution_webhook(
+        evolution_text_payload(text="Sim, pode ser. Vamos marcar uma reunião."),
+        request=webhook_request(),
+        db=db_session,
+    )
+
+    crm_lead = db_session.scalars(select(CrmLead)).one()
+    history = db_session.scalars(select(CrmStageHistory)).one()
+    outbound = db_session.scalars(select(WhatsAppMessage).where(WhatsAppMessage.direction == "outbound")).one()
+
+    assert crm_lead.lead_id == ids["lead_id"]
+    assert crm_lead.stage == "converted"
+    assert crm_lead.qualification_notes == "Lead aceitou marcar uma reunião."
+    assert history.from_stage == "new"
+    assert history.to_stage == "converted"
+    assert history.changed_by == "ai"
+    assert outbound.content == "Perfeito, vou pedir para alguém entrar em contato e combinar o melhor horário com você."
+    assert captured["send"]["text"] == outbound.content
+    assert "Não tente escolher data ou horário sozinho" in captured["openai_payload"]["input"][0]["content"]
+
+
+def test_whatsapp_ai_marks_not_interested_without_insisting(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = seed_lead_and_instance(db_session)
+    enable_ai(db_session)
+    captured: dict[str, Any] = {}
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
+        captured["openai_payload"] = kwargs["json"]
+        return FakeOpenAIResponse(
+            {
+                "output_text": "Tudo bem, obrigado por responder. Fico à disposição se fizer sentido em outro momento.",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "update_lead_stage",
+                        "arguments": json.dumps(
+                            {
+                                "stage": "not_interested",
+                                "reason": "Lead recusou a conversa comercial.",
+                            }
+                        ),
+                    }
+                ],
+            }
+        )
+
+    def fake_send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
+        captured["send"] = {"instance_id": instance_id, "phone": phone, "text": text}
+        return {"key": {"id": "OUTBOUND_NOT_INTERESTED"}}
+
+    monkeypatch.setattr(whatsapp_ai_agent.requests, "post", fake_openai_post)
+    monkeypatch.setattr(whatsapp_ai_agent.EvolutionProvider, "send_text_message", fake_send_text_message)
+
+    main.receive_evolution_webhook(
+        evolution_text_payload(text="Não tenho interesse, obrigado."),
+        request=webhook_request(),
+        db=db_session,
+    )
+
+    crm_lead = db_session.scalars(select(CrmLead)).one()
+    history = db_session.scalars(select(CrmStageHistory)).one()
+    outbound = db_session.scalars(select(WhatsAppMessage).where(WhatsAppMessage.direction == "outbound")).one()
+
+    assert crm_lead.lead_id == ids["lead_id"]
+    assert crm_lead.stage == "not_interested"
+    assert crm_lead.qualification_notes == "Lead recusou a conversa comercial."
+    assert history.from_stage == "new"
+    assert history.to_stage == "not_interested"
+    assert history.changed_by == "ai"
+    assert outbound.content == "Tudo bem, obrigado por responder. Fico à disposição se fizer sentido em outro momento."
+    assert captured["send"]["text"] == outbound.content
+    assert "sem insistir" in captured["openai_payload"]["input"][0]["content"]
 
 
 def test_whatsapp_ai_requests_final_text_when_openai_returns_only_function_call(

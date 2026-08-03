@@ -36,6 +36,19 @@ SYSTEM_GUARDRAILS = (
     "Responda sempre em português do Brasil, de forma curta e natural para WhatsApp. "
     "Use no máximo 3 frases."
 )
+SALES_CONVERSATION_STRATEGY = (
+    "Condução comercial:\n"
+    "- Ao longo da conversa, entenda a dor, necessidade ou objetivo do lead antes de sugerir o próximo passo.\n"
+    "- Mostre de forma objetiva como a expertise descrita em Sobre a empresa/serviços pode resolver essa dor.\n"
+    "- Proponha ativamente uma reunião quando houver contexto suficiente; não espere passivamente o lead pedir.\n"
+    "- Nunca trate de valores, preços, descontos, parcelas, formas de pagamento ou negociação comercial no WhatsApp. "
+    "Quando isso aparecer, diga que os detalhes de investimento são tratados na reunião.\n"
+    "- Se o lead demonstrar interesse real em marcar reunião, por exemplo dizendo \"sim\", \"pode ser\", "
+    "\"vamos marcar\" ou equivalente, chame update_lead_stage com stage converted e responda confirmando que alguém "
+    "vai entrar em contato para agendar. Não tente escolher data ou horário sozinho.\n"
+    "- Se o lead demonstrar desinteresse claro, chame update_lead_stage com stage not_interested e responda de forma "
+    "educada, breve e sem insistir."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +217,8 @@ def _openai_payload(
             {
                 "role": "system",
                 "content": (
-                    f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n{services_context}\n\n{portfolio_context}\n\n{tool_instruction}\n\n"
+                    f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n\n{SALES_CONVERSATION_STRATEGY}\n\n"
+                    f"{services_context}\n\n{portfolio_context}\n\n{tool_instruction}\n\n"
                     f"Contexto do lead:\n{lead_context}"
                 ),
             },
