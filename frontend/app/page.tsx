@@ -75,7 +75,7 @@ type Lead = {
   location: string;
   name: string;
   address: string;
-  phone: string;
+  phone: string | null;
   website: string | null;
   email: string;
   validate_whatsapp: boolean;
@@ -405,27 +405,48 @@ function percent(part: number, total: number) {
   return `${Math.round((part / total) * 100)}%`;
 }
 
+function safeText(value: string | null | undefined) {
+  return value || "";
+}
+
+function displayWebsite(value: string | null | undefined) {
+  return safeText(value).trim().replace(/^https?:\/\//, "");
+}
+
 function leadPayload(lead: Lead) {
   return {
     niche: lead.niche.trim(),
     location: lead.location.trim(),
     name: lead.name.trim(),
     address: lead.address.trim(),
-    phone: lead.phone.trim(),
-    website: (lead.website || "").trim(),
+    phone: safeText(lead.phone).trim(),
+    website: safeText(lead.website).trim(),
     email: lead.email.trim()
   };
 }
 
 function PhoneCell({ lead }: { lead: Lead }) {
+  const phone = safeText(lead.phone).trim();
   const url = lead.validate_whatsapp ? lead.whatsapp_url : "";
 
-  if (!lead.phone) return <>-</>;
-  if (!url) return <>{lead.phone}</>;
+  if (!phone) return <>-</>;
+  if (!url) return <>{phone}</>;
 
   return (
     <a className="phone-link" href={url} target="_blank" rel="noreferrer" title="Abrir conversa no WhatsApp">
-      {lead.phone}
+      {phone}
+    </a>
+  );
+}
+
+function WebsiteCell({ website }: { website: string | null | undefined }) {
+  const url = safeText(website).trim();
+  if (!url) return <>-</>;
+
+  return (
+    <a href={url} target="_blank" rel="noreferrer">
+      <Globe2 size={15} />
+      {displayWebsite(url)}
     </a>
   );
 }
@@ -2229,14 +2250,7 @@ export default function Home() {
                         <td>{lead.niche}</td>
                         <td>{lead.location}</td>
                         <td>
-                          {lead.website ? (
-                            <a href={lead.website} target="_blank" rel="noreferrer">
-                              <Globe2 size={15} />
-                              {lead.website.replace(/^https?:\/\//, "")}
-                            </a>
-                          ) : (
-                            "-"
-                          )}
+                          <WebsiteCell website={lead.website} />
                         </td>
                         <td>{lead.email}</td>
                         <td>
@@ -2395,14 +2409,7 @@ export default function Home() {
                         <PhoneCell lead={lead} />
                       </td>
                       <td>
-                        {lead.website ? (
-                          <a href={lead.website} target="_blank" rel="noreferrer">
-                            <Globe2 size={15} />
-                            {lead.website.replace(/^https?:\/\//, "")}
-                          </a>
-                        ) : (
-                          "-"
-                        )}
+                        <WebsiteCell website={lead.website} />
                       </td>
                       <td>{lead.email || "-"}</td>
                     </tr>
@@ -3766,7 +3773,7 @@ export default function Home() {
               <label>
                 Telefone
                 <input
-                  value={editingLead.phone}
+                  value={safeText(editingLead.phone)}
                   onChange={(event) => setEditingLead({ ...editingLead, phone: event.target.value })}
                 />
               </label>
