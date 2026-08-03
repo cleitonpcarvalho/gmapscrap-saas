@@ -72,8 +72,8 @@ class EvolutionProvider(WhatsAppProvider):
             "POST",
             f"/message/sendText/{instance_id}",
             json={
-                "number": phone,
-                "textMessage": {"text": text},
+                "number": _digits_only(phone),
+                "text": text,
             },
         )
 

@@ -222,7 +222,7 @@ def test_whatsapp_campaign_runner_sends_pending_messages(
             "url": "https://evolution.example.test/message/sendText/sales-main",
             "json": {
                 "number": "5511995779865",
-                "textMessage": {"text": "Oi Empresa Alfa, tudo bem?"},
+                "text": "Oi Empresa Alfa, tudo bem?",
             },
         }
     ]

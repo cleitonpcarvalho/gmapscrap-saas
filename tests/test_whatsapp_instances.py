@@ -206,6 +206,6 @@ def test_evolution_provider_sends_text_message(
         "url": "https://evolution.example.test/message/sendText/sales-main",
         "json": {
             "number": "5511999999999",
-            "textMessage": {"text": "Hello"},
+            "text": "Hello",
         },
     }
