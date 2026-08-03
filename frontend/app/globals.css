@@ -290,6 +290,18 @@ input:disabled {
   font-weight: 700;
 }
 
+.field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+
+.block-error {
+  margin-top: 2px;
+}
+
 .notice {
   margin-bottom: 16px;
   padding: 12px 14px;
@@ -450,6 +462,14 @@ input:disabled {
   gap: 16px;
 }
 
+.whatsapp-grid {
+  grid-template-columns: minmax(280px, 0.42fr) minmax(520px, 0.58fr);
+}
+
+.whatsapp-campaign-grid {
+  grid-template-columns: minmax(360px, 0.46fr) minmax(540px, 0.54fr);
+}
+
 .email-panel {
   display: grid;
   gap: 18px;
@@ -470,6 +490,10 @@ input:disabled {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+
+.single-column-grid {
+  grid-template-columns: 1fr;
 }
 
 .password-row {
@@ -536,7 +560,8 @@ input:disabled {
 }
 
 .inline-controls,
-.template-picker {
+.template-picker,
+.variable-hints {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -946,6 +971,21 @@ td span {
   background: #fee4e2;
 }
 
+.status-pill.connected {
+  color: var(--success);
+  background: #dcf6e8;
+}
+
+.status-pill.connecting {
+  color: var(--warning);
+  background: #fff2d8;
+}
+
+.status-pill.disconnected {
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
 .empty-state,
 .empty-cell {
   color: var(--muted);
@@ -1187,6 +1227,52 @@ td a {
   border-radius: 8px;
   color: var(--danger);
   background: #fee4e2;
+}
+
+.start-confirm-icon {
+  color: var(--success);
+  background: #dcf6e8;
+}
+
+.whatsapp-qr-modal {
+  width: min(560px, 100%);
+}
+
+.qr-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.qr-frame {
+  min-height: 280px;
+  display: grid;
+  place-items: center;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.qr-frame img {
+  display: block;
+  width: min(300px, 100%);
+  height: auto;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.qr-code-text {
+  width: 100%;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 12px;
 }
 
 .confirm-copy {
