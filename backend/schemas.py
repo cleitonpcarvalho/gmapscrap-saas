@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -393,3 +393,43 @@ class EmailSendRead(BaseModel):
     clicked_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class WhatsAppInstanceCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+    phone_number: str | None = Field(default=None, max_length=80)
+
+
+class WhatsAppInstanceRead(BaseModel):
+    id: int
+    name: str
+    provider: str
+    status: str
+    evolution_instance_name: str | None
+    phone_number: str | None
+    connected_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WhatsAppQrCodeRead(BaseModel):
+    id: int
+    name: str
+    evolution_instance_name: str
+    base64: str = ""
+    url: str = ""
+    code: str = ""
+    pairing_code: str | None = None
+    provider_response: dict[str, Any]
+
+
+class WhatsAppInstanceStatusRead(BaseModel):
+    id: int
+    name: str
+    status: str
+    phone_number: str | None
+    connected_at: datetime | None
+    provider_state: str
+    provider_response: dict[str, Any]

@@ -22,6 +22,7 @@ from backend.models import (
     Lead,
     LeadList,
     SearchRun,
+    WhatsAppInstance,
 )
 from backend.schemas import (
     AiTemplateGenerateRequest,
@@ -54,6 +55,10 @@ from backend.schemas import (
     SmtpTestRequest,
     StatsRead,
     UserRead,
+    WhatsAppInstanceCreate,
+    WhatsAppInstanceRead,
+    WhatsAppInstanceStatusRead,
+    WhatsAppQrCodeRead,
 )
 from backend.scrapers.email_scraper import normalize_site_url
 from backend.services.content_preview import fetch_content_preview
@@ -77,6 +82,7 @@ from backend.services.jobs import (
     submit_search_job,
 )
 from backend.services.whatsapp_validation import is_whatsapp_validation_configured
+from backend.services.whatsapp_providers.evolution import EvolutionApiError, EvolutionProvider
 from backend.scrapers.maps_scraper import MapLead
 
 
@@ -114,6 +120,91 @@ def ensure_whatsapp_validation_available(validate_whatsapp: bool) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Validação de WhatsApp não configurada no servidor.",
         )
+
+
+def _raise_evolution_http_error(error: EvolutionApiError) -> None:
+    raise HTTPException(status_code=error.status_code, detail=error.detail) from None
+
+
+def _whatsapp_provider_id(instance: WhatsAppInstance) -> str:
+    provider_id = (instance.evolution_instance_name or instance.name or "").strip()
+    if not provider_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Instância local sem nome de instância Evolution.",
+        )
+    return provider_id
+
+
+def _extract_evolution_instance_name(data: dict, fallback: str) -> str:
+    instance = data.get("instance") if isinstance(data.get("instance"), dict) else {}
+    value = instance.get("instanceName") or instance.get("name") or data.get("instanceName") or data.get("name")
+    return str(value or fallback).strip()
+
+
+def _extract_qrcode(data: dict) -> tuple[str, str, str, str | None]:
+    qrcode = data.get("qrcode") if isinstance(data.get("qrcode"), dict) else {}
+    base64_value = data.get("base64") or qrcode.get("base64") or qrcode.get("base64Image") or ""
+    url = data.get("url") or qrcode.get("url") or qrcode.get("image") or ""
+    code = data.get("code") or qrcode.get("code") or ""
+    pairing_code = data.get("pairingCode") or qrcode.get("pairingCode")
+    return str(base64_value or ""), str(url or ""), str(code or ""), str(pairing_code) if pairing_code else None
+
+
+def _extract_provider_state(data: dict) -> str:
+    instance = data.get("instance") if isinstance(data.get("instance"), dict) else {}
+    state = instance.get("state") or instance.get("status") or data.get("state") or data.get("status") or ""
+    return str(state or "").strip().lower()
+
+
+def _status_from_provider_state(provider_state: str) -> str:
+    if provider_state in {"open", "connected", "online"}:
+        return "connected"
+    if provider_state in {"connecting", "qrcode", "qr", "pairing", "starting", "created"}:
+        return "connecting"
+    return "disconnected"
+
+
+def _find_provider_value(data, keys: set[str]) -> str:
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key in keys and value:
+                return str(value)
+            nested = _find_provider_value(value, keys)
+            if nested:
+                return nested
+    if isinstance(data, list):
+        for item in data:
+            nested = _find_provider_value(item, keys)
+            if nested:
+                return nested
+    return ""
+
+
+def _extract_phone_number(data: dict) -> str | None:
+    raw_value = _find_provider_value(
+        data,
+        {"phoneNumber", "phone_number", "phone", "number", "owner", "ownerJid", "wuid"},
+    )
+    if not raw_value:
+        return None
+    value = raw_value.split("@", 1)[0].split(":", 1)[0].strip()
+    return value or None
+
+
+def _update_whatsapp_instance_status(instance: WhatsAppInstance, provider_response: dict) -> str:
+    previous_status = instance.status
+    provider_state = _extract_provider_state(provider_response)
+    instance.status = _status_from_provider_state(provider_state)
+
+    phone_number = _extract_phone_number(provider_response)
+    if phone_number:
+        instance.phone_number = phone_number
+
+    if previous_status in {"connecting", "disconnected"} and instance.status == "connected":
+        instance.connected_at = utc_now()
+
+    return provider_state
 
 
 def _count_saved_leads_for_run(db: Session, run_id: int) -> int:
@@ -611,6 +702,145 @@ def bulk_delete_leads(
 
     db.commit()
     return BulkDeleteResponse(deleted=len(leads))
+
+
+@app.post("/api/whatsapp/instances", response_model=WhatsAppInstanceRead)
+def create_whatsapp_instance(
+    payload: WhatsAppInstanceCreate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppInstance:
+    _ = username
+    instance = WhatsAppInstance(
+        name=payload.name.strip(),
+        provider="evolution",
+        status="disconnected",
+        phone_number=payload.phone_number.strip() if payload.phone_number else None,
+    )
+    db.add(instance)
+
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe uma instância com esse nome") from None
+
+    provider = EvolutionProvider()
+    try:
+        provider_response = provider.create_instance(instance.name, phone_number=instance.phone_number)
+    except EvolutionApiError as exc:
+        db.rollback()
+        _raise_evolution_http_error(exc)
+
+    instance.evolution_instance_name = _extract_evolution_instance_name(provider_response, instance.name)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Instância Evolution já cadastrada") from None
+
+    db.refresh(instance)
+    return instance
+
+
+@app.get("/api/whatsapp/instances", response_model=list[WhatsAppInstanceRead])
+def list_whatsapp_instances(
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> list[WhatsAppInstance]:
+    _ = username
+    return list(db.scalars(select(WhatsAppInstance).order_by(desc(WhatsAppInstance.created_at))).all())
+
+
+@app.get("/api/whatsapp/instances/{instance_id}/qrcode", response_model=WhatsAppQrCodeRead)
+def get_whatsapp_instance_qrcode(
+    instance_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppQrCodeRead:
+    _ = username
+    instance = db.get(WhatsAppInstance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instância de WhatsApp não encontrada")
+
+    provider = EvolutionProvider()
+    try:
+        provider_response = provider.get_qr_code(_whatsapp_provider_id(instance))
+    except EvolutionApiError as exc:
+        _raise_evolution_http_error(exc)
+
+    if instance.status == "disconnected":
+        instance.status = "connecting"
+        db.commit()
+        db.refresh(instance)
+
+    base64_value, qr_url, code, pairing_code = _extract_qrcode(provider_response)
+    return WhatsAppQrCodeRead(
+        id=instance.id,
+        name=instance.name,
+        evolution_instance_name=_whatsapp_provider_id(instance),
+        base64=base64_value,
+        url=qr_url,
+        code=code,
+        pairing_code=pairing_code,
+        provider_response=provider_response,
+    )
+
+
+@app.get("/api/whatsapp/instances/{instance_id}/status", response_model=WhatsAppInstanceStatusRead)
+def get_whatsapp_instance_status(
+    instance_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppInstanceStatusRead:
+    _ = username
+    instance = db.get(WhatsAppInstance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instância de WhatsApp não encontrada")
+
+    provider = EvolutionProvider()
+    try:
+        provider_response = provider.get_connection_status(_whatsapp_provider_id(instance))
+    except EvolutionApiError as exc:
+        _raise_evolution_http_error(exc)
+
+    provider_state = _update_whatsapp_instance_status(instance, provider_response)
+    db.commit()
+    db.refresh(instance)
+    return WhatsAppInstanceStatusRead(
+        id=instance.id,
+        name=instance.name,
+        status=instance.status,
+        phone_number=instance.phone_number,
+        connected_at=instance.connected_at,
+        provider_state=provider_state,
+        provider_response=provider_response,
+    )
+
+
+@app.delete("/api/whatsapp/instances/{instance_id}")
+def delete_whatsapp_instance(
+    instance_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> dict[str, str]:
+    _ = username
+    instance = db.get(WhatsAppInstance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instância de WhatsApp não encontrada")
+
+    if instance.provider != "evolution":
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Provider ainda não suportado")
+
+    provider = EvolutionProvider()
+    try:
+        provider.delete_instance(_whatsapp_provider_id(instance))
+    except EvolutionApiError as exc:
+        _raise_evolution_http_error(exc)
+
+    db.delete(instance)
+    db.commit()
+    return {"status": "ok"}
 
 
 @app.get("/api/email/smtp", response_model=SmtpConfigRead)

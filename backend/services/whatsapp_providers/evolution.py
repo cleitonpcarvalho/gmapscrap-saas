@@ -6,6 +6,13 @@ from backend.config import get_settings
 from backend.services.whatsapp_providers.base import WhatsAppProvider
 
 
+class EvolutionApiError(RuntimeError):
+    def __init__(self, detail: str, status_code: int = 502):
+        super().__init__(detail)
+        self.detail = detail
+        self.status_code = status_code
+
+
 class EvolutionProvider(WhatsAppProvider):
     def __init__(self, base_url: str | None = None, api_key: str | None = None, timeout_seconds: float | None = None):
         settings = get_settings()
@@ -32,6 +39,9 @@ class EvolutionProvider(WhatsAppProvider):
     def get_connection_status(self, instance_id: str) -> dict[str, Any]:
         return self._request("GET", f"/instance/connectionState/{instance_id}")
 
+    def delete_instance(self, instance_id: str) -> dict[str, Any]:
+        return self._request("DELETE", f"/instance/delete/{instance_id}")
+
     def send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
         raise NotImplementedError("Envio de texto via Evolution ainda não implementado.")
 
@@ -40,23 +50,29 @@ class EvolutionProvider(WhatsAppProvider):
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         if not self.base_url or not self.api_key:
-            raise RuntimeError("Evolution API não configurada no backend.")
+            raise EvolutionApiError("Evolution API não configurada no backend.", status_code=422)
 
-        response = requests.request(
-            method,
-            f"{self.base_url}{path}",
-            headers=self._headers(kwargs.pop("headers", None)),
-            timeout=self.timeout_seconds,
-            **kwargs,
-        )
+        try:
+            response = requests.request(
+                method,
+                f"{self.base_url}{path}",
+                headers=self._headers(kwargs.pop("headers", None)),
+                timeout=self.timeout_seconds,
+                **kwargs,
+            )
+        except requests.RequestException as exc:
+            raise EvolutionApiError(f"Evolution API indisponível: {exc}", status_code=502) from exc
+
+        if response.status_code == 404:
+            raise EvolutionApiError("Instância Evolution não encontrada.", status_code=404)
         if response.status_code >= 400:
             detail = response.text[:600]
-            raise RuntimeError(f"Evolution API retornou erro {response.status_code}: {detail}")
+            raise EvolutionApiError(f"Evolution API retornou erro {response.status_code}: {detail}", status_code=502)
 
         try:
             data = response.json()
         except ValueError as exc:
-            raise RuntimeError("Evolution API retornou uma resposta inválida.") from exc
+            raise EvolutionApiError("Evolution API retornou uma resposta inválida.", status_code=502) from exc
 
         return data if isinstance(data, dict) else {"data": data}
 

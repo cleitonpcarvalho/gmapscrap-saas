@@ -1,5 +1,5 @@
 from backend.services.whatsapp_providers.base import WhatsAppProvider
-from backend.services.whatsapp_providers.evolution import EvolutionProvider
+from backend.services.whatsapp_providers.evolution import EvolutionApiError, EvolutionProvider
 from backend.services.whatsapp_providers.meta_cloud import MetaCloudProvider
 
-__all__ = ["EvolutionProvider", "MetaCloudProvider", "WhatsAppProvider"]
+__all__ = ["EvolutionApiError", "EvolutionProvider", "MetaCloudProvider", "WhatsAppProvider"]

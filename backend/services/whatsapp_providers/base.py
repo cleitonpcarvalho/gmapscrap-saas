@@ -16,6 +16,10 @@ class WhatsAppProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def delete_instance(self, instance_id: str) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
     def send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
         raise NotImplementedError
 

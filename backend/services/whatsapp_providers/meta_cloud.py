@@ -13,6 +13,9 @@ class MetaCloudProvider(WhatsAppProvider):
     def get_connection_status(self, instance_id: str) -> dict[str, Any]:
         raise NotImplementedError("Meta Cloud API ainda não implementada")
 
+    def delete_instance(self, instance_id: str) -> dict[str, Any]:
+        raise NotImplementedError("Meta Cloud API ainda não implementada")
+
     def send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
         raise NotImplementedError("Meta Cloud API ainda não implementada")
 
