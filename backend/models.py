@@ -441,6 +441,14 @@ class WhatsAppAiSettings(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class WhatsAppWebhookSettings(Base):
+    __tablename__ = "whatsapp_webhook_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    secret: Mapped[str] = mapped_column(String(255), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class CrmLead(Base):
     __tablename__ = "crm_leads"
     __table_args__ = (

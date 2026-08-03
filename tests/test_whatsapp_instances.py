@@ -62,6 +62,15 @@ def test_whatsapp_instance_lifecycle_endpoints(
             assert kwargs["json"]["number"] == "5511999999999"
             assert kwargs["timeout"] == 30
             return FakeEvolutionResponse(201, {"instance": {"instanceName": "sales-main"}})
+        if method == "POST" and url.endswith("/webhook/set/sales-main"):
+            webhook = kwargs["json"]["webhook"]
+            assert webhook["enabled"] is True
+            assert webhook["url"] == "http://localhost:8000/api/whatsapp/webhook/evolution"
+            assert webhook["byEvents"] is False
+            assert webhook["base64"] is False
+            assert webhook["events"] == ["MESSAGES_UPSERT"]
+            assert webhook["headers"]["x-evolution-webhook-secret"]
+            return FakeEvolutionResponse(200, {"webhook": webhook})
         if method == "GET" and url.endswith("/instance/connect/sales-main"):
             assert kwargs["timeout"] == 5
             return FakeEvolutionResponse(
@@ -115,8 +124,10 @@ def test_whatsapp_instance_lifecycle_endpoints(
     assert listed_after_delete == []
     assert calls == [
         ("POST", "https://evolution.example.test/instance/create"),
+        ("POST", "https://evolution.example.test/webhook/set/sales-main"),
         ("GET", "https://evolution.example.test/instance/connect/sales-main"),
         ("GET", "https://evolution.example.test/instance/connectionState/sales-main"),
+        ("POST", "https://evolution.example.test/webhook/set/sales-main"),
         ("DELETE", "https://evolution.example.test/instance/delete/sales-main"),
     ]
 
@@ -128,6 +139,8 @@ def test_whatsapp_status_returns_404_when_provider_instance_is_missing(
     def fake_request(method: str, url: str, **kwargs) -> FakeEvolutionResponse:
         if method == "POST" and url.endswith("/instance/create"):
             return FakeEvolutionResponse(201, {"instance": {"instanceName": "missing-instance"}})
+        if method == "POST" and url.endswith("/webhook/set/missing-instance"):
+            return FakeEvolutionResponse(200, {"status": "ok"})
         if method == "GET" and url.endswith("/instance/connectionState/missing-instance"):
             return FakeEvolutionResponse(404, {"message": "not found"}, "not found")
         return FakeEvolutionResponse(500, {}, "unexpected request")

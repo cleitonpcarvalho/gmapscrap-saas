@@ -19,6 +19,7 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
         "whatsapp_conversations",
         "whatsapp_messages",
         "whatsapp_ai_settings",
+        "whatsapp_webhook_settings",
         "crm_leads",
         "crm_stage_history",
     }.issubset(tables)

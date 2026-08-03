@@ -43,6 +43,27 @@ class EvolutionProvider(WhatsAppProvider):
     def get_connection_status(self, instance_id: str) -> dict[str, Any]:
         return self._request("GET", f"/instance/connectionState/{instance_id}")
 
+    def set_webhook(self, instance_id: str, *, url: str, secret: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/webhook/set/{instance_id}",
+            json={
+                "webhook": {
+                    "enabled": True,
+                    "url": url,
+                    "byEvents": False,
+                    "base64": False,
+                    "headers": {
+                        "x-evolution-webhook-secret": secret,
+                    },
+                    "events": ["MESSAGES_UPSERT"],
+                }
+            },
+        )
+
+    def find_webhook(self, instance_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/webhook/find/{instance_id}")
+
     def delete_instance(self, instance_id: str) -> dict[str, Any]:
         return self._request("DELETE", f"/instance/delete/{instance_id}")
 

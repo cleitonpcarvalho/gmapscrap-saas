@@ -32,6 +32,7 @@ from backend.models import (
     WhatsAppInstance,
     WhatsAppMessage,
     WhatsAppMessageTemplate,
+    WhatsAppWebhookSettings,
     WhatsAppSend,
 )
 from backend.schemas import (
@@ -236,8 +237,36 @@ def _update_whatsapp_instance_status(instance: WhatsAppInstance, provider_respon
     return provider_state
 
 
-def _validate_evolution_webhook_secret(request: Request) -> None:
-    expected_secret = get_settings().evolution_webhook_secret.strip()
+def _evolution_webhook_url() -> str:
+    return f"{get_settings().public_base_url.rstrip('/')}/api/whatsapp/webhook/evolution"
+
+
+def _get_or_create_evolution_webhook_secret(db: Session) -> str:
+    configured_secret = get_settings().evolution_webhook_secret.strip()
+    if configured_secret:
+        return configured_secret
+
+    settings_row = db.get(WhatsAppWebhookSettings, 1)
+    if settings_row:
+        return settings_row.secret
+
+    settings_row = WhatsAppWebhookSettings(id=1, secret=secrets.token_urlsafe(48))
+    db.add(settings_row)
+    db.flush()
+    return settings_row.secret
+
+
+def _configure_evolution_webhook(db: Session, provider: EvolutionProvider, instance: WhatsAppInstance) -> dict:
+    instance_name = _whatsapp_provider_id(instance)
+    return provider.set_webhook(
+        instance_name,
+        url=_evolution_webhook_url(),
+        secret=_get_or_create_evolution_webhook_secret(db),
+    )
+
+
+def _validate_evolution_webhook_secret(request: Request, db: Session) -> None:
+    expected_secret = _get_or_create_evolution_webhook_secret(db)
     provided_secret = (request.headers.get("x-evolution-webhook-secret") or "").strip()
     authorization = (request.headers.get("authorization") or "").strip()
 
@@ -817,6 +846,12 @@ def create_whatsapp_instance(
 
     instance.evolution_instance_name = _extract_evolution_instance_name(provider_response, instance.name)
     try:
+        _configure_evolution_webhook(db, provider, instance)
+    except EvolutionApiError as exc:
+        db.rollback()
+        _raise_evolution_http_error(exc)
+
+    try:
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -888,6 +923,12 @@ def get_whatsapp_instance_status(
         _raise_evolution_http_error(exc)
 
     provider_state = _update_whatsapp_instance_status(instance, provider_response)
+    if instance.status == "connected":
+        try:
+            _configure_evolution_webhook(db, provider, instance)
+        except EvolutionApiError as exc:
+            db.rollback()
+            _raise_evolution_http_error(exc)
     db.commit()
     db.refresh(instance)
     return WhatsAppInstanceStatusRead(
@@ -932,7 +973,7 @@ def receive_evolution_webhook(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    _validate_evolution_webhook_secret(request)
+    _validate_evolution_webhook_secret(request, db)
     event = str(payload.get("event") or "")
 
     if not is_evolution_messages_upsert_event(event):
