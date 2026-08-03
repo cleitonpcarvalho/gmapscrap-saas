@@ -1,8 +1,10 @@
 import base64
 import csv
+import secrets
 from datetime import datetime, timezone
 from io import StringIO
 from types import SimpleNamespace
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,6 +99,7 @@ from backend.services.whatsapp_campaigns import (
     submit_campaign_job as submit_whatsapp_campaign_job,
 )
 from backend.services.whatsapp_providers.evolution import EvolutionApiError, EvolutionProvider
+from backend.services.whatsapp_webhooks import ingest_evolution_messages_upsert, is_evolution_messages_upsert_event
 from backend.scrapers.maps_scraper import MapLead
 
 
@@ -221,6 +224,18 @@ def _update_whatsapp_instance_status(instance: WhatsAppInstance, provider_respon
         instance.connected_at = utc_now()
 
     return provider_state
+
+
+def _validate_evolution_webhook_secret(request: Request) -> None:
+    expected_secret = get_settings().evolution_webhook_secret.strip()
+    provided_secret = (request.headers.get("x-evolution-webhook-secret") or "").strip()
+    authorization = (request.headers.get("authorization") or "").strip()
+
+    if not provided_secret and authorization.lower().startswith("bearer "):
+        provided_secret = authorization[7:].strip()
+
+    if not expected_secret or not provided_secret or not secrets.compare_digest(provided_secret, expected_secret):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook Evolution não autorizado")
 
 
 def _count_saved_leads_for_run(db: Session, run_id: int) -> int:
@@ -857,6 +872,31 @@ def delete_whatsapp_instance(
     db.delete(instance)
     db.commit()
     return {"status": "ok"}
+
+
+@app.post("/api/whatsapp/webhook/evolution")
+def receive_evolution_webhook(
+    payload: dict[str, Any],
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _validate_evolution_webhook_secret(request)
+    event = str(payload.get("event") or "")
+
+    if not is_evolution_messages_upsert_event(event):
+        return {"status": "ignored", "event": event}
+
+    try:
+        result = ingest_evolution_messages_upsert(db, payload)
+        db.commit()
+    except EvolutionApiError as exc:
+        db.rollback()
+        _raise_evolution_http_error(exc)
+    except RuntimeError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    return {"status": "ok", "event": event, **result}
 
 
 @app.get("/api/whatsapp/templates", response_model=list[WhatsAppMessageTemplateRead])

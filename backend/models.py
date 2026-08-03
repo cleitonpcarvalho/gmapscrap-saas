@@ -389,13 +389,13 @@ class WhatsAppConversation(Base):
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True)
+    lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True)
     instance_id: Mapped[int] = mapped_column(ForeignKey("whatsapp_instances.id", ondelete="CASCADE"), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="open", nullable=False)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    lead: Mapped[Lead] = relationship(lazy="selectin")
+    lead: Mapped[Lead | None] = relationship(lazy="selectin")
     instance: Mapped[WhatsAppInstance] = relationship(lazy="selectin")
     messages: Mapped[list["WhatsAppMessage"]] = relationship(
         back_populates="conversation",

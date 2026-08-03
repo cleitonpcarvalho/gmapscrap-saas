@@ -58,6 +58,16 @@ class EvolutionProvider(WhatsAppProvider):
     def send_audio_message(self, instance_id: str, phone: str, audio_url: str) -> dict[str, Any]:
         raise NotImplementedError("Envio de audio via Evolution ainda não implementado.")
 
+    def get_media_base64(self, instance_id: str, message: dict[str, Any], *, convert_to_mp4: bool = False) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/chat/getBase64FromMediaMessage/{instance_id}",
+            json={
+                "message": message,
+                "convertToMp4": convert_to_mp4,
+            },
+        )
+
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         if not self.base_url or not self.api_key:
             raise EvolutionApiError("Evolution API não configurada no backend.", status_code=422)

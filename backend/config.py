@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     evolution_api_base_url: str = ""
     evolution_api_key: str = ""
     evolution_instance_name: str = ""
+    evolution_webhook_secret: str = ""
     whatsapp_validation_timeout_seconds: float = 6.0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

@@ -48,6 +48,7 @@ def init_db() -> None:
     _wait_for_database()
     Base.metadata.create_all(bind=engine)
     _ensure_whatsapp_crm_tables()
+    _ensure_whatsapp_conversation_columns()
     _ensure_search_run_columns()
     _ensure_lead_columns()
     _ensure_email_template_columns()
@@ -81,6 +82,26 @@ def _ensure_whatsapp_crm_tables() -> None:
             CrmStageHistory.__table__,
         ],
     )
+
+
+def _ensure_whatsapp_conversation_columns() -> None:
+    inspector = inspect(engine)
+    if "whatsapp_conversations" not in inspector.get_table_names():
+        return
+
+    lead_id_column = next(
+        (column for column in inspector.get_columns("whatsapp_conversations") if column["name"] == "lead_id"),
+        None,
+    )
+    if not lead_id_column or lead_id_column.get("nullable", True):
+        return
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("SET lock_timeout = '10s'"))
+            connection.execute(text("ALTER TABLE whatsapp_conversations ALTER COLUMN lead_id DROP NOT NULL"))
+    except SQLAlchemyError:
+        return
 
 
 def _wait_for_database(max_attempts: int = 30, delay_seconds: int = 2) -> None:
