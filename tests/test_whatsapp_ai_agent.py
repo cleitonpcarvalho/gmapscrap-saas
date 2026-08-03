@@ -357,3 +357,47 @@ def test_whatsapp_ai_circuit_breaker_skips_duplicate_recent_reply(
 
     assert outbound_count == 1
     assert inbound_count == 1
+
+
+def test_whatsapp_ai_circuit_breaker_skips_recent_unknown_sender_reply(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_lead_and_instance(db_session, phone="(11) 91111-1111")
+    enable_ai(db_session)
+    captured: dict[str, int] = {"openai_calls": 0, "send_calls": 0}
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
+        captured["openai_calls"] += 1
+        return FakeOpenAIResponse({"output_text": "Oi! Como posso ajudar?"})
+
+    def fake_send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
+        captured["send_calls"] += 1
+        return {"key": {"id": f"OUTBOUND_UNKNOWN_{captured['send_calls']}"}}
+
+    monkeypatch.setattr(whatsapp_ai_agent.requests, "post", fake_openai_post)
+    monkeypatch.setattr(whatsapp_ai_agent.EvolutionProvider, "send_text_message", fake_send_text_message)
+
+    main.receive_evolution_webhook(
+        evolution_text_payload(message_id="UNKNOWN_INBOUND_1", text="oi"),
+        request=webhook_request(),
+        db=db_session,
+    )
+    main.receive_evolution_webhook(
+        evolution_text_payload(message_id="UNKNOWN_INBOUND_2", text="Seu numero nao esta autorizado."),
+        request=webhook_request(),
+        db=db_session,
+    )
+
+    outbound_count = db_session.scalar(
+        select(func.count(WhatsAppMessage.id)).where(WhatsAppMessage.direction == "outbound")
+    )
+    inbound_count = db_session.scalar(
+        select(func.count(WhatsAppMessage.id)).where(WhatsAppMessage.direction == "inbound")
+    )
+    conversation_count = db_session.scalar(select(func.count(WhatsAppConversation.id)))
+
+    assert captured == {"openai_calls": 1, "send_calls": 1}
+    assert outbound_count == 1
+    assert inbound_count == 2
+    assert conversation_count == 2

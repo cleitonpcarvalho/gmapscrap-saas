@@ -69,11 +69,12 @@ def handle_inbound_message(
         logger.info("IA WhatsApp desativada: message_id=%s conversation_id=%s", inbound_message.id, conversation.id)
         return {"status": "disabled"}
 
-    if _has_recent_ai_reply(db, conversation.id):
+    if _has_recent_ai_reply(db, conversation.id) or _has_recent_unidentified_ai_reply(db, conversation):
         logger.info(
-            "IA WhatsApp pulada pelo circuit breaker: message_id=%s conversation_id=%s",
+            "IA WhatsApp pulada pelo circuit breaker: message_id=%s conversation_id=%s sender_phone=%s",
             inbound_message.id,
             conversation.id,
+            sender_phone,
         )
         return {"status": "skipped_recent_reply"}
 
@@ -328,6 +329,26 @@ def _has_recent_ai_reply(db: Session, conversation_id: int) -> bool:
             select(WhatsAppMessage.id)
             .where(
                 WhatsAppMessage.conversation_id == conversation_id,
+                WhatsAppMessage.direction == "outbound",
+                WhatsAppMessage.created_at >= cutoff,
+            )
+            .limit(1)
+        )
+    )
+
+
+def _has_recent_unidentified_ai_reply(db: Session, conversation: WhatsAppConversation) -> bool:
+    if conversation.lead_id:
+        return False
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=RECENT_AI_REPLY_SECONDS)
+    return bool(
+        db.scalar(
+            select(WhatsAppMessage.id)
+            .join(WhatsAppConversation, WhatsAppConversation.id == WhatsAppMessage.conversation_id)
+            .where(
+                WhatsAppConversation.instance_id == conversation.instance_id,
+                WhatsAppConversation.lead_id.is_(None),
                 WhatsAppMessage.direction == "outbound",
                 WhatsAppMessage.created_at >= cutoff,
             )
