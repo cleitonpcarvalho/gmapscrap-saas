@@ -27,9 +27,7 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 SYSTEM_GUARDRAILS = (
     "Responda sempre em português do Brasil, de forma curta e natural para WhatsApp. "
-    "Use no máximo 3 frases. "
-    "Se identificar interesse, desinteresse ou avanço no funil, chame a function update_lead_stage. "
-    "Mesmo quando chamar a function, também escreva a resposta que deve ser enviada ao usuário."
+    "Use no máximo 3 frases."
 )
 
 logger = logging.getLogger(__name__)
@@ -61,17 +59,42 @@ def handle_inbound_message(
     provider: EvolutionProvider | None = None,
 ) -> dict[str, str]:
     ai_settings = get_or_create_ai_settings(db)
+    logger.info(
+        "Processando IA WhatsApp: message_id=%s conversation_id=%s enabled=%s",
+        inbound_message.id,
+        conversation.id,
+        ai_settings.enabled,
+    )
     if not ai_settings.enabled:
+        logger.info("IA WhatsApp desativada: message_id=%s conversation_id=%s", inbound_message.id, conversation.id)
         return {"status": "disabled"}
 
     if _has_recent_ai_reply(db, conversation.id):
+        logger.info(
+            "IA WhatsApp pulada pelo circuit breaker: message_id=%s conversation_id=%s",
+            inbound_message.id,
+            conversation.id,
+        )
         return {"status": "skipped_recent_reply"}
 
     try:
         ai_response = generate_ai_response(db, conversation, ai_settings)
+        logger.info(
+            "Resposta OpenAI processada: message_id=%s conversation_id=%s text_len=%s tool_calls=%s",
+            inbound_message.id,
+            conversation.id,
+            len(ai_response.text or ""),
+            len(ai_response.tool_calls),
+        )
         _apply_tool_calls(db, conversation, ai_response.tool_calls)
         response_text = ai_response.text.strip()
         if not response_text:
+            logger.warning(
+                "IA WhatsApp retornou resposta vazia: message_id=%s conversation_id=%s tool_calls=%s",
+                inbound_message.id,
+                conversation.id,
+                len(ai_response.tool_calls),
+            )
             return {"status": "empty_response"}
 
         whatsapp_provider = provider or EvolutionProvider()
@@ -90,6 +113,12 @@ def handle_inbound_message(
         conversation.last_message_at = now
         db.add(outbound_message)
         db.flush()
+        logger.info(
+            "Resposta automática WhatsApp enviada: message_id=%s conversation_id=%s outbound_id=%s",
+            inbound_message.id,
+            conversation.id,
+            outbound_message.id,
+        )
         return {"status": "sent"}
     except Exception:
         logger.exception("Falha ao gerar ou enviar resposta automática de WhatsApp para mensagem %s", inbound_message.id)
@@ -105,41 +134,73 @@ def generate_ai_response(
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY não está configurada no backend.")
 
+    payload = _post_openai_response(_openai_payload(db, conversation, ai_settings, include_tools=True))
+    text = _extract_output_text(payload)
+    tool_calls = _extract_tool_calls(payload)
+    if not text and tool_calls:
+        logger.warning(
+            "OpenAI retornou apenas function_call para conversa %s; solicitando resposta final sem ferramentas.",
+            conversation.id,
+        )
+        final_payload = _post_openai_response(_openai_payload(db, conversation, ai_settings, include_tools=False))
+        text = _extract_output_text(final_payload)
+
+    return AiResponse(text=text, tool_calls=tool_calls)
+
+
+def _post_openai_response(payload: dict[str, Any]) -> dict[str, Any]:
+    settings = get_settings()
     response = requests.post(
         OPENAI_RESPONSES_URL,
         headers={
             "Authorization": f"Bearer {settings.openai_api_key}",
             "Content-Type": "application/json",
         },
-        json=_openai_payload(db, conversation, ai_settings),
+        json=payload,
         timeout=60,
     )
     if response.status_code >= 400:
         raise RuntimeError(f"OpenAI retornou erro {response.status_code}: {response.text[:600]}")
 
-    payload = response.json()
-    return AiResponse(text=_extract_output_text(payload), tool_calls=_extract_tool_calls(payload))
+    return response.json()
 
 
-def _openai_payload(db: Session, conversation: WhatsAppConversation, ai_settings: WhatsAppAiSettings) -> dict[str, Any]:
+def _openai_payload(
+    db: Session,
+    conversation: WhatsAppConversation,
+    ai_settings: WhatsAppAiSettings,
+    *,
+    include_tools: bool,
+) -> dict[str, Any]:
     settings = get_settings()
     system_prompt = (ai_settings.system_prompt or DEFAULT_SYSTEM_PROMPT).strip()
     lead_context = _lead_context(conversation.lead)
     history = _conversation_history(db, conversation.id)
+    tool_instruction = (
+        "Se identificar interesse, desinteresse ou avanço no funil, chame a function update_lead_stage. "
+        "Mesmo quando chamar a function, também escreva a resposta que deve ser enviada ao usuário."
+        if include_tools
+        else "Nesta chamada, não use ferramentas. Escreva apenas a resposta final que será enviada ao usuário."
+    )
 
-    return {
+    payload: dict[str, Any] = {
         "model": settings.openai_model,
         "input": [
             {
                 "role": "system",
-                "content": f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n\nContexto do lead:\n{lead_context}",
+                "content": (
+                    f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n{tool_instruction}\n\n"
+                    f"Contexto do lead:\n{lead_context}"
+                ),
             },
             *history,
         ],
-        "tools": [_update_lead_stage_tool_schema()],
-        "tool_choice": "auto",
         "max_output_tokens": 450,
     }
+    if include_tools:
+        payload["tools"] = [_update_lead_stage_tool_schema()]
+        payload["tool_choice"] = "auto"
+    return payload
 
 
 def _conversation_history(db: Session, conversation_id: int, limit: int = 20) -> list[dict[str, str]]:

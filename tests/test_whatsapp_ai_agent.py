@@ -231,6 +231,59 @@ def test_whatsapp_ai_function_call_updates_crm_stage_and_history(
     assert history.changed_by == "ai"
 
 
+def test_whatsapp_ai_requests_final_text_when_openai_returns_only_function_call(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_lead_and_instance(db_session, phone="(11) 91111-1111")
+    enable_ai(db_session)
+    captured: dict[str, Any] = {"openai_payloads": []}
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
+        captured["openai_payloads"].append(kwargs["json"])
+        if len(captured["openai_payloads"]) == 1:
+            return FakeOpenAIResponse(
+                {
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "name": "update_lead_stage",
+                            "arguments": json.dumps(
+                                {
+                                    "stage": "responded",
+                                    "reason": "Lead enviou uma saudação.",
+                                }
+                            ),
+                        }
+                    ]
+                }
+            )
+        return FakeOpenAIResponse({"output_text": "Oi! Tudo bem? Como posso te ajudar hoje?"})
+
+    def fake_send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
+        captured["send"] = {"instance_id": instance_id, "phone": phone, "text": text}
+        return {"key": {"id": "OUTBOUND_AI_FALLBACK"}}
+
+    monkeypatch.setattr(whatsapp_ai_agent.requests, "post", fake_openai_post)
+    monkeypatch.setattr(whatsapp_ai_agent.EvolutionProvider, "send_text_message", fake_send_text_message)
+
+    main.receive_evolution_webhook(evolution_text_payload(text="oi"), request=webhook_request(), db=db_session)
+
+    outbound = db_session.scalars(select(WhatsAppMessage).where(WhatsAppMessage.direction == "outbound")).one()
+
+    assert len(captured["openai_payloads"]) == 2
+    assert captured["openai_payloads"][0]["tools"][0]["name"] == "update_lead_stage"
+    assert "tools" not in captured["openai_payloads"][1]
+    assert captured["send"] == {
+        "instance_id": "sales-main",
+        "phone": "5511999990000",
+        "text": "Oi! Tudo bem? Como posso te ajudar hoje?",
+    }
+    assert outbound.content == "Oi! Tudo bem? Como posso te ajudar hoje?"
+    assert outbound.provider_message_id == "OUTBOUND_AI_FALLBACK"
+    assert db_session.scalar(select(func.count(CrmLead.id))) == 0
+
+
 def test_whatsapp_ai_disabled_by_default_does_not_call_openai_or_send(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
