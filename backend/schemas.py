@@ -229,6 +229,25 @@ class EmailTemplateRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WhatsAppMessageTemplateCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+    content: str = Field(min_length=1)
+
+
+class WhatsAppMessageTemplateUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    content: str | None = Field(default=None, min_length=1)
+
+
+class WhatsAppMessageTemplateRead(BaseModel):
+    id: int
+    name: str
+    content: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AiTemplateGenerateRequest(BaseModel):
     mode: Literal["single", "sequence"] = "sequence"
     count: int = Field(default=3, ge=1, le=5)

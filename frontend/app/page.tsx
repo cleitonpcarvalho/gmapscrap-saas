@@ -98,7 +98,19 @@ type ManualLeadForm = {
 
 type DeleteDialog = { kind: "single"; lead: Lead } | { kind: "bulk"; ids: number[] } | null;
 
-type AppView = "dashboard" | "search" | "leads" | "whatsapp" | "templates" | "lists" | "campaigns" | "history" | "settings";
+type AppView =
+  | "dashboard"
+  | "search"
+  | "leads"
+  | "whatsapp"
+  | "whatsappInstances"
+  | "whatsappTemplates"
+  | "whatsappCampaigns"
+  | "templates"
+  | "lists"
+  | "campaigns"
+  | "history"
+  | "settings";
 
 type SmtpConfig = {
   id: number | null;
@@ -223,6 +235,13 @@ type WhatsAppInstanceStatusResponse = {
   provider_response: Record<string, unknown>;
 };
 
+type WhatsAppMessageTemplate = {
+  id: number;
+  name: string;
+  content: string;
+  created_at: string;
+};
+
 type WhatsAppCampaign = {
   id: number;
   name: string;
@@ -260,11 +279,15 @@ type WhatsAppCampaignFormErrors = {
   name?: string;
   list_id?: string;
   instance_id?: string;
-  message?: string;
+  template_id?: string;
   min_delay_seconds?: string;
   max_delay_seconds?: string;
   send_days?: string;
-  backend?: string;
+};
+
+type WhatsAppTemplateFormErrors = {
+  name?: string;
+  content?: string;
 };
 
 type EmailSendLog = {
@@ -380,7 +403,7 @@ const defaultWhatsappCampaignForm = {
   name: "",
   list_id: "",
   instance_id: "",
-  message: "",
+  template_id: "",
   min_delay_seconds: 120,
   max_delay_seconds: 300,
   daily_limit: 30,
@@ -391,9 +414,12 @@ const defaultWhatsappCampaignForm = {
   send_days: "0,1,2,3,4"
 };
 
+const defaultWhatsappTemplateForm = {
+  name: "",
+  content: ""
+};
+
 const WHATSAPP_VARIABLES = ["{nome_empresa}", "{lead_name}", "{website}", "{phone}", "{niche}", "{location}"];
-const WHATSAPP_TEMPLATE_ENDPOINT_MISSING =
-  "O backend ainda não expõe criação/listagem de templates WhatsApp. A campanha precisa de um template persistido antes de ser criada.";
 
 const defaultManualLeadForm: ManualLeadForm = {
   niche: "",
@@ -997,9 +1023,14 @@ export default function Home() {
   const [whatsappError, setWhatsappError] = useState("");
   const [whatsappMessage, setWhatsappMessage] = useState("");
   const [whatsappInstances, setWhatsappInstances] = useState<WhatsAppInstance[]>([]);
+  const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsAppMessageTemplate[]>([]);
   const [whatsappCampaigns, setWhatsappCampaigns] = useState<WhatsAppCampaign[]>([]);
   const [whatsappInstanceForm, setWhatsappInstanceForm] = useState(defaultWhatsappInstanceForm);
   const [whatsappInstanceFormErrors, setWhatsappInstanceFormErrors] = useState<WhatsAppInstanceFormErrors>({});
+  const [whatsappTemplateForm, setWhatsappTemplateForm] = useState(defaultWhatsappTemplateForm);
+  const [whatsappTemplateFormErrors, setWhatsappTemplateFormErrors] = useState<WhatsAppTemplateFormErrors>({});
+  const [editingWhatsappTemplateId, setEditingWhatsappTemplateId] = useState<number | null>(null);
+  const [whatsappTemplateDeleteDialog, setWhatsappTemplateDeleteDialog] = useState<WhatsAppMessageTemplate | null>(null);
   const [whatsappCampaignForm, setWhatsappCampaignForm] = useState(defaultWhatsappCampaignForm);
   const [whatsappCampaignFormErrors, setWhatsappCampaignFormErrors] = useState<WhatsAppCampaignFormErrors>({});
   const [whatsappQrModal, setWhatsappQrModal] = useState<{
@@ -1208,12 +1239,14 @@ export default function Home() {
   }
 
   async function refreshWhatsappData() {
-    const [nextInstances, nextCampaigns] = await Promise.all([
+    const [nextInstances, nextTemplates, nextCampaigns] = await Promise.all([
       apiFetch<WhatsAppInstance[]>("/api/whatsapp/instances"),
+      apiFetch<WhatsAppMessageTemplate[]>("/api/whatsapp/templates"),
       apiFetch<WhatsAppCampaign[]>("/api/whatsapp/campaigns")
     ]);
 
     setWhatsappInstances(nextInstances);
+    setWhatsappTemplates(nextTemplates);
     setWhatsappCampaigns(nextCampaigns);
   }
 
@@ -1233,7 +1266,13 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (window.location.pathname === "/whatsapp" || window.location.hash === "#whatsapp") {
+    if (window.location.pathname === "/whatsapp/instancias") {
+      setActiveView("whatsappInstances");
+    } else if (window.location.pathname === "/whatsapp/templates") {
+      setActiveView("whatsappTemplates");
+    } else if (window.location.pathname === "/whatsapp/campanhas") {
+      setActiveView("whatsappCampaigns");
+    } else if (window.location.pathname === "/whatsapp" || window.location.hash === "#whatsapp") {
       setActiveView("whatsapp");
     } else if (window.location.hash === "#leads") {
       setActiveView("leads");
@@ -1320,11 +1359,17 @@ export default function Home() {
           : connectedWhatsappInstances[0]?.id
             ? String(connectedWhatsappInstances[0].id)
             : "";
+      const templateId =
+        current.template_id && whatsappTemplates.some((template) => String(template.id) === current.template_id)
+          ? current.template_id
+          : whatsappTemplates[0]?.id
+            ? String(whatsappTemplates[0].id)
+            : "";
 
-      if (listId === current.list_id && instanceId === current.instance_id) return current;
-      return { ...current, list_id: listId, instance_id: instanceId };
+      if (listId === current.list_id && instanceId === current.instance_id && templateId === current.template_id) return current;
+      return { ...current, list_id: listId, instance_id: instanceId, template_id: templateId };
     });
-  }, [connectedWhatsappInstances, leadLists]);
+  }, [connectedWhatsappInstances, leadLists, whatsappTemplates]);
 
   useEffect(() => {
     if (templates.length === 0) {
@@ -1365,6 +1410,7 @@ export default function Home() {
   }, [user, activeView, previewContentLink, previewContentData]);
 
   const emailViews: AppView[] = ["dashboard", "templates", "lists", "campaigns", "history", "settings"];
+  const whatsappViews: AppView[] = ["whatsapp", "whatsappInstances", "whatsappTemplates", "whatsappCampaigns"];
 
   useEffect(() => {
     if (!user || !emailViews.includes(activeView)) return;
@@ -1373,7 +1419,7 @@ export default function Home() {
   }, [user, activeView]);
 
   useEffect(() => {
-    if (!user || activeView !== "whatsapp") return;
+    if (!user || !whatsappViews.includes(activeView)) return;
 
     refreshWhatsappData().catch(() => undefined);
     refreshEmailData().catch(() => undefined);
@@ -1381,19 +1427,22 @@ export default function Home() {
 
   function switchView(view: AppView) {
     setActiveView(view);
-    const hashes: Record<AppView, string> = {
+    const routes: Record<AppView, string> = {
       dashboard: "#dashboard",
       search: "#busca",
       leads: "#leads",
-      whatsapp: "#whatsapp",
+      whatsapp: "/whatsapp",
+      whatsappInstances: "/whatsapp/instancias",
+      whatsappTemplates: "/whatsapp/templates",
+      whatsappCampaigns: "/whatsapp/campanhas",
       templates: "#templates",
       lists: "#listas",
       campaigns: "#campanhas",
       history: "#historico",
       settings: "#settings"
     };
-    const hash = hashes[view];
-    window.history.replaceState(null, "", view === "whatsapp" ? "/whatsapp" : `/${hash}`);
+    const route = routes[view];
+    window.history.replaceState(null, "", route.startsWith("/") ? route : `/${route}`);
   }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
@@ -1995,6 +2044,98 @@ export default function Home() {
     }
   }
 
+  function resetWhatsappTemplateForm() {
+    setEditingWhatsappTemplateId(null);
+    setWhatsappTemplateForm(defaultWhatsappTemplateForm);
+    setWhatsappTemplateFormErrors({});
+  }
+
+  function loadWhatsappTemplateForEdit(template: WhatsAppMessageTemplate) {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setEditingWhatsappTemplateId(template.id);
+    setWhatsappTemplateForm({
+      name: template.name,
+      content: template.content
+    });
+    setWhatsappTemplateFormErrors({});
+    switchView("whatsappTemplates");
+  }
+
+  function validateWhatsappTemplateForm() {
+    const errors: WhatsAppTemplateFormErrors = {};
+    if (!whatsappTemplateForm.name.trim()) {
+      errors.name = "Informe o nome do template.";
+    }
+    if (!whatsappTemplateForm.content.trim()) {
+      errors.content = "Escreva o texto do template.";
+    }
+
+    setWhatsappTemplateFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  }
+
+  async function handleSaveWhatsappTemplate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWhatsappError("");
+    setWhatsappMessage("");
+
+    if (!validateWhatsappTemplateForm()) {
+      return;
+    }
+
+    setWhatsappBusyAction("save-template");
+
+    try {
+      await apiFetch<WhatsAppMessageTemplate>(
+        editingWhatsappTemplateId ? `/api/whatsapp/templates/${editingWhatsappTemplateId}` : "/api/whatsapp/templates",
+        {
+          method: editingWhatsappTemplateId ? "PATCH" : "POST",
+          body: JSON.stringify({
+            name: whatsappTemplateForm.name.trim(),
+            content: whatsappTemplateForm.content.trim()
+          })
+        }
+      );
+      setWhatsappMessage(editingWhatsappTemplateId ? "Template atualizado." : "Template criado.");
+      resetWhatsappTemplateForm();
+      await refreshWhatsappData();
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível salvar o template.");
+    } finally {
+      setWhatsappBusyAction("");
+    }
+  }
+
+  function requestDeleteWhatsappTemplate(template: WhatsAppMessageTemplate) {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setWhatsappTemplateDeleteDialog(template);
+  }
+
+  async function confirmDeleteWhatsappTemplate() {
+    if (!whatsappTemplateDeleteDialog) return;
+
+    const template = whatsappTemplateDeleteDialog;
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setWhatsappBusyAction(`delete-template-${template.id}`);
+
+    try {
+      await apiFetch<{ status: string }>(`/api/whatsapp/templates/${template.id}`, { method: "DELETE" });
+      if (editingWhatsappTemplateId === template.id) {
+        resetWhatsappTemplateForm();
+      }
+      setWhatsappTemplateDeleteDialog(null);
+      setWhatsappMessage("Template excluído.");
+      await refreshWhatsappData();
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível excluir o template.");
+    } finally {
+      setWhatsappBusyAction("");
+    }
+  }
+
   function toggleWhatsappCampaignSendDay(day: string) {
     setWhatsappCampaignForm((current) => {
       const nextDays = parseCampaignSendDays(current.send_days);
@@ -2023,8 +2164,8 @@ export default function Home() {
     if (!whatsappCampaignForm.instance_id) {
       errors.instance_id = "Escolha uma instância conectada.";
     }
-    if (!whatsappCampaignForm.message.trim()) {
-      errors.message = "Escreva a mensagem da campanha.";
+    if (!whatsappCampaignForm.template_id) {
+      errors.template_id = "Escolha um template de mensagem.";
     }
     if (!Number.isFinite(minDelay) || minDelay < 1) {
       errors.min_delay_seconds = "Use um delay mínimo de pelo menos 1 segundo.";
@@ -2052,7 +2193,32 @@ export default function Home() {
       return;
     }
 
-    setWhatsappCampaignFormErrors({ backend: WHATSAPP_TEMPLATE_ENDPOINT_MISSING });
+    const { template_id, ...campaignPayload } = whatsappCampaignForm;
+    setWhatsappBusyAction("create-campaign");
+
+    try {
+      await apiFetch<WhatsAppCampaign>("/api/whatsapp/campaigns", {
+        method: "POST",
+        body: JSON.stringify({
+          ...campaignPayload,
+          list_id: Number(whatsappCampaignForm.list_id),
+          instance_id: Number(whatsappCampaignForm.instance_id),
+          templates: [{ template_id: Number(template_id), weight: 1 }]
+        })
+      });
+      setWhatsappCampaignForm({
+        ...defaultWhatsappCampaignForm,
+        list_id: leadLists[0]?.id ? String(leadLists[0].id) : "",
+        instance_id: connectedWhatsappInstances[0]?.id ? String(connectedWhatsappInstances[0].id) : "",
+        template_id: whatsappTemplates[0]?.id ? String(whatsappTemplates[0].id) : ""
+      });
+      setWhatsappMessage("Campanha criada.");
+      await refreshWhatsappData();
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível criar a campanha.");
+    } finally {
+      setWhatsappBusyAction("");
+    }
   }
 
   function requestStartWhatsappCampaign(campaign: WhatsAppCampaign) {
@@ -2393,8 +2559,32 @@ export default function Home() {
             onClick={() => switchView("whatsapp")}
             type="button"
           >
+            <BarChart3 size={18} />
+            Resumo
+          </button>
+          <button
+            className={`nav-item ${activeView === "whatsappInstances" ? "active" : ""}`}
+            onClick={() => switchView("whatsappInstances")}
+            type="button"
+          >
             <MessageCircle size={18} />
-            Instâncias e campanhas
+            Instâncias
+          </button>
+          <button
+            className={`nav-item ${activeView === "whatsappTemplates" ? "active" : ""}`}
+            onClick={() => switchView("whatsappTemplates")}
+            type="button"
+          >
+            <FileText size={18} />
+            Templates
+          </button>
+          <button
+            className={`nav-item ${activeView === "whatsappCampaigns" ? "active" : ""}`}
+            onClick={() => switchView("whatsappCampaigns")}
+            type="button"
+          >
+            <Megaphone size={18} />
+            Campanhas
           </button>
 
           <div className="nav-section-label">E-mail</div>
@@ -2461,13 +2651,19 @@ export default function Home() {
                         ? "Dashboard"
                         : activeView === "whatsapp"
                           ? "WhatsApp"
-                          : activeView === "templates"
-                            ? "Templates de e-mail"
-                            : activeView === "lists"
-                              ? "Listas de leads"
-                              : activeView === "campaigns"
-                                ? "Campanhas de e-mail"
-                                : "Histórico de envios"}
+                          : activeView === "whatsappInstances"
+                            ? "Instâncias WhatsApp"
+                            : activeView === "whatsappTemplates"
+                              ? "Templates WhatsApp"
+                              : activeView === "whatsappCampaigns"
+                                ? "Campanhas WhatsApp"
+                                : activeView === "templates"
+                                  ? "Templates de e-mail"
+                                  : activeView === "lists"
+                                    ? "Listas de leads"
+                                    : activeView === "campaigns"
+                                      ? "Campanhas de e-mail"
+                                      : "Histórico de envios"}
             </h1>
           </div>
           {activeView === "search" || activeView === "leads" ? (
@@ -2475,7 +2671,7 @@ export default function Home() {
               <ArrowDownToLine size={18} />
               CSV
             </a>
-          ) : activeView === "whatsapp" ? (
+          ) : whatsappViews.includes(activeView) ? (
             <button className="secondary-button" disabled={Boolean(whatsappBusyAction)} onClick={handleRefreshWhatsappData} type="button">
               {whatsappBusyAction === "refresh-whatsapp" ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
               Atualizar
@@ -2941,6 +3137,11 @@ export default function Home() {
                 <strong>{whatsappDashboard.connected}</strong>
               </article>
               <article className="metric-card">
+                <FileText size={20} />
+                <span>Templates</span>
+                <strong>{whatsappTemplates.length}</strong>
+              </article>
+              <article className="metric-card">
                 <Megaphone size={20} />
                 <span>Campanhas rodando</span>
                 <strong>{whatsappDashboard.running}</strong>
@@ -2950,12 +3151,13 @@ export default function Home() {
                 <span>Mensagens enviadas</span>
                 <strong>{whatsappDashboard.sent}</strong>
               </article>
-              <article className="metric-card">
-                <Clock3 size={20} />
-                <span>Total em campanhas</span>
-                <strong>{whatsappDashboard.total}</strong>
-              </article>
             </section>
+          </section>
+        ) : activeView === "whatsappInstances" ? (
+          <section className="email-workspace whatsapp-workspace">
+            {(whatsappError || whatsappMessage) && (
+              <div className={`notice ${whatsappError ? "danger" : "success"}`}>{whatsappError || whatsappMessage}</div>
+            )}
 
             <section className="email-grid whatsapp-grid">
               <form className="panel email-panel" onSubmit={handleCreateWhatsappInstance}>
@@ -3081,6 +3283,135 @@ export default function Home() {
                 </div>
               </section>
             </section>
+          </section>
+        ) : activeView === "whatsappTemplates" ? (
+          <section className="email-workspace whatsapp-workspace">
+            {(whatsappError || whatsappMessage) && (
+              <div className={`notice ${whatsappError ? "danger" : "success"}`}>{whatsappError || whatsappMessage}</div>
+            )}
+
+            <section className="email-grid whatsapp-template-grid">
+              <form className="panel email-panel" onSubmit={handleSaveWhatsappTemplate}>
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Mensagem</p>
+                    <h2>{editingWhatsappTemplateId ? "Editar template" : "Novo template"}</h2>
+                  </div>
+                  <FileText size={20} />
+                </div>
+                <div className="form-grid single-column-grid">
+                  <label>
+                    Nome
+                    <input
+                      value={whatsappTemplateForm.name}
+                      onChange={(event) => {
+                        setWhatsappTemplateForm({ ...whatsappTemplateForm, name: event.target.value });
+                        setWhatsappTemplateFormErrors((current) => ({ ...current, name: "" }));
+                      }}
+                    />
+                    {whatsappTemplateFormErrors.name ? <small className="field-error">{whatsappTemplateFormErrors.name}</small> : null}
+                  </label>
+                  <label>
+                    Conteúdo
+                    <textarea
+                      rows={8}
+                      value={whatsappTemplateForm.content}
+                      onChange={(event) => {
+                        setWhatsappTemplateForm({ ...whatsappTemplateForm, content: event.target.value });
+                        setWhatsappTemplateFormErrors((current) => ({ ...current, content: "" }));
+                      }}
+                    />
+                    {whatsappTemplateFormErrors.content ? <small className="field-error">{whatsappTemplateFormErrors.content}</small> : null}
+                  </label>
+                  <div className="variable-hints">
+                    {WHATSAPP_VARIABLES.map((variable) => (
+                      <span className="filter-tag" key={variable}>
+                        {variable}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="row-actions">
+                  {editingWhatsappTemplateId ? (
+                    <button className="secondary-button" onClick={resetWhatsappTemplateForm} type="button">
+                      Cancelar edição
+                    </button>
+                  ) : null}
+                  <button className="primary-button" disabled={whatsappBusyAction === "save-template"} type="submit">
+                    {whatsappBusyAction === "save-template" ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+                    {editingWhatsappTemplateId ? "Salvar template" : "Criar template"}
+                  </button>
+                </div>
+              </form>
+
+              <section className="panel table-panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Biblioteca</p>
+                    <h2>Templates WhatsApp</h2>
+                  </div>
+                  <span className="muted-count">{whatsappTemplates.length} templates</span>
+                </div>
+                <div className="table-wrap">
+                  <table className="campaign-table whatsapp-table">
+                    <thead>
+                      <tr>
+                        <th>Template</th>
+                        <th>Conteúdo</th>
+                        <th>Criado em</th>
+                        <th>Ações</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {whatsappTemplates.length === 0 ? (
+                        <tr>
+                          <td className="empty-cell" colSpan={4}>
+                            Nenhum template criado.
+                          </td>
+                        </tr>
+                      ) : null}
+                      {whatsappTemplates.map((template) => (
+                        <tr key={template.id}>
+                          <td>
+                            <strong>{template.name}</strong>
+                          </td>
+                          <td>
+                            <span className="template-text-preview">{template.content}</span>
+                          </td>
+                          <td>{formatDate(template.created_at)}</td>
+                          <td>
+                            <div className="row-actions">
+                              <button
+                                className="icon-button"
+                                onClick={() => loadWhatsappTemplateForEdit(template)}
+                                title="Editar template"
+                                type="button"
+                              >
+                                <Edit3 size={16} />
+                              </button>
+                              <button
+                                className="icon-button danger"
+                                onClick={() => requestDeleteWhatsappTemplate(template)}
+                                title="Excluir template"
+                                type="button"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </section>
+          </section>
+        ) : activeView === "whatsappCampaigns" ? (
+          <section className="email-workspace whatsapp-workspace">
+            {(whatsappError || whatsappMessage) && (
+              <div className={`notice ${whatsappError ? "danger" : "success"}`}>{whatsappError || whatsappMessage}</div>
+            )}
 
             <section className="email-grid whatsapp-campaign-grid">
               <form className="panel email-panel" onSubmit={handleCreateWhatsappCampaign}>
@@ -3098,7 +3429,7 @@ export default function Home() {
                       value={whatsappCampaignForm.name}
                       onChange={(event) => {
                         setWhatsappCampaignForm({ ...whatsappCampaignForm, name: event.target.value });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, name: "", backend: "" }));
+                        setWhatsappCampaignFormErrors((current) => ({ ...current, name: "" }));
                       }}
                     />
                     {whatsappCampaignFormErrors.name ? <small className="field-error">{whatsappCampaignFormErrors.name}</small> : null}
@@ -3109,7 +3440,7 @@ export default function Home() {
                       value={whatsappCampaignForm.list_id}
                       onChange={(event) => {
                         setWhatsappCampaignForm({ ...whatsappCampaignForm, list_id: event.target.value });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, list_id: "", backend: "" }));
+                        setWhatsappCampaignFormErrors((current) => ({ ...current, list_id: "" }));
                       }}
                     >
                       <option value="">Escolha</option>
@@ -3127,7 +3458,7 @@ export default function Home() {
                       value={whatsappCampaignForm.instance_id}
                       onChange={(event) => {
                         setWhatsappCampaignForm({ ...whatsappCampaignForm, instance_id: event.target.value });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, instance_id: "", backend: "" }));
+                        setWhatsappCampaignFormErrors((current) => ({ ...current, instance_id: "" }));
                       }}
                     >
                       <option value="">Escolha</option>
@@ -3140,6 +3471,24 @@ export default function Home() {
                     {whatsappCampaignFormErrors.instance_id ? <small className="field-error">{whatsappCampaignFormErrors.instance_id}</small> : null}
                   </label>
                   <label>
+                    Template
+                    <select
+                      value={whatsappCampaignForm.template_id}
+                      onChange={(event) => {
+                        setWhatsappCampaignForm({ ...whatsappCampaignForm, template_id: event.target.value });
+                        setWhatsappCampaignFormErrors((current) => ({ ...current, template_id: "" }));
+                      }}
+                    >
+                      <option value="">Escolha</option>
+                      {whatsappTemplates.map((template) => (
+                        <option key={template.id} value={template.id}>
+                          {template.name}
+                        </option>
+                      ))}
+                    </select>
+                    {whatsappCampaignFormErrors.template_id ? <small className="field-error">{whatsappCampaignFormErrors.template_id}</small> : null}
+                  </label>
+                  <label>
                     Delay mínimo (s)
                     <input
                       min={1}
@@ -3147,7 +3496,7 @@ export default function Home() {
                       value={whatsappCampaignForm.min_delay_seconds}
                       onChange={(event) => {
                         setWhatsappCampaignForm({ ...whatsappCampaignForm, min_delay_seconds: Number(event.target.value) });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, min_delay_seconds: "", max_delay_seconds: "", backend: "" }));
+                        setWhatsappCampaignFormErrors((current) => ({ ...current, min_delay_seconds: "", max_delay_seconds: "" }));
                       }}
                     />
                     {whatsappCampaignFormErrors.min_delay_seconds ? (
@@ -3162,7 +3511,7 @@ export default function Home() {
                       value={whatsappCampaignForm.max_delay_seconds}
                       onChange={(event) => {
                         setWhatsappCampaignForm({ ...whatsappCampaignForm, max_delay_seconds: Number(event.target.value) });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, max_delay_seconds: "", backend: "" }));
+                        setWhatsappCampaignFormErrors((current) => ({ ...current, max_delay_seconds: "" }));
                       }}
                     />
                     {whatsappCampaignFormErrors.max_delay_seconds ? (
@@ -3231,29 +3580,9 @@ export default function Home() {
                     </div>
                     {whatsappCampaignFormErrors.send_days ? <small className="field-error">{whatsappCampaignFormErrors.send_days}</small> : null}
                   </fieldset>
-                  <label className="wide-field">
-                    Mensagem
-                    <textarea
-                      rows={6}
-                      value={whatsappCampaignForm.message}
-                      onChange={(event) => {
-                        setWhatsappCampaignForm({ ...whatsappCampaignForm, message: event.target.value });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, message: "", backend: "" }));
-                      }}
-                    />
-                    {whatsappCampaignFormErrors.message ? <small className="field-error">{whatsappCampaignFormErrors.message}</small> : null}
-                  </label>
-                  <div className="wide-field variable-hints">
-                    {WHATSAPP_VARIABLES.map((variable) => (
-                      <span className="filter-tag" key={variable}>
-                        {variable}
-                      </span>
-                    ))}
-                  </div>
                 </div>
-                {whatsappCampaignFormErrors.backend ? <p className="field-error block-error">{whatsappCampaignFormErrors.backend}</p> : null}
-                <button className="primary-button" type="submit">
-                  <Megaphone size={18} />
+                <button className="primary-button" disabled={whatsappBusyAction === "create-campaign"} type="submit">
+                  {whatsappBusyAction === "create-campaign" ? <Loader2 className="spin" size={18} /> : <Megaphone size={18} />}
                   Criar campanha
                 </button>
               </form>
@@ -3272,6 +3601,7 @@ export default function Home() {
                       <tr>
                         <th>Campanha</th>
                         <th>Instância</th>
+                        <th>Template</th>
                         <th>Status</th>
                         <th>Enviados/total</th>
                         <th>Janela</th>
@@ -3281,7 +3611,7 @@ export default function Home() {
                     <tbody>
                       {whatsappCampaigns.length === 0 ? (
                         <tr>
-                          <td className="empty-cell" colSpan={6}>
+                          <td className="empty-cell" colSpan={7}>
                             Nenhuma campanha criada.
                           </td>
                         </tr>
@@ -3292,6 +3622,9 @@ export default function Home() {
                           campaign.pending_count + campaign.sent_count + campaign.delivered_count + campaign.read_count + campaign.failed_count;
                         const startBusy = whatsappBusyAction === `start-campaign-${campaign.id}`;
                         const pauseBusy = whatsappBusyAction === `pause-campaign-${campaign.id}`;
+                        const campaignTemplateNames = campaign.template_ids
+                          .map((templateId) => whatsappTemplates.find((template) => template.id === templateId)?.name || `#${templateId}`)
+                          .join(", ");
                         return (
                           <tr key={campaign.id}>
                             <td>
@@ -3299,6 +3632,7 @@ export default function Home() {
                               <span>{campaign.message || campaign.error}</span>
                             </td>
                             <td>{campaign.instance_name}</td>
+                            <td>{campaignTemplateNames || "-"}</td>
                             <td>
                               <span className={`status-pill ${campaign.status}`}>{campaignStatusLabel(campaign.status)}</span>
                             </td>
@@ -4939,6 +5273,52 @@ export default function Home() {
                 type="button"
               >
                 {whatsappBusyAction === `delete-instance-${whatsappInstanceDeleteDialog.id}` ? (
+                  <Loader2 className="spin" size={18} />
+                ) : (
+                  <Trash2 size={18} />
+                )}
+                Excluir
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {whatsappTemplateDeleteDialog ? (
+        <div className="modal-backdrop">
+          <section className="confirm-modal">
+            <div className="confirm-icon">
+              <Trash2 size={22} />
+            </div>
+            <div>
+              <p className="eyebrow">Confirmar exclusão</p>
+              <h2>Excluir template?</h2>
+              <p className="confirm-copy">
+                O template "{whatsappTemplateDeleteDialog.name}" será removido da biblioteca. Campanhas que usam esse template podem impedir a exclusão.
+              </p>
+            </div>
+
+            {whatsappError ? <p className="error-text">{whatsappError}</p> : null}
+
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                disabled={whatsappBusyAction === `delete-template-${whatsappTemplateDeleteDialog.id}`}
+                onClick={() => {
+                  setWhatsappError("");
+                  setWhatsappTemplateDeleteDialog(null);
+                }}
+                type="button"
+              >
+                Cancelar
+              </button>
+              <button
+                className="danger-button"
+                disabled={whatsappBusyAction === `delete-template-${whatsappTemplateDeleteDialog.id}`}
+                onClick={confirmDeleteWhatsappTemplate}
+                type="button"
+              >
+                {whatsappBusyAction === `delete-template-${whatsappTemplateDeleteDialog.id}` ? (
                   <Loader2 className="spin" size={18} />
                 ) : (
                   <Trash2 size={18} />

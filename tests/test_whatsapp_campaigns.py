@@ -19,7 +19,11 @@ from backend.models import (
     WhatsAppMessageTemplate,
     WhatsAppSend,
 )
-from backend.schemas import WhatsAppCampaignCreate
+from backend.schemas import (
+    WhatsAppCampaignCreate,
+    WhatsAppMessageTemplateCreate,
+    WhatsAppMessageTemplateUpdate,
+)
 from backend.services import whatsapp_campaigns
 
 
@@ -135,6 +139,31 @@ def test_whatsapp_campaign_endpoint_lifecycle(
     deleted = main.delete_whatsapp_campaign(campaign.id, db=db_session, username="test-user")
     assert deleted == {"status": "ok"}
     assert main.list_whatsapp_campaigns(db=db_session, username="test-user") == []
+
+
+def test_whatsapp_template_crud_endpoints(db_session: Session) -> None:
+    created = main.create_whatsapp_template(
+        WhatsAppMessageTemplateCreate(name="Boas-vindas", content="Oi {nome_empresa}, tudo bem?"),
+        db=db_session,
+        username="test-user",
+    )
+
+    listed = main.list_whatsapp_templates(db=db_session, username="test-user")
+    assert [(template.id, template.name, template.content) for template in listed] == [
+        (created.id, "Boas-vindas", "Oi {nome_empresa}, tudo bem?")
+    ]
+
+    updated = main.update_whatsapp_template(
+        created.id,
+        WhatsAppMessageTemplateUpdate(content="Olá {lead_name}, posso te ajudar?"),
+        db=db_session,
+        username="test-user",
+    )
+    assert updated.content == "Olá {lead_name}, posso te ajudar?"
+
+    deleted = main.delete_whatsapp_template(created.id, db=db_session, username="test-user")
+    assert deleted == {"status": "ok"}
+    assert main.list_whatsapp_templates(db=db_session, username="test-user") == []
 
 
 def test_whatsapp_campaign_runner_sends_pending_messages(

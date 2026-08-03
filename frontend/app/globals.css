@@ -470,6 +470,10 @@ input:disabled {
   grid-template-columns: minmax(360px, 0.46fr) minmax(540px, 0.54fr);
 }
 
+.whatsapp-template-grid {
+  grid-template-columns: minmax(320px, 0.4fr) minmax(560px, 0.6fr);
+}
+
 .email-panel {
   display: grid;
   gap: 18px;
@@ -716,6 +720,16 @@ input:disabled {
 .template-stat-row strong,
 .template-stat-row span {
   display: block;
+}
+
+.template-text-preview {
+  display: -webkit-box;
+  max-width: 520px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 
 .stat-pair {

@@ -64,6 +64,9 @@ from backend.schemas import (
     WhatsAppInstanceCreate,
     WhatsAppInstanceRead,
     WhatsAppInstanceStatusRead,
+    WhatsAppMessageTemplateCreate,
+    WhatsAppMessageTemplateRead,
+    WhatsAppMessageTemplateUpdate,
     WhatsAppQrCodeRead,
 )
 from backend.scrapers.email_scraper import normalize_site_url
@@ -853,6 +856,80 @@ def delete_whatsapp_instance(
 
     db.delete(instance)
     db.commit()
+    return {"status": "ok"}
+
+
+@app.get("/api/whatsapp/templates", response_model=list[WhatsAppMessageTemplateRead])
+def list_whatsapp_templates(
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> list[WhatsAppMessageTemplate]:
+    _ = username
+    return list(db.scalars(select(WhatsAppMessageTemplate).order_by(desc(WhatsAppMessageTemplate.created_at))).all())
+
+
+@app.post("/api/whatsapp/templates", response_model=WhatsAppMessageTemplateRead)
+def create_whatsapp_template(
+    payload: WhatsAppMessageTemplateCreate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppMessageTemplate:
+    _ = username
+    template = WhatsAppMessageTemplate(
+        name=payload.name.strip(),
+        content=payload.content.strip(),
+    )
+    db.add(template)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um template WhatsApp com esse nome") from None
+    db.refresh(template)
+    return template
+
+
+@app.patch("/api/whatsapp/templates/{template_id}", response_model=WhatsAppMessageTemplateRead)
+def update_whatsapp_template(
+    template_id: int,
+    payload: WhatsAppMessageTemplateUpdate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppMessageTemplate:
+    _ = username
+    template = db.get(WhatsAppMessageTemplate, template_id)
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template WhatsApp não encontrado")
+
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(template, field, value.strip() if isinstance(value, str) else value)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um template WhatsApp com esse nome") from None
+    db.refresh(template)
+    return template
+
+
+@app.delete("/api/whatsapp/templates/{template_id}")
+def delete_whatsapp_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> dict[str, str]:
+    _ = username
+    template = db.get(WhatsAppMessageTemplate, template_id)
+    if not template:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template WhatsApp não encontrado")
+
+    db.delete(template)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Template WhatsApp em uso por campanha") from None
     return {"status": "ok"}
 
 
