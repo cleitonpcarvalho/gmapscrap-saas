@@ -44,7 +44,12 @@ def get_or_create_ai_settings(db: Session) -> WhatsAppAiSettings:
     if settings:
         return settings
 
-    settings = WhatsAppAiSettings(id=1, system_prompt=DEFAULT_SYSTEM_PROMPT, enabled=False)
+    settings = WhatsAppAiSettings(
+        id=1,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        services_description="",
+        enabled=False,
+    )
     db.add(settings)
     db.flush()
     return settings
@@ -175,6 +180,7 @@ def _openai_payload(
 ) -> dict[str, Any]:
     settings = get_settings()
     system_prompt = (ai_settings.system_prompt or DEFAULT_SYSTEM_PROMPT).strip()
+    services_context = _services_context(ai_settings.services_description)
     lead_context = _lead_context(conversation.lead)
     history = _conversation_history(db, conversation.id)
     tool_instruction = (
@@ -190,7 +196,7 @@ def _openai_payload(
             {
                 "role": "system",
                 "content": (
-                    f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n{tool_instruction}\n\n"
+                    f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n{services_context}\n\n{tool_instruction}\n\n"
                     f"Contexto do lead:\n{lead_context}"
                 ),
             },
@@ -235,6 +241,21 @@ def _lead_context(lead: Lead | None) -> str:
         f"Localidade: {lead.location or '-'}",
     ]
     return "\n".join(parts)
+
+
+def _services_context(services_description: str | None) -> str:
+    description = str(services_description or "").strip()
+    if not description:
+        return (
+            "Sobre a empresa/serviços: não há descrição adicional cadastrada. "
+            "Nunca negocie, prometa ou confirme valores; quando o assunto for preço, diga que os detalhes de investimento são tratados na reunião."
+        )
+
+    return (
+        f"Sobre a empresa/serviços:\n{description}\n\n"
+        "Use essas informações para contextualizar a conversa. "
+        "Nunca negocie, prometa ou confirme valores; quando o assunto for preço, diga que os detalhes de investimento são tratados na reunião."
+    )
 
 
 def _update_lead_stage_tool_schema() -> dict[str, Any]:

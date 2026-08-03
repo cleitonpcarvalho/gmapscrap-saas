@@ -299,6 +299,7 @@ type CrmLead = {
 type WhatsAppAiSettings = {
   id: number;
   system_prompt: string;
+  services_description: string;
   enabled: boolean;
   updated_at: string;
 };
@@ -463,6 +464,7 @@ const CRM_STAGES: { value: CrmStage; label: string }[] = [
 
 const defaultWhatsappAiForm = {
   system_prompt: "",
+  services_description: "",
   enabled: false
 };
 
@@ -1318,6 +1320,7 @@ export default function Home() {
     setWhatsappAiSettings(nextAiSettings);
     setWhatsappAiForm({
       system_prompt: nextAiSettings.system_prompt,
+      services_description: nextAiSettings.services_description || "",
       enabled: nextAiSettings.enabled
     });
     setCrmLeads(nextCrmLeads);
@@ -1350,7 +1353,7 @@ export default function Home() {
       setActiveView("whatsappTemplates");
     } else if (window.location.pathname === "/whatsapp/campanhas") {
       setActiveView("whatsappCampaigns");
-    } else if (window.location.pathname === "/whatsapp/crm") {
+    } else if (window.location.pathname === "/crm" || window.location.pathname === "/whatsapp/crm") {
       setActiveView("whatsappCrm");
     } else if (window.location.pathname === "/whatsapp/ia") {
       setActiveView("whatsappAi");
@@ -1517,7 +1520,7 @@ export default function Home() {
       whatsappInstances: "/whatsapp/instancias",
       whatsappTemplates: "/whatsapp/templates",
       whatsappCampaigns: "/whatsapp/campanhas",
-      whatsappCrm: "/whatsapp/crm",
+      whatsappCrm: "/crm",
       whatsappAi: "/whatsapp/ia",
       templates: "#templates",
       lists: "#listas",
@@ -2421,12 +2424,14 @@ export default function Home() {
         method: "PUT",
         body: JSON.stringify({
           system_prompt: whatsappAiForm.system_prompt,
+          services_description: whatsappAiForm.services_description,
           enabled: whatsappAiForm.enabled
         })
       });
       setWhatsappAiSettings(updatedSettings);
       setWhatsappAiForm({
         system_prompt: updatedSettings.system_prompt,
+        services_description: updatedSettings.services_description || "",
         enabled: updatedSettings.enabled
       });
       setWhatsappMessage("Configuração de IA salva.");
@@ -2700,6 +2705,14 @@ export default function Home() {
             <BarChart3 size={18} />
             Dashboard
           </button>
+          <button
+            className={`nav-item ${activeView === "whatsappCrm" ? "active" : ""}`}
+            onClick={() => switchView("whatsappCrm")}
+            type="button"
+          >
+            <Users size={18} />
+            CRM
+          </button>
 
           <div className="nav-section-label">WhatsApp</div>
           <button
@@ -2733,14 +2746,6 @@ export default function Home() {
           >
             <Megaphone size={18} />
             Campanhas
-          </button>
-          <button
-            className={`nav-item ${activeView === "whatsappCrm" ? "active" : ""}`}
-            onClick={() => switchView("whatsappCrm")}
-            type="button"
-          >
-            <Users size={18} />
-            CRM
           </button>
           <button
             className={`nav-item ${activeView === "whatsappAi" ? "active" : ""}`}
@@ -2822,7 +2827,7 @@ export default function Home() {
                               : activeView === "whatsappCampaigns"
                                 ? "Campanhas WhatsApp"
                                 : activeView === "whatsappCrm"
-                                  ? "CRM WhatsApp"
+                                  ? "CRM"
                                   : activeView === "whatsappAi"
                                     ? "IA WhatsApp"
                                     : activeView === "templates"
@@ -3863,7 +3868,7 @@ export default function Home() {
               <div className={`notice ${whatsappError ? "danger" : "success"}`}>{whatsappError || whatsappMessage}</div>
             )}
 
-            <section className="crm-board" aria-label="Pipeline de CRM WhatsApp">
+            <section className="crm-board" aria-label="Pipeline de CRM">
               {CRM_STAGES.map((stage) => {
                 const stageLeads = crmLeadsByStage[stage.value] || [];
                 return (
@@ -3981,6 +3986,16 @@ export default function Home() {
                   type="checkbox"
                 />
                 Ativar resposta automática
+              </label>
+
+              <label>
+                Sobre seus serviços
+                <textarea
+                  rows={8}
+                  value={whatsappAiForm.services_description}
+                  onChange={(event) => setWhatsappAiForm({ ...whatsappAiForm, services_description: event.target.value })}
+                  placeholder="Descreva o que você oferece, diferenciais e público-alvo. Não inclua valores."
+                />
               </label>
 
               <label>

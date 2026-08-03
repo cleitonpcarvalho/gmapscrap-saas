@@ -106,8 +106,20 @@ def seed_lead_and_instance(db: Session, *, phone: str = "(11) 99999-0000") -> di
     return {"lead_id": lead.id, "instance_id": instance.id}
 
 
-def enable_ai(db: Session, *, system_prompt: str = "Atenda leads de forma breve.") -> None:
-    db.add(WhatsAppAiSettings(id=1, system_prompt=system_prompt, enabled=True))
+def enable_ai(
+    db: Session,
+    *,
+    system_prompt: str = "Atenda leads de forma breve.",
+    services_description: str = "",
+) -> None:
+    db.add(
+        WhatsAppAiSettings(
+            id=1,
+            system_prompt=system_prompt,
+            services_description=services_description,
+            enabled=True,
+        )
+    )
     db.commit()
 
 
@@ -152,7 +164,10 @@ def test_whatsapp_ai_generates_and_sends_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seed_lead_and_instance(db_session)
-    enable_ai(db_session)
+    enable_ai(
+        db_session,
+        services_description="Automatizamos atendimento para clínicas e operações locais.",
+    )
     captured: dict[str, Any] = {}
 
     def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
@@ -176,7 +191,10 @@ def test_whatsapp_ai_generates_and_sends_reply(
         "phone": "5511999990000",
         "text": "Claro! Posso te ajudar com isso por aqui.",
     }
+    system_content = captured["openai_payload"]["input"][0]["content"]
     assert captured["openai_payload"]["tools"][0]["name"] == "update_lead_stage"
+    assert "Automatizamos atendimento para clínicas e operações locais." in system_content
+    assert "detalhes de investimento são tratados na reunião" in system_content
     assert len(messages) == 2
     assert messages[0].direction == "inbound"
     assert messages[1].direction == "outbound"

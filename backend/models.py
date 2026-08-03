@@ -437,6 +437,7 @@ class WhatsAppAiSettings(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     system_prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    services_description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

@@ -1017,6 +1017,13 @@ def update_whatsapp_ai_settings(
     if "system_prompt" in payload_data:
         system_prompt = payload_data["system_prompt"]
         settings_row.system_prompt = system_prompt.strip() if isinstance(system_prompt, str) and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
+    if "services_description" in payload_data:
+        services_description = payload_data["services_description"]
+        settings_row.services_description = (
+            services_description.strip()
+            if isinstance(services_description, str) and services_description.strip()
+            else ""
+        )
     if "enabled" in payload_data and payload_data["enabled"] is not None:
         settings_row.enabled = bool(payload_data["enabled"])
 

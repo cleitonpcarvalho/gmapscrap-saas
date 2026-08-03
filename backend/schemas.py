@@ -277,12 +277,14 @@ class CrmLeadRead(BaseModel):
 
 class WhatsAppAiSettingsUpdate(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=8000)
+    services_description: str | None = Field(default=None, max_length=12000)
     enabled: bool | None = None
 
 
 class WhatsAppAiSettingsRead(BaseModel):
     id: int
     system_prompt: str
+    services_description: str
     enabled: bool
     updated_at: datetime
 
