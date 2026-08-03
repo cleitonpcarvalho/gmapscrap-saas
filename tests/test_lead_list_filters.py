@@ -9,6 +9,7 @@ from backend import main
 from backend.database import Base
 from backend.models import Lead, SearchRun
 from backend.schemas import LeadListCreate, LeadListUpdate
+from backend.scrapers.email_scraper import EmailResult
 from backend.scrapers.maps_scraper import MapLead
 from backend.services import jobs, whatsapp_campaigns
 from backend.services.whatsapp_validation import WhatsAppValidationResult
@@ -149,3 +150,88 @@ def test_scraping_marks_saved_lead_as_whatsapp_validated(
     assert saved is True
     lead = db_session.query(Lead).one()
     assert lead.whatsapp_validated is True
+
+
+def test_scraping_schedules_site_insights_when_enabled(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=False,
+        enrich_site_insights=True,
+        status="running",
+        message="Buscando.",
+    )
+    db_session.add(run)
+    db_session.commit()
+    scheduled: list[int] = []
+
+    monkeypatch.setattr(jobs, "extract_email_from_site", lambda website: EmailResult(email="contato@example.com"))
+    monkeypatch.setattr(jobs, "submit_site_insights_job", lambda lead_id: scheduled.append(lead_id))
+
+    saved = jobs.save_scraped_lead(
+        db_session,
+        run,
+        MapLead(
+            name="Empresa Com Site",
+            address="Av. Paulista, 1000 - São Paulo, SP",
+            phone="(11) 99999-0000",
+            website="https://empresa.example",
+        ),
+    )
+
+    assert saved is True
+    lead = db_session.query(Lead).one()
+    assert scheduled == [lead.id]
+    assert lead.site_insights is None
+
+
+def test_site_insights_job_updates_lead_without_breaking_search(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=False,
+        enrich_site_insights=True,
+        status="running",
+        message="Buscando.",
+    )
+    lead = Lead(
+        search_run=run,
+        name="Empresa Com Insight",
+        address="Av. Paulista, 1000 - São Paulo, SP",
+        phone="(11) 99999-0000",
+        website="https://insight.example",
+        email="contato@insight.example",
+    )
+    db_session.add(lead)
+    db_session.commit()
+
+    class NoCloseSessionProxy:
+        def __getattr__(self, name: str):
+            return getattr(db_session, name)
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(jobs, "SessionLocal", NoCloseSessionProxy)
+    monkeypatch.setattr(
+        jobs,
+        "extract_site_insights",
+        lambda website, **kwargs: "Empresa atua em marketing e pode melhorar CTAs do site.",
+    )
+
+    jobs._run_site_insights_job(lead.id)
+
+    db_session.refresh(lead)
+    assert lead.site_insights == "Empresa atua em marketing e pode melhorar CTAs do site."

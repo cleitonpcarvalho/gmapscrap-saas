@@ -61,6 +61,7 @@ type SearchRun = {
   max_results: boolean;
   skip_without_website: boolean;
   validate_whatsapp: boolean;
+  enrich_site_insights: boolean;
   status: "queued" | "running" | "paused" | "completed" | "failed";
   message: string;
   scanned_count: number;
@@ -82,6 +83,7 @@ type Lead = {
   phone: string | null;
   website: string | null;
   email: string;
+  site_insights: string | null;
   whatsapp_validated: boolean | null;
   validate_whatsapp: boolean;
   whatsapp_url: string;
@@ -458,7 +460,7 @@ const defaultWhatsappTemplateForm = {
   content: ""
 };
 
-const WHATSAPP_VARIABLES = ["{nome_empresa}", "{lead_name}", "{website}", "{phone}", "{niche}", "{location}"];
+const WHATSAPP_VARIABLES = ["{nome_empresa}", "{website}", "{phone}", "{niche}", "{location}"];
 
 const CRM_STAGES: { value: CrmStage; label: string }[] = [
   { value: "new", label: "Novo" },
@@ -1001,6 +1003,7 @@ export default function Home() {
   const [maxResults, setMaxResults] = useState(false);
   const [skipWithoutWebsite, setSkipWithoutWebsite] = useState(true);
   const [validateWhatsapp, setValidateWhatsapp] = useState(false);
+  const [enrichSiteInsights, setEnrichSiteInsights] = useState(false);
   const [formError, setFormError] = useState("");
   const [runError, setRunError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -2502,7 +2505,8 @@ export default function Home() {
           quantity: maxResults ? null : Number(quantity),
           max_results: maxResults,
           skip_without_website: skipWithoutWebsite,
-          validate_whatsapp: validateWhatsapp
+          validate_whatsapp: validateWhatsapp,
+          enrich_site_insights: enrichSiteInsights
         })
       });
       setRunPage(1);
@@ -2991,6 +2995,14 @@ export default function Home() {
                     />
                     Validar WhatsApp
                   </label>
+                  <label className="checkbox-label">
+                    <input
+                      checked={enrichSiteInsights}
+                      onChange={(event) => setEnrichSiteInsights(event.target.checked)}
+                      type="checkbox"
+                    />
+                    Gerar insights do site
+                  </label>
                 </div>
                 {formError ? <p className="error-text">{formError}</p> : null}
                 <button className="primary-button" disabled={submitting} type="submit">
@@ -3239,17 +3251,18 @@ export default function Home() {
                     <th>Nicho</th>
                     <th>Localidade</th>
                     <th>Endereço</th>
-                    <th>Telefone</th>
-                    <th>Site</th>
-                    <th>E-mail</th>
-                  </tr>
-                </thead>
+	                    <th>Telefone</th>
+	                    <th>Site</th>
+	                    <th>Insights site</th>
+	                    <th>E-mail</th>
+	                  </tr>
+	                </thead>
                 <tbody>
                   {filteredLeads.length === 0 ? (
                     <tr>
-                      <td className="empty-cell" colSpan={9}>
-                        <SkipForward size={18} />
-                        Nenhum lead encontrado para os filtros.
+	                      <td className="empty-cell" colSpan={10}>
+	                        <SkipForward size={18} />
+	                        Nenhum lead encontrado para os filtros.
                       </td>
                     </tr>
                   ) : null}
@@ -3295,10 +3308,13 @@ export default function Home() {
                       <td>
                         <PhoneCell lead={lead} />
                       </td>
-                      <td>
-                        <WebsiteCell website={lead.website} />
-                      </td>
-                      <td>{lead.email || "-"}</td>
+	                      <td>
+	                        <WebsiteCell website={lead.website} />
+	                      </td>
+	                      <td>
+	                        <span className="template-text-preview">{lead.site_insights || "-"}</span>
+	                      </td>
+	                      <td>{lead.email || "-"}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -129,6 +129,8 @@ class MainWindow(QMainWindow):
         self.skip_without_website_checkbox.setToolTip("Quando desmarcado, empresas sem site também serão salvas.")
         self.validate_whatsapp_checkbox = QCheckBox("Validar WhatsApp")
         self.validate_whatsapp_checkbox.setToolTip("Quando marcado, só salva leads cujo telefone for confirmado no WhatsApp.")
+        self.enrich_site_insights_checkbox = QCheckBox("Gerar insights do site")
+        self.enrich_site_insights_checkbox.setToolTip("Quando marcado, a API analisa o site salvo com IA em background.")
 
         form_layout.addWidget(self._field("Nicho", self.niche_input))
         form_layout.addWidget(self._field("Cidade, estado ou país", self.location_input))
@@ -151,6 +153,7 @@ class MainWindow(QMainWindow):
         options_layout.setSpacing(10)
         options_layout.addWidget(self.skip_without_website_checkbox)
         options_layout.addWidget(self.validate_whatsapp_checkbox)
+        options_layout.addWidget(self.enrich_site_insights_checkbox)
         form_layout.addWidget(options_box)
 
         button_row = QHBoxLayout()
@@ -489,6 +492,7 @@ class MainWindow(QMainWindow):
         quantity = None if max_results else self.quantity_input.value()
         skip_without_website = self.skip_without_website_checkbox.isChecked()
         validate_whatsapp = self.validate_whatsapp_checkbox.isChecked()
+        enrich_site_insights = self.enrich_site_insights_checkbox.isChecked()
 
         if len(niche) < 2 or len(location) < 2:
             self._append_log("Informe nicho e cidade antes de iniciar.")
@@ -498,7 +502,15 @@ class MainWindow(QMainWindow):
         self._reset_current()
         self.current_title.setText(f"{niche} · {location}")
         self._set_status("Rodando", "#fff4d7", "#916400")
-        self._start_worker(niche, location, quantity, max_results, skip_without_website, validate_whatsapp)
+        self._start_worker(
+            niche,
+            location,
+            quantity,
+            max_results,
+            skip_without_website,
+            validate_whatsapp,
+            enrich_site_insights,
+        )
 
     def _start_worker(
         self,
@@ -508,6 +520,7 @@ class MainWindow(QMainWindow):
         max_results: bool,
         skip_without_website: bool,
         validate_whatsapp: bool,
+        enrich_site_insights: bool,
         *,
         run_id: int | None = None,
         start_index: int = 1,
@@ -520,6 +533,7 @@ class MainWindow(QMainWindow):
             max_results,
             skip_without_website=skip_without_website,
             validate_whatsapp=validate_whatsapp,
+            enrich_site_insights=enrich_site_insights,
             run_id=run_id,
             start_index=start_index,
         )
@@ -557,6 +571,7 @@ class MainWindow(QMainWindow):
         max_results = bool(self.current_run.get("max_results"))
         skip_without_website = bool(self.current_run.get("skip_without_website", True))
         validate_whatsapp = bool(self.current_run.get("validate_whatsapp", False))
+        enrich_site_insights = bool(self.current_run.get("enrich_site_insights", False))
         target_quantity = self.current_run.get("target_quantity")
         quantity = None if max_results else int(target_quantity or self.quantity_input.value())
         start_index = int(self.current_run.get("scanned_count") or 0) + 1
@@ -572,6 +587,7 @@ class MainWindow(QMainWindow):
             max_results,
             skip_without_website,
             validate_whatsapp,
+            enrich_site_insights,
             run_id=run_id,
             start_index=start_index,
         )
@@ -602,6 +618,7 @@ class MainWindow(QMainWindow):
         self.max_checkbox.setEnabled(fields_enabled)
         self.skip_without_website_checkbox.setEnabled(fields_enabled)
         self.validate_whatsapp_checkbox.setEnabled(fields_enabled)
+        self.enrich_site_insights_checkbox.setEnabled(fields_enabled)
 
     def _reset_current(self) -> None:
         self.current_run = None

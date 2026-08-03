@@ -167,9 +167,13 @@ Objetivo da campanha:
 Regras:
 - Responda em português do Brasil.
 - Escreva uma mensagem curta, natural e genuína para WhatsApp.
-- Deve parecer uma abordagem pesquisada e humana, não um disparo em massa.
+- Deve parecer uma abordagem pesquisada e humana, não um disparo em massa nem um script de vendas direto.
 - Use no máximo 4 frases curtas.
-- Use variáveis quando fizer sentido: {{nome_empresa}}, {{lead_name}}, {{website}}, {{phone}}, {{niche}}, {{location}}.
+- Use variáveis quando fizer sentido: {{nome_empresa}}, {{website}}, {{phone}}, {{niche}}, {{location}}.
+- Não use {{lead_name}} na mensagem gerada, pois não há nome de contato pessoal no scraping.
+- Não abra a mensagem como se estivesse chamando uma pessoa pelo nome da empresa. Evite aberturas como "Oi, {{nome_empresa}}!" ou "Olá, {{nome_empresa}}".
+- Prefira uma abertura contextual, citando nicho/localização/site de forma específica quando fizer sentido.
+- Evite frases robóticas ou comerciais demais, como "posso criar uma prévia sem compromisso", "tenho uma oferta especial" ou "garanta agora".
 - Use chaves simples, por exemplo {{nome_empresa}}, nunca {{{{nome_empresa}}}}.
 - Não invente nome, cidade, site, nicho ou telefone fora das variáveis.
 - Pode mencionar a oferta/objetivo, mas não trate de valores, preço, pagamento ou negociação na primeira mensagem.

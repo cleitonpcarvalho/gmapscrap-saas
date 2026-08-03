@@ -25,6 +25,7 @@ def _lead_for_run(validate_whatsapp: bool) -> Lead:
         phone="(11) 99577-9865",
         website="https://example.com",
         email="contato@example.com",
+        site_insights="Empresa local com site simples e oportunidade de melhorar conversão.",
         created_at=datetime.now(timezone.utc),
     )
 
@@ -34,6 +35,7 @@ def test_lead_read_includes_whatsapp_url_when_run_validated_whatsapp() -> None:
 
     assert result.validate_whatsapp is True
     assert result.whatsapp_url == "https://wa.me/5511995779865"
+    assert result.site_insights == "Empresa local com site simples e oportunidade de melhorar conversão."
 
 
 def test_lead_read_omits_whatsapp_url_when_run_did_not_validate_whatsapp() -> None:

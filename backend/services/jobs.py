@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from threading import Lock
+import logging
 import re
 import time
 
@@ -15,12 +16,15 @@ from backend.schemas import SearchCreate
 from backend.scrapers.email_scraper import extract_email_from_site, normalize_site_url
 from backend.scrapers.maps_scraper import MapLead, ScrapeEvent, scrape_google_maps
 from backend.services.email_validation import validate_email_address
+from backend.services.site_insights import extract_site_insights
 from backend.services.whatsapp_validation import validate_whatsapp_number
 
 
 executor = ThreadPoolExecutor(max_workers=2)
+site_insights_executor = ThreadPoolExecutor(max_workers=3)
 _active_run_ids: set[int] = set()
 _active_run_ids_lock = Lock()
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -35,6 +39,7 @@ def create_search_run(db: Session, payload: SearchCreate) -> SearchRun:
         max_results=payload.max_results,
         skip_without_website=payload.skip_without_website,
         validate_whatsapp=payload.validate_whatsapp,
+        enrich_site_insights=payload.enrich_site_insights,
         status="queued",
         message="Busca na fila",
     )
@@ -163,7 +168,37 @@ def _save_row(db: Session, run: SearchRun, lead: MapLead, website: str | None, e
         return False
 
     db.refresh(row)
+    if run.enrich_site_insights and row.website:
+        submit_site_insights_job(row.id)
     return True
+
+
+def submit_site_insights_job(lead_id: int) -> None:
+    site_insights_executor.submit(_run_site_insights_job, lead_id)
+
+
+def _run_site_insights_job(lead_id: int) -> None:
+    db = SessionLocal()
+    try:
+        lead = db.get(Lead, lead_id)
+        if not lead or not lead.website:
+            return
+
+        insights = extract_site_insights(
+            lead.website,
+            business_name=lead.name,
+            niche=lead.niche,
+            location=lead.location,
+        )
+        if not insights:
+            return
+
+        lead.site_insights = insights
+        db.commit()
+    except Exception:
+        logger.exception("Falha ao enriquecer site do lead %s", lead_id)
+    finally:
+        db.close()
 
 
 def _save_lead(db: Session, run: SearchRun, lead: MapLead) -> bool:

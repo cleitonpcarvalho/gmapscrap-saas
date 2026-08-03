@@ -447,6 +447,7 @@ def create_desktop_search(
         max_results=payload.max_results,
         skip_without_website=payload.skip_without_website,
         validate_whatsapp=payload.validate_whatsapp,
+        enrich_site_insights=payload.enrich_site_insights,
         status="running",
         message="Busca local iniciada no aplicativo desktop.",
         started_at=utc_now(),
@@ -1723,11 +1724,20 @@ def export_leads(
     _ = username
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Nicho", "Localidade", "Nome", "Endereço", "Telefone", "Site", "Email"])
+    writer.writerow(["Nicho", "Localidade", "Nome", "Endereço", "Telefone", "Site", "Email", "Insights do site"])
 
     stmt = select(Lead).options(selectinload(Lead.search_run)).order_by(desc(Lead.created_at))
     for lead in db.scalars(stmt).all():
-        writer.writerow([lead.niche, lead.location, lead.name, lead.address, lead.phone, lead.website or "", lead.email])
+        writer.writerow([
+            lead.niche,
+            lead.location,
+            lead.name,
+            lead.address,
+            lead.phone,
+            lead.website or "",
+            lead.email,
+            lead.site_insights or "",
+        ])
 
     output.seek(0)
     headers = {"Content-Disposition": "attachment; filename=leads.csv"}

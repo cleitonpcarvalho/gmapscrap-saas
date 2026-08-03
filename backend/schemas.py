@@ -28,6 +28,7 @@ class SearchCreate(BaseModel):
     max_results: bool = False
     skip_without_website: bool = True
     validate_whatsapp: bool = False
+    enrich_site_insights: bool = False
 
     @field_validator("niche", "location", mode="before")
     @classmethod
@@ -51,6 +52,7 @@ class LeadRead(BaseModel):
     phone: str
     website: str | None = None
     email: str
+    site_insights: str | None = None
     whatsapp_validated: bool | None = None
     validate_whatsapp: bool = False
     whatsapp_url: str = ""
@@ -105,6 +107,7 @@ class SearchRunRead(BaseModel):
     max_results: bool
     skip_without_website: bool
     validate_whatsapp: bool
+    enrich_site_insights: bool
     status: str
     message: str
     scanned_count: int

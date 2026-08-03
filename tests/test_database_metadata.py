@@ -25,7 +25,10 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     }.issubset(tables)
 
     lead_columns = {column["name"] for column in inspector.get_columns("leads")}
+    search_run_columns = {column["name"] for column in inspector.get_columns("search_runs")}
     lead_list_columns = {column["name"] for column in inspector.get_columns("lead_lists")}
 
     assert "whatsapp_validated" in lead_columns
+    assert "site_insights" in lead_columns
+    assert "enrich_site_insights" in search_run_columns
     assert "only_whatsapp_validated" in lead_list_columns

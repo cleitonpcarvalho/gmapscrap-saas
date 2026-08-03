@@ -183,7 +183,11 @@ def test_whatsapp_template_generate_endpoint_uses_openai(
         captured["payload"] = kwargs["json"]
         return FakeEvolutionResponse(
             200,
-            {"output_text": '{"content":"Oi {nome_empresa}, vi que vocês atuam em {niche}. Posso te mostrar uma ideia simples para melhorar seu site?"}'},
+            {
+                "output_text": (
+                    '{"content":"Vi que a {nome_empresa} atua com {niche} em {location} e fiquei com uma ideia simples para deixar o site mais claro para quem chega pelo Google. Faz sentido eu te mandar por aqui?"}'
+                )
+            },
         )
 
     monkeypatch.setattr("backend.services.ai_templates.requests.post", fake_openai_post)
@@ -194,12 +198,14 @@ def test_whatsapp_template_generate_endpoint_uses_openai(
     )
 
     assert response.content == (
-        "Oi {nome_empresa}, vi que vocês atuam em {niche}. "
-        "Posso te mostrar uma ideia simples para melhorar seu site?"
+        "Vi que a {nome_empresa} atua com {niche} em {location} e fiquei com uma ideia simples para deixar o site mais claro para quem chega pelo Google. "
+        "Faz sentido eu te mandar por aqui?"
     )
     assert captured["payload"]["model"] == "gpt-test"
     assert captured["payload"]["text"]["format"]["name"] == "whatsapp_template_generation"
     assert "sem fechar detalhes" in captured["payload"]["input"][1]["content"]
+    assert "Não use {lead_name}" in captured["payload"]["input"][1]["content"]
+    assert 'Evite aberturas como "Oi, {nome_empresa}!"' in captured["payload"]["input"][1]["content"]
 
 
 def test_whatsapp_campaign_runner_sends_pending_messages(

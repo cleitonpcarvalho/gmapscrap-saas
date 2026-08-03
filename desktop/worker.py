@@ -30,6 +30,7 @@ class SearchWorker(QObject):
         max_results: bool,
         skip_without_website: bool = True,
         validate_whatsapp: bool = False,
+        enrich_site_insights: bool = False,
         run_id: int | None = None,
         start_index: int = 1,
     ):
@@ -40,6 +41,7 @@ class SearchWorker(QObject):
         self.max_results = max_results
         self.skip_without_website = skip_without_website
         self.validate_whatsapp = validate_whatsapp
+        self.enrich_site_insights = enrich_site_insights
         self.resume_run_id = run_id
         self.start_index = max(1, start_index)
         self._stop_requested = False
@@ -78,6 +80,7 @@ class SearchWorker(QObject):
                     self.max_results,
                     self.skip_without_website,
                     self.validate_whatsapp,
+                    self.enrich_site_insights,
                 )
                 run_id = int(run["id"])
 

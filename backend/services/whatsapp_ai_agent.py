@@ -237,6 +237,7 @@ def _lead_context(lead: Lead | None) -> str:
         f"Empresa: {lead.name}",
         f"Telefone: {lead.phone or '-'}",
         f"Site: {lead.website or '-'}",
+        f"Insights do site: {lead.site_insights or '-'}",
         f"Nicho: {lead.niche or '-'}",
         f"Localidade: {lead.location or '-'}",
     ]

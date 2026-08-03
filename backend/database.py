@@ -203,6 +203,7 @@ def _ensure_search_run_columns() -> None:
     migrations = {
         "skip_without_website": "ALTER TABLE search_runs ADD COLUMN skip_without_website BOOLEAN NOT NULL DEFAULT TRUE",
         "validate_whatsapp": "ALTER TABLE search_runs ADD COLUMN validate_whatsapp BOOLEAN NOT NULL DEFAULT FALSE",
+        "enrich_site_insights": "ALTER TABLE search_runs ADD COLUMN enrich_site_insights BOOLEAN NOT NULL DEFAULT FALSE",
     }
 
     with engine.begin() as connection:
@@ -234,6 +235,8 @@ def _ensure_lead_columns() -> None:
                         "AND leads.whatsapp_validated IS NULL"
                     )
                 )
+            if "site_insights" not in existing_columns:
+                connection.execute(text("ALTER TABLE leads ADD COLUMN site_insights TEXT"))
 
             website_column = next((column for column in inspector.get_columns("leads") if column["name"] == "website"), None)
             if website_column and not website_column.get("nullable", True):
