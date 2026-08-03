@@ -1,3 +1,5 @@
+import json
+import logging
 import random
 import re
 import time
@@ -6,14 +8,17 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from threading import Lock, Thread
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import requests
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from backend.config import get_settings
 from backend.database import SessionLocal
 from backend.models import (
     Lead,
     LeadList,
     SearchRun,
+    WhatsAppAiSettings,
     WhatsAppCampaign,
     WhatsAppCampaignTemplate,
     WhatsAppInstance,
@@ -24,6 +29,7 @@ from backend.services.whatsapp_providers.evolution import EvolutionProvider
 from backend.services.whatsapp_validation import normalize_phone_e164
 
 
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 campaign_executor = ThreadPoolExecutor(max_workers=1)
 _active_campaign_ids: set[int] = set()
 _active_campaign_ids_lock = Lock()
@@ -32,6 +38,9 @@ _scheduler_lock = Lock()
 VARIABLE_PATTERN = re.compile(r"{\s*([a-zA-Z0-9_]+)\s*}")
 LIST_FILTER_SEPARATOR = "||"
 SUCCESS_STATUSES = ("sent", "delivered", "read")
+MESSAGE_MODE_TEMPLATE = "template"
+MESSAGE_MODE_AI_PER_LEAD = "ai_per_lead"
+logger = logging.getLogger(__name__)
 
 
 def _now() -> datetime:
@@ -151,6 +160,135 @@ def render_message(template: WhatsAppMessageTemplate, lead: Lead) -> str:
     return VARIABLE_PATTERN.sub(replace, template.content or "")
 
 
+def _ai_per_lead_json_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["content"],
+        "properties": {
+            "content": {"type": "string"},
+        },
+    }
+
+
+def _extract_output_text(response_payload: dict) -> str:
+    if response_payload.get("output_text"):
+        return str(response_payload["output_text"]).strip()
+
+    chunks: list[str] = []
+    for item in response_payload.get("output", []):
+        if not isinstance(item, dict):
+            continue
+        content_items = item.get("content") if isinstance(item.get("content"), list) else []
+        for content in content_items:
+            if not isinstance(content, dict):
+                continue
+            if content.get("type") in {"output_text", "text"} and content.get("text"):
+                chunks.append(str(content["text"]))
+    return "\n".join(chunks).strip()
+
+
+def _services_description_for_campaign(db: Session) -> str:
+    ai_settings = db.get(WhatsAppAiSettings, 1)
+    return (ai_settings.services_description or "").strip() if ai_settings else ""
+
+
+def _lead_detail(value: str | None) -> str:
+    return str(value or "").strip() or "-"
+
+
+def _ai_per_lead_prompt(campaign: WhatsAppCampaign, lead: Lead, services_description: str) -> str:
+    return f"""
+Gere uma mensagem individual de abordagem inicial para WhatsApp.
+
+Objetivo da campanha:
+{campaign.objective or "-"}
+
+Sobre meus serviços:
+{services_description or "-"}
+
+Dados do lead:
+- Empresa: {_lead_detail(lead.name)}
+- Nicho: {_lead_detail(lead.niche)}
+- Localidade: {_lead_detail(lead.location)}
+- Site: {_lead_detail(lead.website)}
+- Telefone: {_lead_detail(lead.phone)}
+- Insights do site/negócio: {_lead_detail(lead.site_insights)}
+
+Regras:
+- Responda em português do Brasil.
+- Gere o texto final da mensagem; não use variáveis de template.
+- Comece com uma saudação breve e natural, como "Oi, tudo bem?", sem chamar a pessoa pelo nome da empresa.
+- Use no máximo 4 frases curtas.
+- Mencione algo específico do lead. Se houver insights do site/negócio, use um detalhe concreto desses insights.
+- Se os insights estiverem vazios, use apenas empresa, nicho, localização ou site; não invente dores, problemas, tecnologias, nome de pessoa ou dados do site.
+- Preserve o gancho específico do objetivo. Se mencionar desenvolvimento gratuito, condição especial ou "paga só se gostar", transforme isso em uma frase natural, como "desenvolvimento sem custo inicial" e "só segue se gostar/fizer sentido".
+- Não negocie valores, preço fechado, contrato ou detalhes de pagamento na primeira mensagem.
+- Não use frases robóticas ou comerciais demais, como "oferta imperdível", "garanta agora" ou "posso criar uma prévia sem compromisso".
+- Não prometa resultado garantido.
+- Não mencione scraping, automação de disparo, base de leads ou Google Maps.
+- Não use markdown, título, assunto, assinatura longa, listas ou JSON no conteúdo.
+- Retorne somente JSON compatível com o schema.
+"""
+
+
+def generate_ai_message_for_lead(db: Session, campaign: WhatsAppCampaign, lead: Lead) -> str:
+    settings = get_settings()
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY não está configurada no backend.")
+
+    services_description = _services_description_for_campaign(db)
+    request_payload = {
+        "model": settings.openai_model,
+        "input": [
+            {
+                "role": "system",
+                "content": (
+                    "Você escreve mensagens B2B curtas e individuais para WhatsApp em JSON estruturado. "
+                    "A mensagem deve soar humana, pesquisada e respeitosa, usando dados reais do lead sem inventar."
+                ),
+            },
+            {"role": "user", "content": _ai_per_lead_prompt(campaign, lead, services_description)},
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "whatsapp_campaign_message_generation",
+                "strict": True,
+                "schema": _ai_per_lead_json_schema(),
+            }
+        },
+        "max_output_tokens": 350,
+    }
+
+    response = requests.post(
+        OPENAI_RESPONSES_URL,
+        headers={
+            "Authorization": f"Bearer {settings.openai_api_key}",
+            "Content-Type": "application/json",
+        },
+        json=request_payload,
+        timeout=60,
+    )
+    if response.status_code >= 400:
+        detail = response.text[:600]
+        raise RuntimeError(f"OpenAI retornou erro {response.status_code}: {detail}")
+
+    output_text = _extract_output_text(response.json())
+    if not output_text:
+        raise RuntimeError("A OpenAI não retornou conteúdo para o lead.")
+
+    try:
+        generated = json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("A OpenAI retornou um JSON inválido para o lead.") from exc
+
+    content = str(generated.get("content") or "").strip().strip('"')
+    if not content:
+        raise RuntimeError("A OpenAI retornou uma mensagem vazia para o lead.")
+    return content
+
+
 def _choose_template(campaign: WhatsAppCampaign) -> WhatsAppCampaignTemplate:
     choices = campaign.templates
     weights = [max(1, item.weight) for item in choices]
@@ -175,6 +313,13 @@ def ensure_campaign_queue(db: Session, campaign: WhatsAppCampaign) -> None:
         db.commit()
         return
 
+    if campaign.message_mode == MESSAGE_MODE_TEMPLATE and not campaign.templates:
+        campaign.status = "paused"
+        campaign.error = "Template de mensagem não configurado."
+        campaign.message = "Campanha pausada."
+        db.commit()
+        return
+
     queued = 0
     leads = list(db.scalars(lead_query_for_list(lead_list)).all())
     for lead in leads:
@@ -182,12 +327,12 @@ def ensure_campaign_queue(db: Session, campaign: WhatsAppCampaign) -> None:
         if not recipient_phone:
             continue
 
-        campaign_template = _choose_template(campaign)
+        campaign_template = _choose_template(campaign) if campaign.message_mode == MESSAGE_MODE_TEMPLATE else None
         db.add(
             WhatsAppSend(
                 campaign_id=campaign.id,
                 lead_id=lead.id,
-                template_id=campaign_template.template_id,
+                template_id=campaign_template.template_id if campaign_template else None,
                 recipient_phone=recipient_phone,
                 status="pending",
             )
@@ -353,6 +498,20 @@ def _instance_provider_id(instance: WhatsAppInstance | None) -> str:
     return (instance.evolution_instance_name or instance.name or "").strip()
 
 
+def _message_text_for_send(db: Session, campaign: WhatsAppCampaign, send: WhatsAppSend) -> str:
+    if not send.lead:
+        raise RuntimeError("Lead não encontrado para este envio.")
+
+    if campaign.message_mode == MESSAGE_MODE_AI_PER_LEAD:
+        generated_text = generate_ai_message_for_lead(db, campaign, send.lead)
+        send.generated_content = generated_text
+        return generated_text
+
+    if not send.template:
+        raise RuntimeError("Template de mensagem não encontrado para este envio.")
+    return render_message(send.template, send.lead)
+
+
 def run_campaign(campaign_id: int) -> None:
     db = SessionLocal()
 
@@ -419,7 +578,7 @@ def run_campaign(campaign_id: int) -> None:
                 continue
 
             try:
-                rendered_text = render_message(send.template, send.lead)
+                rendered_text = _message_text_for_send(db, campaign, send)
                 response = EvolutionProvider().send_text_message(
                     provider_instance_id,
                     send.recipient_phone,
@@ -431,6 +590,7 @@ def run_campaign(campaign_id: int) -> None:
                 send.error = None
                 campaign.message = f"Enviado para {send.recipient_phone}."
             except Exception as exc:
+                logger.exception("Falha no envio WhatsApp da campanha %s para o lead %s", campaign.id, send.lead_id)
                 send.status = "failed"
                 send.failed_at = _now()
                 send.error = str(exc)

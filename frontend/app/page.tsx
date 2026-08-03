@@ -253,10 +253,13 @@ type WhatsAppTemplateGenerateResponse = {
   content: string;
 };
 
+type WhatsAppMessageMode = "template" | "ai_per_lead";
+
 type WhatsAppCampaign = {
   id: number;
   name: string;
   objective: string;
+  message_mode: WhatsAppMessageMode;
   list_id: number;
   list_name: string;
   instance_id: number;
@@ -317,6 +320,7 @@ type WhatsAppInstanceFormErrors = {
 
 type WhatsAppCampaignFormErrors = {
   name?: string;
+  objective?: string;
   list_id?: string;
   instance_id?: string;
   template_id?: string;
@@ -442,6 +446,7 @@ const defaultWhatsappInstanceForm = {
 const defaultWhatsappCampaignForm = {
   name: "",
   objective: "",
+  message_mode: "template" as WhatsAppMessageMode,
   list_id: "",
   instance_id: "",
   template_id: "",
@@ -1455,11 +1460,13 @@ export default function Home() {
             ? String(connectedWhatsappInstances[0].id)
             : "";
       const templateId =
-        current.template_id && whatsappTemplates.some((template) => String(template.id) === current.template_id)
-          ? current.template_id
-          : whatsappTemplates[0]?.id
-            ? String(whatsappTemplates[0].id)
-            : "";
+        current.message_mode === "ai_per_lead"
+          ? ""
+          : current.template_id && whatsappTemplates.some((template) => String(template.id) === current.template_id)
+            ? current.template_id
+            : whatsappTemplates[0]?.id
+              ? String(whatsappTemplates[0].id)
+              : "";
 
       if (listId === current.list_id && instanceId === current.instance_id && templateId === current.template_id) return current;
       return { ...current, list_id: listId, instance_id: instanceId, template_id: templateId };
@@ -2288,13 +2295,16 @@ export default function Home() {
     if (!whatsappCampaignForm.name.trim()) {
       errors.name = "Informe o nome da campanha.";
     }
+    if (whatsappCampaignForm.message_mode === "ai_per_lead" && !whatsappCampaignForm.objective.trim()) {
+      errors.objective = "Informe o objetivo para gerar mensagens individuais com IA.";
+    }
     if (!whatsappCampaignForm.list_id) {
       errors.list_id = "Escolha uma lista de leads.";
     }
     if (!whatsappCampaignForm.instance_id) {
       errors.instance_id = "Escolha uma instância conectada.";
     }
-    if (!whatsappCampaignForm.template_id) {
+    if (whatsappCampaignForm.message_mode === "template" && !whatsappCampaignForm.template_id) {
       errors.template_id = "Escolha um template de mensagem.";
     }
     if (!Number.isFinite(minDelay) || minDelay < 1) {
@@ -2324,6 +2334,8 @@ export default function Home() {
     }
 
     const { template_id, ...campaignPayload } = whatsappCampaignForm;
+    const templates =
+      whatsappCampaignForm.message_mode === "template" ? [{ template_id: Number(template_id), weight: 1 }] : [];
     setWhatsappBusyAction("create-campaign");
 
     try {
@@ -2333,7 +2345,7 @@ export default function Home() {
           ...campaignPayload,
           list_id: Number(whatsappCampaignForm.list_id),
           instance_id: Number(whatsappCampaignForm.instance_id),
-          templates: [{ template_id: Number(template_id), weight: 1 }]
+          templates
         })
       });
       setWhatsappCampaignForm({
@@ -3682,9 +3694,35 @@ export default function Home() {
                     <textarea
                       rows={3}
                       value={whatsappCampaignForm.objective}
-                      onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, objective: event.target.value })}
+                      onChange={(event) => {
+                        setWhatsappCampaignForm({ ...whatsappCampaignForm, objective: event.target.value });
+                        setWhatsappCampaignFormErrors((current) => ({ ...current, objective: "" }));
+                      }}
                       placeholder="Ex: vender criação de site grátis, paga só se gostar"
                     />
+                    {whatsappCampaignFormErrors.objective ? <small className="field-error">{whatsappCampaignFormErrors.objective}</small> : null}
+                  </label>
+                  <label>
+                    Modo de mensagem
+                    <select
+                      value={whatsappCampaignForm.message_mode}
+                      onChange={(event) => {
+                        const messageMode = event.target.value as WhatsAppMessageMode;
+                        setWhatsappCampaignForm({
+                          ...whatsappCampaignForm,
+                          message_mode: messageMode,
+                          template_id:
+                            messageMode === "ai_per_lead"
+                              ? ""
+                              : whatsappCampaignForm.template_id ||
+                                (whatsappTemplates[0]?.id ? String(whatsappTemplates[0].id) : "")
+                        });
+                        setWhatsappCampaignFormErrors((current) => ({ ...current, objective: "", template_id: "" }));
+                      }}
+                    >
+                      <option value="template">Template fixo</option>
+                      <option value="ai_per_lead">Gerar individual por IA</option>
+                    </select>
                   </label>
                   <label>
                     Lista de leads
@@ -3722,24 +3760,26 @@ export default function Home() {
                     </select>
                     {whatsappCampaignFormErrors.instance_id ? <small className="field-error">{whatsappCampaignFormErrors.instance_id}</small> : null}
                   </label>
-                  <label>
-                    Template
-                    <select
-                      value={whatsappCampaignForm.template_id}
-                      onChange={(event) => {
-                        setWhatsappCampaignForm({ ...whatsappCampaignForm, template_id: event.target.value });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, template_id: "" }));
-                      }}
-                    >
-                      <option value="">Escolha</option>
-                      {whatsappTemplates.map((template) => (
-                        <option key={template.id} value={template.id}>
-                          {template.name}
-                        </option>
-                      ))}
-                    </select>
-                    {whatsappCampaignFormErrors.template_id ? <small className="field-error">{whatsappCampaignFormErrors.template_id}</small> : null}
-                  </label>
+                  {whatsappCampaignForm.message_mode === "template" ? (
+                    <label>
+                      Template
+                      <select
+                        value={whatsappCampaignForm.template_id}
+                        onChange={(event) => {
+                          setWhatsappCampaignForm({ ...whatsappCampaignForm, template_id: event.target.value });
+                          setWhatsappCampaignFormErrors((current) => ({ ...current, template_id: "" }));
+                        }}
+                      >
+                        <option value="">Escolha</option>
+                        {whatsappTemplates.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.name}
+                          </option>
+                        ))}
+                      </select>
+                      {whatsappCampaignFormErrors.template_id ? <small className="field-error">{whatsappCampaignFormErrors.template_id}</small> : null}
+                    </label>
+                  ) : null}
                   <label>
                     Delay mínimo (s)
                     <input
@@ -3853,7 +3893,7 @@ export default function Home() {
                       <tr>
                         <th>Campanha</th>
                         <th>Instância</th>
-                        <th>Template</th>
+                        <th>Mensagem</th>
                         <th>Status</th>
                         <th>Enviados/total</th>
                         <th>Janela</th>
@@ -3885,7 +3925,9 @@ export default function Home() {
                               <span>{campaign.message || campaign.error}</span>
                             </td>
                             <td>{campaign.instance_name}</td>
-                            <td>{campaignTemplateNames || "-"}</td>
+                            <td>
+                              {campaign.message_mode === "ai_per_lead" ? "IA por lead" : campaignTemplateNames || "-"}
+                            </td>
                             <td>
                               <span className={`status-pill ${campaign.status}`}>{campaignStatusLabel(campaign.status)}</span>
                             </td>

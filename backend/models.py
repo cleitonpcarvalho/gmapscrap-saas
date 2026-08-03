@@ -276,6 +276,10 @@ class WhatsAppCampaign(Base):
             "status IN ('draft', 'running', 'paused', 'completed')",
             name="ck_whatsapp_campaigns_status",
         ),
+        CheckConstraint(
+            "message_mode IN ('template', 'ai_per_lead')",
+            name="ck_whatsapp_campaigns_message_mode",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
@@ -283,6 +287,7 @@ class WhatsAppCampaign(Base):
     list_id: Mapped[int] = mapped_column(ForeignKey("lead_lists.id", ondelete="RESTRICT"), nullable=False)
     instance_id: Mapped[int] = mapped_column(ForeignKey("whatsapp_instances.id", ondelete="RESTRICT"), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
+    message_mode: Mapped[str] = mapped_column(String(30), default="template", nullable=False)
     objective: Mapped[str] = mapped_column(Text, default="", nullable=False)
     message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -337,7 +342,7 @@ class WhatsAppCampaignTemplate(Base):
     weight: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     campaign: Mapped[WhatsAppCampaign] = relationship(back_populates="templates")
-    template: Mapped[WhatsAppMessageTemplate] = relationship(lazy="selectin")
+    template: Mapped[WhatsAppMessageTemplate | None] = relationship(lazy="selectin")
 
 
 class WhatsAppSend(Base):
@@ -353,12 +358,13 @@ class WhatsAppSend(Base):
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     campaign_id: Mapped[int] = mapped_column(ForeignKey("whatsapp_campaigns.id", ondelete="CASCADE"), nullable=False)
     lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), nullable=False)
-    template_id: Mapped[int] = mapped_column(
+    template_id: Mapped[int | None] = mapped_column(
         ForeignKey("whatsapp_message_templates.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     recipient_phone: Mapped[str] = mapped_column(String(80), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
+    generated_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

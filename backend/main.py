@@ -1208,12 +1208,22 @@ def create_whatsapp_campaign(
     if not db.get(WhatsAppInstance, payload.instance_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instância de WhatsApp não encontrada")
 
+    if payload.message_mode == "ai_per_lead" and not (payload.objective or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Informe o objetivo da campanha para gerar mensagens individuais com IA",
+        )
+
     template_ids = [item.template_id for item in payload.templates]
-    templates_found = db.scalar(
-        select(func.count(WhatsAppMessageTemplate.id)).where(WhatsAppMessageTemplate.id.in_(template_ids))
-    ) or 0
-    if templates_found != len(set(template_ids)):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Um ou mais templates não foram encontrados")
+    if payload.message_mode == "template":
+        if not template_ids:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escolha um template de mensagem")
+
+        templates_found = db.scalar(
+            select(func.count(WhatsAppMessageTemplate.id)).where(WhatsAppMessageTemplate.id.in_(template_ids))
+        ) or 0
+        if templates_found != len(set(template_ids)):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Um ou mais templates não foram encontrados")
 
     data = payload.model_dump(exclude={"templates"})
     data["objective"] = (data.get("objective") or "").strip()
@@ -1221,8 +1231,9 @@ def create_whatsapp_campaign(
     db.add(campaign)
     db.flush()
 
-    for item in payload.templates:
-        db.add(WhatsAppCampaignTemplate(campaign_id=campaign.id, template_id=item.template_id, weight=item.weight))
+    if payload.message_mode == "template":
+        for item in payload.templates:
+            db.add(WhatsAppCampaignTemplate(campaign_id=campaign.id, template_id=item.template_id, weight=item.weight))
 
     db.commit()
     db.refresh(campaign)

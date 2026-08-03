@@ -50,6 +50,7 @@ def init_db() -> None:
     _ensure_whatsapp_crm_tables()
     _ensure_whatsapp_ai_settings_columns()
     _ensure_whatsapp_campaign_columns()
+    _ensure_whatsapp_send_columns()
     _ensure_whatsapp_conversation_columns()
     _ensure_search_run_columns()
     _ensure_lead_columns()
@@ -146,6 +147,7 @@ def _ensure_whatsapp_campaign_columns() -> None:
     existing_columns = {column["name"] for column in inspector.get_columns("whatsapp_campaigns")}
     migrations = {
         "objective": "ALTER TABLE whatsapp_campaigns ADD COLUMN objective TEXT NOT NULL DEFAULT ''",
+        "message_mode": "ALTER TABLE whatsapp_campaigns ADD COLUMN message_mode VARCHAR(30) NOT NULL DEFAULT 'template'",
     }
     missing_migrations = {
         column_name: statement
@@ -160,6 +162,37 @@ def _ensure_whatsapp_campaign_columns() -> None:
             connection.execute(text("SET lock_timeout = '10s'"))
         for statement in missing_migrations.values():
             connection.execute(text(statement))
+
+
+def _ensure_whatsapp_send_columns() -> None:
+    inspector = inspect(engine)
+    if "whatsapp_sends" not in inspector.get_table_names():
+        return
+
+    columns = inspector.get_columns("whatsapp_sends")
+    existing_columns = {column["name"] for column in columns}
+    migrations = {
+        "generated_content": "ALTER TABLE whatsapp_sends ADD COLUMN generated_content TEXT",
+    }
+    missing_migrations = {
+        column_name: statement
+        for column_name, statement in migrations.items()
+        if column_name not in existing_columns
+    }
+
+    template_id_column = next((column for column in columns if column["name"] == "template_id"), None)
+    should_drop_template_not_null = bool(template_id_column and not template_id_column.get("nullable", True))
+
+    if not missing_migrations and not should_drop_template_not_null:
+        return
+
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("SET lock_timeout = '10s'"))
+        for statement in missing_migrations.values():
+            connection.execute(text(statement))
+        if should_drop_template_not_null and engine.dialect.name == "postgresql":
+            connection.execute(text("ALTER TABLE whatsapp_sends ALTER COLUMN template_id DROP NOT NULL"))
 
 
 def _wait_for_database(max_attempts: int = 30, delay_seconds: int = 2) -> None:

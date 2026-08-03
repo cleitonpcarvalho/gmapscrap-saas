@@ -13,6 +13,7 @@ from backend.models import (
     Lead,
     LeadList,
     SearchRun,
+    WhatsAppAiSettings,
     WhatsAppCampaign,
     WhatsAppCampaignTemplate,
     WhatsAppInstance,
@@ -58,6 +59,11 @@ def db_session(monkeypatch: pytest.MonkeyPatch) -> Generator[Session, None, None
     )
     monkeypatch.setattr(
         "backend.services.ai_templates.get_settings",
+        lambda: SimpleNamespace(openai_api_key="test-openai-key", openai_model="gpt-test"),
+    )
+    monkeypatch.setattr(
+        whatsapp_campaigns,
+        "get_settings",
         lambda: SimpleNamespace(openai_api_key="test-openai-key", openai_model="gpt-test"),
     )
 
@@ -132,6 +138,7 @@ def test_whatsapp_campaign_endpoint_lifecycle(
     )
 
     assert campaign.status == "draft"
+    assert campaign.message_mode == "template"
     assert campaign.objective == "Vender criação de site grátis, paga só se gostar."
     assert campaign.template_ids == [ids["template_id"]]
     assert [item.id for item in main.list_whatsapp_campaigns(db=db_session, username="test-user")] == [campaign.id]
@@ -146,6 +153,29 @@ def test_whatsapp_campaign_endpoint_lifecycle(
     deleted = main.delete_whatsapp_campaign(campaign.id, db=db_session, username="test-user")
     assert deleted == {"status": "ok"}
     assert main.list_whatsapp_campaigns(db=db_session, username="test-user") == []
+
+
+def test_whatsapp_ai_per_lead_campaign_can_be_created_without_template(db_session: Session) -> None:
+    ids = seed_campaign_records(db_session)
+
+    campaign = main.create_whatsapp_campaign(
+        WhatsAppCampaignCreate(
+            name="Campanha IA por lead",
+            objective="vender sites para empresas sem site, desenvolvimento gratuito, paga só se gostar",
+            message_mode="ai_per_lead",
+            list_id=ids["list_id"],
+            instance_id=ids["instance_id"],
+            templates=[],
+            min_delay_seconds=1,
+            max_delay_seconds=1,
+        ),
+        db=db_session,
+        username="test-user",
+    )
+
+    assert campaign.status == "draft"
+    assert campaign.message_mode == "ai_per_lead"
+    assert campaign.template_ids == []
 
 
 def test_whatsapp_template_crud_endpoints(db_session: Session) -> None:
@@ -272,3 +302,169 @@ def test_whatsapp_campaign_runner_sends_pending_messages(
             },
         }
     ]
+
+
+def test_whatsapp_campaign_runner_generates_ai_message_per_lead(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = seed_campaign_records(db_session)
+    lead = db_session.get(Lead, ids["lead_id"])
+    assert lead is not None
+    lead.website = "https://empresa-alfa.test"
+    lead.site_insights = "Site sem CTA claro e com poucas provas de confiança para quem chega pelo Google."
+    db_session.add(
+        WhatsAppAiSettings(
+            id=1,
+            system_prompt="",
+            services_description="Criamos sites rápidos para empresas locais venderem melhor sem depender de trabalho manual.",
+            enabled=False,
+        )
+    )
+    campaign = WhatsAppCampaign(
+        name="Campanha IA por lead",
+        list_id=ids["list_id"],
+        instance_id=ids["instance_id"],
+        status="running",
+        message_mode="ai_per_lead",
+        objective="vender sites para empresas sem site, desenvolvimento gratuito, paga só se gostar",
+        message="Campanha iniciada.",
+        min_delay_seconds=1,
+        max_delay_seconds=1,
+        daily_limit=30,
+        weekly_limit=150,
+        send_window_start="00:00",
+        send_window_end="23:59",
+        timezone_name="America/Sao_Paulo",
+        send_days="0,1,2,3,4,5,6",
+    )
+    db_session.add(campaign)
+    db_session.commit()
+
+    generated_message = (
+        "Oi, tudo bem? Vi que a Empresa Alfa atua com Marketing em São Paulo e que o site poderia ter um CTA mais claro para quem chega pelo Google. "
+        "Estou trabalhando com uma condição de desenvolvimento sem custo inicial, e vocês só seguem se gostarem do resultado. "
+        "Posso te explicar rapidinho?"
+    )
+    openai_payloads: list[dict[str, Any]] = []
+    sent_payloads: list[dict[str, Any]] = []
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeEvolutionResponse:
+        openai_payloads.append(kwargs["json"])
+        return FakeEvolutionResponse(200, {"output_text": f'{{"content":"{generated_message}"}}'})
+
+    def fake_evolution_request(method: str, url: str, **kwargs) -> FakeEvolutionResponse:
+        sent_payloads.append({"method": method, "url": url, "json": kwargs["json"]})
+        return FakeEvolutionResponse(200, {"key": {"id": "message-ai-1"}, "status": "PENDING"})
+
+    monkeypatch.setattr(whatsapp_campaigns.requests, "post", fake_openai_post)
+    monkeypatch.setattr("backend.services.whatsapp_providers.evolution.requests.request", fake_evolution_request)
+    monkeypatch.setattr(whatsapp_campaigns, "_sleep_with_pause_checks", lambda db, campaign_id, seconds: None)
+
+    whatsapp_campaigns.run_campaign(campaign.id)
+
+    db_session.expire_all()
+    saved_campaign = db_session.get(WhatsAppCampaign, campaign.id)
+    send = db_session.scalars(select(WhatsAppSend).where(WhatsAppSend.campaign_id == campaign.id)).one()
+    prompt = openai_payloads[0]["input"][1]["content"]
+
+    assert saved_campaign is not None
+    assert saved_campaign.status == "completed"
+    assert saved_campaign.sent_count == 1
+    assert send.status == "sent"
+    assert send.template_id is None
+    assert send.generated_content == generated_message
+    assert send.provider_message_id == "message-ai-1"
+    assert "desenvolvimento gratuito, paga só se gostar" in prompt
+    assert "Site sem CTA claro" in prompt
+    assert "Criamos sites rápidos" in prompt
+    assert sent_payloads == [
+        {
+            "method": "POST",
+            "url": "https://evolution.example.test/message/sendText/sales-main",
+            "json": {
+                "number": "5511995779865",
+                "text": generated_message,
+            },
+        }
+    ]
+
+
+def test_whatsapp_campaign_runner_marks_ai_generation_failure_and_continues(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = seed_campaign_records(db_session)
+    first_lead = db_session.get(Lead, ids["lead_id"])
+    assert first_lead is not None
+    run_id = first_lead.run_id
+    second_lead = Lead(
+        run_id=run_id,
+        name="Empresa Beta",
+        address="Rua Augusta, 200 - São Paulo, SP",
+        phone="(11) 91234-5678",
+        website=None,
+        email="",
+    )
+    db_session.add(second_lead)
+    campaign = WhatsAppCampaign(
+        name="Campanha IA com falha",
+        list_id=ids["list_id"],
+        instance_id=ids["instance_id"],
+        status="running",
+        message_mode="ai_per_lead",
+        objective="vender sites para empresas sem site",
+        message="Campanha iniciada.",
+        min_delay_seconds=1,
+        max_delay_seconds=1,
+        daily_limit=30,
+        weekly_limit=150,
+        send_window_start="00:00",
+        send_window_end="23:59",
+        timezone_name="America/Sao_Paulo",
+        send_days="0,1,2,3,4,5,6",
+    )
+    db_session.add(campaign)
+    db_session.commit()
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeEvolutionResponse:
+        prompt = kwargs["json"]["input"][1]["content"]
+        if "Empresa Alfa" in prompt:
+            return FakeEvolutionResponse(500, {"error": "temporarily unavailable"}, text="temporarily unavailable")
+        return FakeEvolutionResponse(
+            200,
+            {"output_text": '{"content":"Oi, tudo bem? Vi que a Empresa Beta atua com Marketing em São Paulo. Posso te explicar uma condição especial para criar um site?"}'},
+        )
+
+    sent_payloads: list[dict[str, Any]] = []
+
+    def fake_evolution_request(method: str, url: str, **kwargs) -> FakeEvolutionResponse:
+        sent_payloads.append({"method": method, "url": url, "json": kwargs["json"]})
+        return FakeEvolutionResponse(200, {"key": {"id": "message-ai-2"}, "status": "PENDING"})
+
+    monkeypatch.setattr(whatsapp_campaigns.requests, "post", fake_openai_post)
+    monkeypatch.setattr("backend.services.whatsapp_providers.evolution.requests.request", fake_evolution_request)
+    monkeypatch.setattr(whatsapp_campaigns, "_sleep_with_pause_checks", lambda db, campaign_id, seconds: None)
+
+    whatsapp_campaigns.run_campaign(campaign.id)
+
+    db_session.expire_all()
+    saved_campaign = db_session.get(WhatsAppCampaign, campaign.id)
+    sends = list(
+        db_session.scalars(select(WhatsAppSend).where(WhatsAppSend.campaign_id == campaign.id).order_by(WhatsAppSend.id)).all()
+    )
+
+    assert saved_campaign is not None
+    assert saved_campaign.status == "completed"
+    assert saved_campaign.sent_count == 1
+    assert saved_campaign.failed_count == 1
+    sends_by_lead_name = {send.lead.name: send for send in sends}
+    assert sends_by_lead_name["Empresa Alfa"].status == "failed"
+    assert sends_by_lead_name["Empresa Alfa"].generated_content is None
+    assert "OpenAI retornou erro 500" in (sends_by_lead_name["Empresa Alfa"].error or "")
+    assert sends_by_lead_name["Empresa Beta"].status == "sent"
+    assert (
+        sends_by_lead_name["Empresa Beta"].generated_content
+        == "Oi, tudo bem? Vi que a Empresa Beta atua com Marketing em São Paulo. Posso te explicar uma condição especial para criar um site?"
+    )
+    assert len(sent_payloads) == 1
