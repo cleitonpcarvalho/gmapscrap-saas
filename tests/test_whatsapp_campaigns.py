@@ -185,7 +185,7 @@ def test_whatsapp_template_generate_endpoint_uses_openai(
             200,
             {
                 "output_text": (
-                    '{"content":"Vi que a {nome_empresa} atua com {niche} em {location} e fiquei com uma ideia simples para deixar o site mais claro para quem chega pelo Google. Faz sentido eu te mandar por aqui?"}'
+                    '{"content":"Oi, tudo bem? Vi que a {nome_empresa} atua com {niche} em {location} e muitas empresas parecidas ainda perdem contatos por não terem um site claro. Estou oferecendo uma condição especial este mês: desenvolvimento sem custo inicial, e você só segue se gostar do resultado. Faz sentido eu te explicar rapidinho?"}'
                 )
             },
         )
@@ -198,11 +198,15 @@ def test_whatsapp_template_generate_endpoint_uses_openai(
     )
 
     assert response.content == (
-        "Vi que a {nome_empresa} atua com {niche} em {location} e fiquei com uma ideia simples para deixar o site mais claro para quem chega pelo Google. "
-        "Faz sentido eu te mandar por aqui?"
+        "Oi, tudo bem? Vi que a {nome_empresa} atua com {niche} em {location} e muitas empresas parecidas ainda perdem contatos por não terem um site claro. "
+        "Estou oferecendo uma condição especial este mês: desenvolvimento sem custo inicial, e você só segue se gostar do resultado. "
+        "Faz sentido eu te explicar rapidinho?"
     )
     assert captured["payload"]["model"] == "gpt-test"
     assert captured["payload"]["text"]["format"]["name"] == "whatsapp_template_generation"
+    assert "Comece obrigatoriamente com uma saudação breve" in captured["payload"]["input"][1]["content"]
+    assert "Não omita a oferta ou gancho específico" in captured["payload"]["input"][1]["content"]
+    assert "desenvolvimento sem custo inicial" in captured["payload"]["input"][1]["content"]
     assert "sem fechar detalhes" in captured["payload"]["input"][1]["content"]
     assert "Não use {lead_name}" in captured["payload"]["input"][1]["content"]
     assert 'Evite aberturas como "Oi, {nome_empresa}!"' in captured["payload"]["input"][1]["content"]

@@ -169,15 +169,19 @@ Regras:
 - Escreva uma mensagem curta, natural e genuína para WhatsApp.
 - Deve parecer uma abordagem pesquisada e humana, não um disparo em massa nem um script de vendas direto.
 - Use no máximo 4 frases curtas.
+- Comece obrigatoriamente com uma saudação breve e neutra, como "Oi, tudo bem?", sem variável ou nome de empresa nessa saudação.
+- Depois da saudação, entre no contexto pesquisado de forma leve.
 - Use variáveis quando fizer sentido: {{nome_empresa}}, {{website}}, {{phone}}, {{niche}}, {{location}}.
 - Não use {{lead_name}} na mensagem gerada, pois não há nome de contato pessoal no scraping.
 - Não abra a mensagem como se estivesse chamando uma pessoa pelo nome da empresa. Evite aberturas como "Oi, {{nome_empresa}}!" ou "Olá, {{nome_empresa}}".
-- Prefira uma abertura contextual, citando nicho/localização/site de forma específica quando fizer sentido.
-- Evite frases robóticas ou comerciais demais, como "posso criar uma prévia sem compromisso", "tenho uma oferta especial" ou "garanta agora".
+- Cite nicho/localização/site de forma específica quando fizer sentido.
+- Não omita a oferta ou gancho específico descrito no objetivo; não reduza o objetivo a um resumo genérico do nicho.
+- Se o objetivo citar uma condição especial, desenvolvimento gratuito ou "paga só se gostar", mencione isso de forma natural, por exemplo como "uma condição especial", "desenvolvimento sem custo inicial" ou "só seguir se gostar/fizer sentido".
+- Evite frases robóticas ou comerciais demais, como "posso criar uma prévia sem compromisso", "oferta imperdível" ou "garanta agora".
 - Use chaves simples, por exemplo {{nome_empresa}}, nunca {{{{nome_empresa}}}}.
 - Não invente nome, cidade, site, nicho ou telefone fora das variáveis.
-- Pode mencionar a oferta/objetivo, mas não trate de valores, preço, pagamento ou negociação na primeira mensagem.
-- Se o objetivo citar preço, pagamento ou condição comercial, transforme isso em interesse/benefício sem fechar detalhes.
+- Pode mencionar a condição do objetivo, mas não negocie valores, preço fechado, contrato ou detalhes de pagamento na primeira mensagem.
+- Se o objetivo citar preço, pagamento ou condição comercial, preserve o gancho em linguagem leve e convide a pessoa a saber mais, sem fechar detalhes.
 - Não prometa resultado garantido.
 - Não mencione scraping, automação de disparo, base de leads ou Google Maps.
 - Não use markdown, título, assunto, assinatura longa, listas ou JSON no conteúdo.
@@ -204,7 +208,8 @@ def generate_whatsapp_template_content(payload: WhatsAppTemplateGenerateRequest)
                 "role": "system",
                 "content": (
                     "Você escreve mensagens B2B curtas para WhatsApp em JSON estruturado. "
-                    "A mensagem deve soar humana, pesquisada e respeitosa."
+                    "A mensagem deve soar humana, pesquisada e respeitosa, abrindo com saudação simples "
+                    "e preservando o gancho específico da campanha."
                 ),
             },
             {"role": "user", "content": _whatsapp_prompt(payload)},
