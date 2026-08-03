@@ -290,6 +290,15 @@ def _ensure_lead_list_columns() -> None:
         "only_whatsapp_validated": (
             "ALTER TABLE lead_lists ADD COLUMN only_whatsapp_validated BOOLEAN NOT NULL DEFAULT FALSE"
         ),
+        "only_email_opened": (
+            "ALTER TABLE lead_lists ADD COLUMN only_email_opened BOOLEAN NOT NULL DEFAULT FALSE"
+        ),
+        "only_email_clicked": (
+            "ALTER TABLE lead_lists ADD COLUMN only_email_clicked BOOLEAN NOT NULL DEFAULT FALSE"
+        ),
+        "email_engagement_filter_mode": (
+            "ALTER TABLE lead_lists ADD COLUMN email_engagement_filter_mode VARCHAR(10) NOT NULL DEFAULT 'or'"
+        ),
     }
 
     with engine.begin() as connection:

@@ -118,6 +118,12 @@ class EmailTemplate(Base):
 
 class LeadList(Base):
     __tablename__ = "lead_lists"
+    __table_args__ = (
+        CheckConstraint(
+            "email_engagement_filter_mode IN ('or', 'and')",
+            name="ck_lead_lists_email_engagement_filter_mode",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
@@ -126,6 +132,9 @@ class LeadList(Base):
     search_run_id: Mapped[int | None] = mapped_column(ForeignKey("search_runs.id", ondelete="SET NULL"), nullable=True)
     only_never_emailed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     only_whatsapp_validated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    only_email_opened: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    only_email_clicked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    email_engagement_filter_mode: Mapped[str] = mapped_column(String(10), default="or", nullable=False)
     never_received_template_id: Mapped[int | None] = mapped_column(
         ForeignKey("email_templates.id", ondelete="SET NULL"),
         nullable=True,

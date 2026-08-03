@@ -181,6 +181,9 @@ type LeadList = {
   search_run_id: number | null;
   only_never_emailed: boolean;
   only_whatsapp_validated: boolean;
+  only_email_opened: boolean;
+  only_email_clicked: boolean;
+  email_engagement_filter_mode: "or" | "and";
   never_received_template_id: number | null;
   lead_count: number;
 };
@@ -1088,12 +1091,18 @@ export default function Home() {
     search_run_id: "",
     only_never_emailed: false,
     only_whatsapp_validated: false,
+    only_email_opened: false,
+    only_email_clicked: false,
+    email_engagement_filter_mode: "or" as "or" | "and",
     never_received_template_id: ""
   });
   const [editLeadListForm, setEditLeadListForm] = useState({
     name: "",
     only_never_emailed: false,
     only_whatsapp_validated: false,
+    only_email_opened: false,
+    only_email_clicked: false,
+    email_engagement_filter_mode: "or" as "or" | "and",
     never_received_template_id: ""
   });
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
@@ -1827,6 +1836,9 @@ export default function Home() {
           search_run_id: null,
           only_never_emailed: leadListForm.only_never_emailed,
           only_whatsapp_validated: leadListForm.only_whatsapp_validated,
+          only_email_opened: leadListForm.only_email_opened,
+          only_email_clicked: leadListForm.only_email_clicked,
+          email_engagement_filter_mode: leadListForm.email_engagement_filter_mode,
           never_received_template_id: leadListForm.never_received_template_id
             ? Number(leadListForm.never_received_template_id)
             : null
@@ -1852,6 +1864,9 @@ export default function Home() {
       name: list.name,
       only_never_emailed: list.only_never_emailed,
       only_whatsapp_validated: list.only_whatsapp_validated,
+      only_email_opened: list.only_email_opened,
+      only_email_clicked: list.only_email_clicked,
+      email_engagement_filter_mode: list.email_engagement_filter_mode,
       never_received_template_id: list.never_received_template_id ? String(list.never_received_template_id) : ""
     });
     setSelectedEditListNiches(decodeListFilterValues(list.niche_filter));
@@ -1867,6 +1882,9 @@ export default function Home() {
       name: "",
       only_never_emailed: false,
       only_whatsapp_validated: false,
+      only_email_opened: false,
+      only_email_clicked: false,
+      email_engagement_filter_mode: "or",
       never_received_template_id: ""
     });
   }
@@ -1895,6 +1913,9 @@ export default function Home() {
           search_run_id: editingLeadList.search_run_id,
           only_never_emailed: editLeadListForm.only_never_emailed,
           only_whatsapp_validated: editLeadListForm.only_whatsapp_validated,
+          only_email_opened: editLeadListForm.only_email_opened,
+          only_email_clicked: editLeadListForm.only_email_clicked,
+          email_engagement_filter_mode: editLeadListForm.email_engagement_filter_mode,
           never_received_template_id: editLeadListForm.never_received_template_id
             ? Number(editLeadListForm.never_received_template_id)
             : null
@@ -4576,6 +4597,37 @@ export default function Home() {
                     />
                     Somente com WhatsApp válido
                   </label>
+                  <label className="checkbox-label">
+                    <input
+                      checked={leadListForm.only_email_opened}
+                      onChange={(event) => setLeadListForm({ ...leadListForm, only_email_opened: event.target.checked })}
+                      type="checkbox"
+                    />
+                    Abriu algum e-mail
+                  </label>
+                  <label className="checkbox-label">
+                    <input
+                      checked={leadListForm.only_email_clicked}
+                      onChange={(event) => setLeadListForm({ ...leadListForm, only_email_clicked: event.target.checked })}
+                      type="checkbox"
+                    />
+                    Clicou em algum e-mail
+                  </label>
+                  <label>
+                    Combinação de engajamento
+                    <select
+                      value={leadListForm.email_engagement_filter_mode}
+                      onChange={(event) =>
+                        setLeadListForm({
+                          ...leadListForm,
+                          email_engagement_filter_mode: event.target.value as "or" | "and"
+                        })
+                      }
+                    >
+                      <option value="or">Abriu ou clicou</option>
+                      <option value="and">Abriu e clicou</option>
+                    </select>
+                  </label>
                   <label>
                     Nunca recebeu template
                     <select
@@ -4643,6 +4695,18 @@ export default function Home() {
                         {formatListFilter(list.niche_filter, "Todos os nichos")} · {formatListFilter(list.location_filter, "Todas as localidades")}
                       </small>
                       {list.only_whatsapp_validated ? <small>Somente WhatsApp válido</small> : null}
+                      {list.only_email_opened || list.only_email_clicked ? (
+                        <small>
+                          Engajamento:{" "}
+                          {list.only_email_opened && list.only_email_clicked
+                            ? list.email_engagement_filter_mode === "and"
+                              ? "abriu e clicou"
+                              : "abriu ou clicou"
+                            : list.only_email_opened
+                              ? "abriu algum e-mail"
+                              : "clicou em algum e-mail"}
+                        </small>
+                      ) : null}
                       {list.only_never_emailed ? <small>Nunca recebeu e-mail</small> : null}
                       {list.never_received_template_id ? (
                         <small>
@@ -5050,6 +5114,41 @@ export default function Home() {
                   type="checkbox"
                 />
                 Somente com WhatsApp válido
+              </label>
+              <label className="checkbox-label">
+                <input
+                  checked={editLeadListForm.only_email_opened}
+                  onChange={(event) =>
+                    setEditLeadListForm({ ...editLeadListForm, only_email_opened: event.target.checked })
+                  }
+                  type="checkbox"
+                />
+                Abriu algum e-mail
+              </label>
+              <label className="checkbox-label">
+                <input
+                  checked={editLeadListForm.only_email_clicked}
+                  onChange={(event) =>
+                    setEditLeadListForm({ ...editLeadListForm, only_email_clicked: event.target.checked })
+                  }
+                  type="checkbox"
+                />
+                Clicou em algum e-mail
+              </label>
+              <label>
+                Combinação de engajamento
+                <select
+                  value={editLeadListForm.email_engagement_filter_mode}
+                  onChange={(event) =>
+                    setEditLeadListForm({
+                      ...editLeadListForm,
+                      email_engagement_filter_mode: event.target.value as "or" | "and"
+                    })
+                  }
+                >
+                  <option value="or">Abriu ou clicou</option>
+                  <option value="and">Abriu e clicou</option>
+                </select>
               </label>
               <label>
                 Nunca recebeu template

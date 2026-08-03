@@ -51,6 +51,32 @@ def _split_list_filter(value: str) -> list[str]:
     return [value.strip()] if value.strip() else []
 
 
+def _opened_email_leads_stmt():
+    return select(EmailSend.lead_id).where(or_(EmailSend.open_count > 0, EmailSend.opened_at.is_not(None)))
+
+
+def _clicked_email_leads_stmt():
+    return select(EmailSend.lead_id).where(or_(EmailSend.click_count > 0, EmailSend.clicked_at.is_not(None)))
+
+
+def _apply_email_engagement_filter(stmt, lead_list: LeadList):
+    if not lead_list.only_email_opened and not lead_list.only_email_clicked:
+        return stmt
+
+    opened_stmt = _opened_email_leads_stmt()
+    clicked_stmt = _clicked_email_leads_stmt()
+
+    if lead_list.only_email_opened and lead_list.only_email_clicked:
+        if lead_list.email_engagement_filter_mode == "and":
+            return stmt.where(Lead.id.in_(opened_stmt), Lead.id.in_(clicked_stmt))
+        return stmt.where(or_(Lead.id.in_(opened_stmt), Lead.id.in_(clicked_stmt)))
+
+    if lead_list.only_email_opened:
+        return stmt.where(Lead.id.in_(opened_stmt))
+
+    return stmt.where(Lead.id.in_(clicked_stmt))
+
+
 def submit_campaign_job(campaign_id: int) -> bool:
     with _active_campaign_ids_lock:
         if campaign_id in _active_campaign_ids:
@@ -128,6 +154,8 @@ def lead_query_for_list(lead_list: LeadList):
 
     if lead_list.only_whatsapp_validated:
         stmt = stmt.where(Lead.whatsapp_validated.is_(True))
+
+    stmt = _apply_email_engagement_filter(stmt, lead_list)
 
     blocked_stmt = select(LeadEmailPreference.lead_id).where(LeadEmailPreference.do_not_contact.is_(True))
     stmt = stmt.where(~Lead.id.in_(blocked_stmt))

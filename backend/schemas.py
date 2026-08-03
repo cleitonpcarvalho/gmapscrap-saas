@@ -348,6 +348,9 @@ class AiTemplateGenerateResponse(BaseModel):
     templates: list[EmailTemplateRead]
 
 
+EmailEngagementFilterMode = Literal["or", "and"]
+
+
 class LeadListCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     niche_filter: str = Field(default="", max_length=255)
@@ -355,6 +358,9 @@ class LeadListCreate(BaseModel):
     search_run_id: int | None = None
     only_never_emailed: bool = False
     only_whatsapp_validated: bool = False
+    only_email_opened: bool = False
+    only_email_clicked: bool = False
+    email_engagement_filter_mode: EmailEngagementFilterMode = "or"
     never_received_template_id: int | None = None
 
     @field_validator("niche_filter", "location_filter", mode="before")
@@ -370,6 +376,9 @@ class LeadListUpdate(BaseModel):
     search_run_id: int | None = None
     only_never_emailed: bool | None = None
     only_whatsapp_validated: bool | None = None
+    only_email_opened: bool | None = None
+    only_email_clicked: bool | None = None
+    email_engagement_filter_mode: EmailEngagementFilterMode | None = None
     never_received_template_id: int | None = None
 
     @field_validator("niche_filter", "location_filter", mode="before")
@@ -386,6 +395,9 @@ class LeadListRead(BaseModel):
     search_run_id: int | None
     only_never_emailed: bool
     only_whatsapp_validated: bool
+    only_email_opened: bool
+    only_email_clicked: bool
+    email_engagement_filter_mode: EmailEngagementFilterMode
     never_received_template_id: int | None
     created_at: datetime
     updated_at: datetime

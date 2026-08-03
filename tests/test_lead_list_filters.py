@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -7,11 +8,11 @@ from sqlalchemy.pool import StaticPool
 
 from backend import main
 from backend.database import Base
-from backend.models import Lead, SearchRun
+from backend.models import EmailCampaign, EmailSend, EmailTemplate, Lead, LeadList, SearchRun
 from backend.schemas import LeadListCreate, LeadListUpdate
 from backend.scrapers.email_scraper import EmailResult
 from backend.scrapers.maps_scraper import MapLead
-from backend.services import jobs, whatsapp_campaigns
+from backend.services import email_campaigns, jobs, whatsapp_campaigns
 from backend.services.whatsapp_validation import WhatsAppValidationResult
 
 
@@ -79,6 +80,114 @@ def seed_filter_leads(db: Session) -> None:
     db.commit()
 
 
+def seed_email_engagement_leads(db: Session) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=False,
+        status="completed",
+        message="Busca concluída.",
+    )
+    source_list = LeadList(name="Lista fonte", niche_filter="", location_filter="")
+    template = EmailTemplate(
+        name="Template engajamento",
+        subject="Olá",
+        html="<p>Olá</p>",
+        text="Olá",
+    )
+    db.add_all([run, source_list, template])
+    db.flush()
+    campaign = EmailCampaign(name="Campanha anterior", list_id=source_list.id, status="completed")
+    db.add(campaign)
+    db.flush()
+
+    leads = [
+        Lead(
+            run_id=run.id,
+            name="Abriu Apenas",
+            address="Av. Paulista, 1000 - São Paulo, SP",
+            phone="",
+            website="https://abriu.example",
+            email="abriu@example.com",
+        ),
+        Lead(
+            run_id=run.id,
+            name="Clicou Apenas",
+            address="Av. Paulista, 2000 - São Paulo, SP",
+            phone="",
+            website="https://clicou.example",
+            email="clicou@example.com",
+        ),
+        Lead(
+            run_id=run.id,
+            name="Abriu e Clicou",
+            address="Av. Paulista, 3000 - São Paulo, SP",
+            phone="",
+            website="https://ambos.example",
+            email="ambos@example.com",
+        ),
+        Lead(
+            run_id=run.id,
+            name="Sem Engajamento",
+            address="Av. Paulista, 4000 - São Paulo, SP",
+            phone="",
+            website="https://sem-engajamento.example",
+            email="sem-engajamento@example.com",
+        ),
+    ]
+    db.add_all(leads)
+    db.flush()
+    now = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            EmailSend(
+                campaign_id=campaign.id,
+                lead_id=leads[0].id,
+                template_id=template.id,
+                recipient_email=leads[0].email,
+                subject="Olá",
+                status="sent",
+                open_count=1,
+                opened_at=now,
+            ),
+            EmailSend(
+                campaign_id=campaign.id,
+                lead_id=leads[1].id,
+                template_id=template.id,
+                recipient_email=leads[1].email,
+                subject="Olá",
+                status="sent",
+                click_count=1,
+                clicked_at=now,
+            ),
+            EmailSend(
+                campaign_id=campaign.id,
+                lead_id=leads[2].id,
+                template_id=template.id,
+                recipient_email=leads[2].email,
+                subject="Olá",
+                status="sent",
+                open_count=1,
+                click_count=1,
+                opened_at=now,
+                clicked_at=now,
+            ),
+            EmailSend(
+                campaign_id=campaign.id,
+                lead_id=leads[3].id,
+                template_id=template.id,
+                recipient_email=leads[3].email,
+                subject="Olá",
+                status="sent",
+            ),
+        ]
+    )
+    db.commit()
+
+
 def test_lead_list_can_filter_only_whatsapp_validated_leads(db_session: Session) -> None:
     seed_filter_leads(db_session)
 
@@ -107,6 +216,49 @@ def test_lead_list_can_filter_only_whatsapp_validated_leads(db_session: Session)
         username="test-user",
     )
     assert updated.only_whatsapp_validated is False
+
+
+def test_lead_list_filters_by_email_engagement_history(db_session: Session) -> None:
+    seed_email_engagement_leads(db_session)
+
+    opened_list = LeadList(
+        name="Abriu",
+        niche_filter="",
+        location_filter="",
+        only_email_opened=True,
+        email_engagement_filter_mode="or",
+    )
+    clicked_list = LeadList(
+        name="Clicou",
+        niche_filter="",
+        location_filter="",
+        only_email_clicked=True,
+        email_engagement_filter_mode="or",
+    )
+    engaged_or_list = LeadList(
+        name="Abriu ou clicou",
+        niche_filter="",
+        location_filter="",
+        only_email_opened=True,
+        only_email_clicked=True,
+        email_engagement_filter_mode="or",
+    )
+    engaged_and_list = LeadList(
+        name="Abriu e clicou",
+        niche_filter="",
+        location_filter="",
+        only_email_opened=True,
+        only_email_clicked=True,
+        email_engagement_filter_mode="and",
+    )
+
+    def names_for(lead_list: LeadList) -> list[str]:
+        return sorted(lead.name for lead in db_session.scalars(email_campaigns.lead_query_for_list(lead_list)).all())
+
+    assert names_for(opened_list) == ["Abriu Apenas", "Abriu e Clicou"]
+    assert names_for(clicked_list) == ["Abriu e Clicou", "Clicou Apenas"]
+    assert names_for(engaged_or_list) == ["Abriu Apenas", "Abriu e Clicou", "Clicou Apenas"]
+    assert names_for(engaged_and_list) == ["Abriu e Clicou"]
 
 
 def test_scraping_marks_saved_lead_as_whatsapp_validated(
