@@ -33,6 +33,7 @@ import {
   SkipForward,
   Sparkles,
   Trash2,
+  Users,
   X
 } from "lucide-react";
 import type { FormEvent } from "react";
@@ -107,6 +108,7 @@ type AppView =
   | "whatsappInstances"
   | "whatsappTemplates"
   | "whatsappCampaigns"
+  | "whatsappCrm"
   | "templates"
   | "lists"
   | "campaigns"
@@ -273,6 +275,26 @@ type WhatsAppCampaign = {
   finished_at: string | null;
 };
 
+type CrmStage = "new" | "responded" | "qualified" | "not_interested" | "converted";
+
+type CrmLead = {
+  id: number;
+  lead_id: number;
+  stage: CrmStage;
+  qualification_notes: string | null;
+  score: number | null;
+  updated_at: string;
+  lead_name: string;
+  phone: string | null;
+  website: string | null;
+  email: string;
+  niche: string;
+  location: string;
+  last_message: string | null;
+  last_message_at: string | null;
+  conversation_id: number | null;
+};
+
 type WhatsAppInstanceFormErrors = {
   name?: string;
 };
@@ -423,6 +445,14 @@ const defaultWhatsappTemplateForm = {
 
 const WHATSAPP_VARIABLES = ["{nome_empresa}", "{lead_name}", "{website}", "{phone}", "{niche}", "{location}"];
 
+const CRM_STAGES: { value: CrmStage; label: string }[] = [
+  { value: "new", label: "Novo" },
+  { value: "responded", label: "Respondeu" },
+  { value: "qualified", label: "Qualificado" },
+  { value: "not_interested", label: "Sem interesse" },
+  { value: "converted", label: "Convertido" }
+];
+
 const defaultManualLeadForm: ManualLeadForm = {
   niche: "",
   location: "",
@@ -521,6 +551,10 @@ function whatsappInstanceStatusLabel(status: WhatsAppInstanceStatus) {
     connected: "Conectada"
   };
   return labels[status] || status;
+}
+
+function crmStageLabel(stage: CrmStage) {
+  return CRM_STAGES.find((item) => item.value === stage)?.label || stage;
 }
 
 function formatOptionalText(value: string | null | undefined) {
@@ -1029,6 +1063,8 @@ export default function Home() {
   const [whatsappInstances, setWhatsappInstances] = useState<WhatsAppInstance[]>([]);
   const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsAppMessageTemplate[]>([]);
   const [whatsappCampaigns, setWhatsappCampaigns] = useState<WhatsAppCampaign[]>([]);
+  const [crmLeads, setCrmLeads] = useState<CrmLead[]>([]);
+  const [crmNoteDrafts, setCrmNoteDrafts] = useState<Record<number, string>>({});
   const [whatsappInstanceForm, setWhatsappInstanceForm] = useState(defaultWhatsappInstanceForm);
   const [whatsappInstanceFormErrors, setWhatsappInstanceFormErrors] = useState<WhatsAppInstanceFormErrors>({});
   const [whatsappTemplateForm, setWhatsappTemplateForm] = useState(defaultWhatsappTemplateForm);
@@ -1109,6 +1145,16 @@ export default function Home() {
 
     return { connected, running, sent, total };
   }, [whatsappCampaigns, whatsappInstances]);
+  const crmLeadsByStage = useMemo(() => {
+    const grouped = CRM_STAGES.reduce(
+      (accumulator, stage) => ({ ...accumulator, [stage.value]: [] }),
+      {} as Record<CrmStage, CrmLead[]>
+    );
+    crmLeads.forEach((lead) => {
+      grouped[lead.stage] = [...grouped[lead.stage], lead];
+    });
+    return grouped;
+  }, [crmLeads]);
   const previewTemplate = selectedTemplate || templateForm;
   const previewContentLink = previewTemplate.content_link.trim();
   const previewContentData = contentPreviews[previewContentLink];
@@ -1243,15 +1289,22 @@ export default function Home() {
   }
 
   async function refreshWhatsappData() {
-    const [nextInstances, nextTemplates, nextCampaigns] = await Promise.all([
+    const [nextInstances, nextTemplates, nextCampaigns, nextCrmLeads] = await Promise.all([
       apiFetch<WhatsAppInstance[]>("/api/whatsapp/instances"),
       apiFetch<WhatsAppMessageTemplate[]>("/api/whatsapp/templates"),
-      apiFetch<WhatsAppCampaign[]>("/api/whatsapp/campaigns")
+      apiFetch<WhatsAppCampaign[]>("/api/whatsapp/campaigns"),
+      apiFetch<CrmLead[]>("/api/crm/leads")
     ]);
 
     setWhatsappInstances(nextInstances);
     setWhatsappTemplates(nextTemplates);
     setWhatsappCampaigns(nextCampaigns);
+    setCrmLeads(nextCrmLeads);
+    setCrmNoteDrafts((current) =>
+      Object.fromEntries(
+        nextCrmLeads.map((lead) => [lead.lead_id, current[lead.lead_id] ?? lead.qualification_notes ?? ""])
+      )
+    );
   }
 
   async function handleRefreshWhatsappData() {
@@ -1276,6 +1329,8 @@ export default function Home() {
       setActiveView("whatsappTemplates");
     } else if (window.location.pathname === "/whatsapp/campanhas") {
       setActiveView("whatsappCampaigns");
+    } else if (window.location.pathname === "/whatsapp/crm") {
+      setActiveView("whatsappCrm");
     } else if (window.location.pathname === "/whatsapp" || window.location.hash === "#whatsapp") {
       setActiveView("whatsapp");
     } else if (window.location.hash === "#leads") {
@@ -1414,7 +1469,7 @@ export default function Home() {
   }, [user, activeView, previewContentLink, previewContentData]);
 
   const emailViews: AppView[] = ["dashboard", "templates", "lists", "campaigns", "history", "settings"];
-  const whatsappViews: AppView[] = ["whatsapp", "whatsappInstances", "whatsappTemplates", "whatsappCampaigns"];
+  const whatsappViews: AppView[] = ["whatsapp", "whatsappInstances", "whatsappTemplates", "whatsappCampaigns", "whatsappCrm"];
 
   useEffect(() => {
     if (!user || !emailViews.includes(activeView)) return;
@@ -1439,6 +1494,7 @@ export default function Home() {
       whatsappInstances: "/whatsapp/instancias",
       whatsappTemplates: "/whatsapp/templates",
       whatsappCampaigns: "/whatsapp/campanhas",
+      whatsappCrm: "/whatsapp/crm",
       templates: "#templates",
       lists: "#listas",
       campaigns: "#campanhas",
@@ -2297,6 +2353,39 @@ export default function Home() {
     }
   }
 
+  async function patchCrmLead(leadId: number, payload: { stage?: CrmStage; qualification_notes?: string | null }) {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setWhatsappBusyAction(`crm-${leadId}`);
+
+    try {
+      const updatedLead = await apiFetch<CrmLead>(`/api/crm/leads/${leadId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload)
+      });
+      setCrmLeads((current) => current.map((lead) => (lead.lead_id === leadId ? updatedLead : lead)));
+      setCrmNoteDrafts((current) => ({ ...current, [leadId]: updatedLead.qualification_notes || "" }));
+      setWhatsappMessage("CRM atualizado.");
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível atualizar o CRM.");
+    } finally {
+      setWhatsappBusyAction("");
+    }
+  }
+
+  function handleCrmStageChange(lead: CrmLead, stage: CrmStage) {
+    if (stage === lead.stage) return;
+    patchCrmLead(lead.lead_id, { stage });
+  }
+
+  function handleCrmNoteChange(leadId: number, notes: string) {
+    setCrmNoteDrafts((current) => ({ ...current, [leadId]: notes }));
+  }
+
+  function saveCrmNotes(lead: CrmLead) {
+    patchCrmLead(lead.lead_id, { qualification_notes: crmNoteDrafts[lead.lead_id] || null });
+  }
+
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError("");
@@ -2594,6 +2683,14 @@ export default function Home() {
             <Megaphone size={18} />
             Campanhas
           </button>
+          <button
+            className={`nav-item ${activeView === "whatsappCrm" ? "active" : ""}`}
+            onClick={() => switchView("whatsappCrm")}
+            type="button"
+          >
+            <Users size={18} />
+            CRM
+          </button>
 
           <div className="nav-section-label">E-mail</div>
           <button
@@ -2665,13 +2762,15 @@ export default function Home() {
                               ? "Templates WhatsApp"
                               : activeView === "whatsappCampaigns"
                                 ? "Campanhas WhatsApp"
-                                : activeView === "templates"
-                                  ? "Templates de e-mail"
-                                  : activeView === "lists"
-                                    ? "Listas de leads"
-                                    : activeView === "campaigns"
-                                      ? "Campanhas de e-mail"
-                                      : "Histórico de envios"}
+                                : activeView === "whatsappCrm"
+                                  ? "CRM WhatsApp"
+                                  : activeView === "templates"
+                                    ? "Templates de e-mail"
+                                    : activeView === "lists"
+                                      ? "Listas de leads"
+                                      : activeView === "campaigns"
+                                        ? "Campanhas de e-mail"
+                                        : "Histórico de envios"}
             </h1>
           </div>
           {activeView === "search" || activeView === "leads" ? (
@@ -3695,6 +3794,106 @@ export default function Home() {
                   </table>
                 </div>
               </section>
+            </section>
+          </section>
+        ) : activeView === "whatsappCrm" ? (
+          <section className="email-workspace whatsapp-workspace crm-workspace">
+            {(whatsappError || whatsappMessage) && (
+              <div className={`notice ${whatsappError ? "danger" : "success"}`}>{whatsappError || whatsappMessage}</div>
+            )}
+
+            <section className="crm-board" aria-label="Pipeline de CRM WhatsApp">
+              {CRM_STAGES.map((stage) => {
+                const stageLeads = crmLeadsByStage[stage.value] || [];
+                return (
+                  <section className="crm-column" key={stage.value}>
+                    <div className="crm-column-heading">
+                      <div>
+                        <h2>{stage.label}</h2>
+                        <small>{stageLeads.length} leads</small>
+                      </div>
+                      <span className={`status-pill ${stage.value}`}>{stageLeads.length}</span>
+                    </div>
+
+                    <div className="crm-card-list">
+                      {stageLeads.length === 0 ? <p className="empty-state">Sem leads neste estágio.</p> : null}
+                      {stageLeads.map((lead) => {
+                        const website = safeText(lead.website).trim();
+                        const websiteHref = website && !/^https?:\/\//i.test(website) ? `https://${website}` : website;
+                        const noteDraft = crmNoteDrafts[lead.lead_id] ?? lead.qualification_notes ?? "";
+                        const crmBusy = whatsappBusyAction === `crm-${lead.lead_id}`;
+                        const notesChanged = noteDraft !== (lead.qualification_notes || "");
+
+                        return (
+                          <article className="crm-lead-card" key={lead.lead_id}>
+                            <div className="crm-card-header">
+                              <div>
+                                <strong>{formatOptionalText(lead.lead_name)}</strong>
+                                <span>
+                                  {[lead.niche, lead.location].filter(Boolean).join(" · ") || "-"}
+                                </span>
+                              </div>
+                              <span className={`status-pill ${lead.stage}`}>{crmStageLabel(lead.stage)}</span>
+                            </div>
+
+                            <div className="crm-contact-row">
+                              <span>{formatOptionalText(lead.phone)}</span>
+                              {website ? (
+                                <a href={websiteHref} target="_blank" rel="noreferrer">
+                                  <Globe2 size={14} />
+                                  {displayWebsite(website)}
+                                </a>
+                              ) : (
+                                <span>-</span>
+                              )}
+                            </div>
+
+                            <div className="crm-message-block">
+                              <span>Última mensagem</span>
+                              <p>{formatOptionalText(lead.last_message)}</p>
+                              <small>{formatDate(lead.last_message_at)}</small>
+                            </div>
+
+                            <label className="crm-stage-control">
+                              Estágio
+                              <select
+                                disabled={crmBusy}
+                                value={lead.stage}
+                                onChange={(event) => handleCrmStageChange(lead, event.target.value as CrmStage)}
+                              >
+                                {CRM_STAGES.map((stageOption) => (
+                                  <option key={stageOption.value} value={stageOption.value}>
+                                    {stageOption.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <label className="crm-notes-control">
+                              Notas
+                              <textarea
+                                rows={4}
+                                value={noteDraft}
+                                onChange={(event) => handleCrmNoteChange(lead.lead_id, event.target.value)}
+                              />
+                            </label>
+
+                            <button
+                              className="secondary-button compact-button"
+                              disabled={crmBusy || !notesChanged}
+                              onClick={() => saveCrmNotes(lead)}
+                              type="button"
+                            >
+                              {crmBusy ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+                              Salvar notas
+                            </button>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </section>
+                );
+              })}
             </section>
           </section>
         ) : activeView === "dashboard" ? (

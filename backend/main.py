@@ -17,6 +17,8 @@ from backend.auth import clear_session_cookie, create_session_token, get_current
 from backend.config import get_settings
 from backend.database import get_db, init_db
 from backend.models import (
+    CrmLead,
+    CrmStageHistory,
     EmailCampaign,
     EmailCampaignTemplate,
     EmailSend,
@@ -26,7 +28,9 @@ from backend.models import (
     SearchRun,
     WhatsAppCampaign,
     WhatsAppCampaignTemplate,
+    WhatsAppConversation,
     WhatsAppInstance,
+    WhatsAppMessage,
     WhatsAppMessageTemplate,
     WhatsAppSend,
 )
@@ -36,6 +40,8 @@ from backend.schemas import (
     BulkDeleteRequest,
     BulkDeleteResponse,
     ContentPreviewRead,
+    CrmLeadRead,
+    CrmLeadUpdate,
     DesktopLeadIngestResponse,
     DesktopSearchLead,
     DesktopSearchUpdate,
@@ -72,6 +78,7 @@ from backend.schemas import (
     WhatsAppQrCodeRead,
 )
 from backend.scrapers.email_scraper import normalize_site_url
+from backend.services.crm import CRM_STAGES, get_or_create_crm_lead
 from backend.services.content_preview import fetch_content_preview
 from backend.services.email_campaigns import (
     count_leads_for_list,
@@ -236,6 +243,48 @@ def _validate_evolution_webhook_secret(request: Request) -> None:
 
     if not expected_secret or not provided_secret or not secrets.compare_digest(provided_secret, expected_secret):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Webhook Evolution não autorizado")
+
+
+def _latest_whatsapp_context_for_lead(db: Session, lead_id: int) -> tuple[WhatsAppConversation | None, WhatsAppMessage | None]:
+    conversation = db.scalar(
+        select(WhatsAppConversation)
+        .where(WhatsAppConversation.lead_id == lead_id)
+        .order_by(desc(WhatsAppConversation.last_message_at), desc(WhatsAppConversation.created_at), desc(WhatsAppConversation.id))
+        .limit(1)
+    )
+    if not conversation:
+        return None, None
+
+    message = db.scalar(
+        select(WhatsAppMessage)
+        .where(WhatsAppMessage.conversation_id == conversation.id)
+        .order_by(desc(WhatsAppMessage.created_at), desc(WhatsAppMessage.id))
+        .limit(1)
+    )
+    return conversation, message
+
+
+def _crm_lead_read(db: Session, crm_lead: CrmLead) -> CrmLeadRead:
+    lead = crm_lead.lead
+    conversation, latest_message = _latest_whatsapp_context_for_lead(db, crm_lead.lead_id)
+
+    return CrmLeadRead(
+        id=crm_lead.id,
+        lead_id=crm_lead.lead_id,
+        stage=crm_lead.stage,
+        qualification_notes=crm_lead.qualification_notes,
+        score=crm_lead.score,
+        updated_at=crm_lead.updated_at,
+        lead_name=lead.name if lead else "",
+        phone=lead.phone if lead else None,
+        website=lead.website if lead else None,
+        email=lead.email if lead else "",
+        niche=lead.search_run.niche if lead and lead.search_run else "",
+        location=lead.search_run.location if lead and lead.search_run else "",
+        last_message=latest_message.content if latest_message else None,
+        last_message_at=conversation.last_message_at if conversation else None,
+        conversation_id=conversation.id if conversation else None,
+    )
 
 
 def _count_saved_leads_for_run(db: Session, run_id: int) -> int:
@@ -897,6 +946,75 @@ def receive_evolution_webhook(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     return {"status": "ok", "event": event, **result}
+
+
+@app.get("/api/crm/leads", response_model=list[CrmLeadRead])
+def list_crm_leads(
+    stage: str | None = None,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> list[CrmLeadRead]:
+    _ = username
+    normalized_stage = (stage or "").strip()
+    if normalized_stage and normalized_stage not in CRM_STAGES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Estágio de CRM inválido")
+
+    stmt = select(CrmLead).options(selectinload(CrmLead.lead).selectinload(Lead.search_run)).order_by(
+        desc(CrmLead.updated_at),
+        desc(CrmLead.id),
+    )
+    if normalized_stage:
+        stmt = stmt.where(CrmLead.stage == normalized_stage)
+
+    crm_leads = list(db.scalars(stmt).all())
+    return [_crm_lead_read(db, crm_lead) for crm_lead in crm_leads]
+
+
+@app.patch("/api/crm/leads/{lead_id}", response_model=CrmLeadRead)
+def update_crm_lead(
+    lead_id: int,
+    payload: CrmLeadUpdate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> CrmLeadRead:
+    _ = username
+    lead = db.get(Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+
+    crm_lead = get_or_create_crm_lead(db, lead_id)
+    payload_data = payload.model_dump(exclude_unset=True)
+
+    if "stage" in payload_data and payload_data["stage"] is not None:
+        next_stage = payload_data["stage"]
+        if next_stage not in CRM_STAGES:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Estágio de CRM inválido")
+        if next_stage != crm_lead.stage:
+            previous_stage = crm_lead.stage
+            crm_lead.stage = next_stage
+            db.flush()
+            db.add(
+                CrmStageHistory(
+                    crm_lead_id=crm_lead.id,
+                    from_stage=previous_stage,
+                    to_stage=next_stage,
+                    changed_by="manual",
+                )
+            )
+
+    if "qualification_notes" in payload_data:
+        notes = payload_data["qualification_notes"]
+        crm_lead.qualification_notes = notes.strip() if isinstance(notes, str) and notes.strip() else None
+
+    db.commit()
+    crm_lead = db.scalar(
+        select(CrmLead)
+        .options(selectinload(CrmLead.lead).selectinload(Lead.search_run))
+        .where(CrmLead.id == crm_lead.id)
+    )
+    if not crm_lead:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead de CRM não encontrado")
+    return _crm_lead_read(db, crm_lead)
 
 
 @app.get("/api/whatsapp/templates", response_model=list[WhatsAppMessageTemplateRead])

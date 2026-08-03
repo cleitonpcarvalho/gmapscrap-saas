@@ -1000,6 +1000,162 @@ td span {
   background: var(--surface-soft);
 }
 
+.status-pill.new {
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
+.status-pill.responded {
+  color: #0f766e;
+  background: #dff7f1;
+}
+
+.status-pill.qualified {
+  color: var(--success);
+  background: #dcf6e8;
+}
+
+.status-pill.not_interested {
+  color: #9f1239;
+  background: #ffe4e6;
+}
+
+.status-pill.converted {
+  color: #7a4b00;
+  background: #fff4ce;
+}
+
+.crm-board {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(240px, 1fr));
+  gap: 14px;
+  align-items: start;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.crm-column {
+  min-width: 240px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.crm-column-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.crm-column-heading h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.crm-column-heading small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.crm-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.crm-lead-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 20px rgba(23, 33, 29, 0.05);
+}
+
+.crm-card-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.crm-card-header strong,
+.crm-card-header span,
+.crm-message-block span,
+.crm-message-block small {
+  display: block;
+}
+
+.crm-card-header strong {
+  overflow-wrap: anywhere;
+}
+
+.crm-card-header div > span,
+.crm-contact-row,
+.crm-message-block span,
+.crm-message-block small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.crm-contact-row {
+  display: grid;
+  gap: 6px;
+}
+
+.crm-contact-row a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  max-width: 100%;
+  color: var(--accent-dark);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.crm-message-block {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.crm-message-block p {
+  display: -webkit-box;
+  margin: 0;
+  min-height: 38px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.crm-stage-control,
+.crm-notes-control {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.crm-notes-control textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
 .empty-state,
 .empty-cell {
   color: var(--muted);
@@ -1420,9 +1576,14 @@ td a {
   .email-grid,
   .form-grid,
   .cards-grid,
+  .crm-board,
   .campaign-card > div:first-child,
   .template-stat-row {
     grid-template-columns: 1fr;
+  }
+
+  .crm-column {
+    min-width: 0;
   }
 
   .campaign-card > div:first-child,

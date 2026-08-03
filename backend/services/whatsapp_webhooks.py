@@ -10,6 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.models import Lead, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage
+from backend.services.crm import get_or_create_crm_lead
 from backend.services.openai_audio import transcribe_audio_bytes
 from backend.services.whatsapp_providers.evolution import EvolutionApiError, EvolutionProvider
 from backend.services.whatsapp_validation import normalize_phone_e164
@@ -61,6 +62,8 @@ def ingest_evolution_messages_upsert(
         sender_phone = _phone_from_jid(remote_jid)
         lead = _find_lead_by_phone(db, sender_phone)
         conversation = _get_or_create_conversation(db, instance, lead)
+        if lead:
+            get_or_create_crm_lead(db, lead.id)
         message_type = _message_type(data)
         message_created_at = _message_datetime(payload, data)
         audio_transcript = None

@@ -249,6 +249,32 @@ class WhatsAppMessageTemplateRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+CrmStage = Literal["new", "responded", "qualified", "not_interested", "converted"]
+
+
+class CrmLeadUpdate(BaseModel):
+    stage: CrmStage | None = None
+    qualification_notes: str | None = Field(default=None, max_length=5000)
+
+
+class CrmLeadRead(BaseModel):
+    id: int
+    lead_id: int
+    stage: CrmStage
+    qualification_notes: str | None = None
+    score: int | None = None
+    updated_at: datetime
+    lead_name: str
+    phone: str | None = None
+    website: str | None = None
+    email: str
+    niche: str
+    location: str
+    last_message: str | None = None
+    last_message_at: datetime | None = None
+    conversation_id: int | None = None
+
+
 class AiTemplateGenerateRequest(BaseModel):
     mode: Literal["single", "sequence"] = "sequence"
     count: int = Field(default=3, ge=1, le=5)

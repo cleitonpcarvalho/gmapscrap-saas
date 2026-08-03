@@ -14,7 +14,7 @@ from starlette.requests import Request
 
 from backend import main
 from backend.database import Base
-from backend.models import Lead, SearchRun, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage
+from backend.models import CrmLead, Lead, SearchRun, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage
 from backend.services import whatsapp_webhooks
 
 
@@ -153,6 +153,7 @@ def test_evolution_text_webhook_creates_conversation_and_matches_lead(
 
     conversation = db_session.scalars(select(WhatsAppConversation)).one()
     message = db_session.scalars(select(WhatsAppMessage)).one()
+    crm_lead = db_session.scalars(select(CrmLead)).one()
 
     assert conversation.lead_id == ids["lead_id"]
     assert conversation.instance_id == ids["instance_id"]
@@ -161,6 +162,8 @@ def test_evolution_text_webhook_creates_conversation_and_matches_lead(
     assert message.message_type == "text"
     assert message.content == "Hello, I need help with my order"
     assert message.provider_message_id == "3EB0C7B4E7A2B8E6D4F1"
+    assert crm_lead.lead_id == ids["lead_id"]
+    assert crm_lead.stage == "new"
 
 
 def test_evolution_text_webhook_updates_existing_conversation(
@@ -215,6 +218,7 @@ def test_evolution_text_webhook_unknown_lead_creates_null_lead_conversation(
     assert conversation.lead_id is None
     assert message.conversation_id == conversation.id
     assert message.content == "Hello, I need help with my order"
+    assert db_session.scalar(select(func.count(CrmLead.id))) == 0
 
 
 def test_evolution_audio_webhook_downloads_and_transcribes_audio(
