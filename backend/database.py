@@ -51,6 +51,7 @@ def init_db() -> None:
     _ensure_whatsapp_conversation_columns()
     _ensure_search_run_columns()
     _ensure_lead_columns()
+    _ensure_lead_list_columns()
     _ensure_email_template_columns()
     _ensure_email_campaign_columns()
 
@@ -159,16 +160,48 @@ def _ensure_lead_columns() -> None:
     if "leads" not in inspector.get_table_names():
         return
 
-    website_column = next((column for column in inspector.get_columns("leads") if column["name"] == "website"), None)
-    if not website_column or website_column.get("nullable", True):
-        return
+    existing_columns = {column["name"] for column in inspector.get_columns("leads")}
 
     try:
         with engine.begin() as connection:
             connection.execute(text("SET lock_timeout = '10s'"))
-            connection.execute(text("ALTER TABLE leads ALTER COLUMN website DROP NOT NULL"))
+            if "whatsapp_validated" not in existing_columns:
+                connection.execute(text("ALTER TABLE leads ADD COLUMN whatsapp_validated BOOLEAN"))
+                connection.execute(
+                    text(
+                        "UPDATE leads "
+                        "SET whatsapp_validated = TRUE "
+                        "FROM search_runs "
+                        "WHERE leads.run_id = search_runs.id "
+                        "AND search_runs.validate_whatsapp = TRUE "
+                        "AND leads.whatsapp_validated IS NULL"
+                    )
+                )
+
+            website_column = next((column for column in inspector.get_columns("leads") if column["name"] == "website"), None)
+            if website_column and not website_column.get("nullable", True):
+                connection.execute(text("ALTER TABLE leads ALTER COLUMN website DROP NOT NULL"))
     except SQLAlchemyError:
         return
+
+
+def _ensure_lead_list_columns() -> None:
+    inspector = inspect(engine)
+    if "lead_lists" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("lead_lists")}
+    migrations = {
+        "only_whatsapp_validated": (
+            "ALTER TABLE lead_lists ADD COLUMN only_whatsapp_validated BOOLEAN NOT NULL DEFAULT FALSE"
+        ),
+    }
+
+    with engine.begin() as connection:
+        connection.execute(text("SET lock_timeout = '10s'"))
+        for column_name, statement in migrations.items():
+            if column_name not in existing_columns:
+                connection.execute(text(statement))
 
 
 def _ensure_email_campaign_columns() -> None:

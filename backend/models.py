@@ -44,6 +44,7 @@ class Lead(Base):
     phone: Mapped[str] = mapped_column(String(80), default="", nullable=False)
     website: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
     email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    whatsapp_validated: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     search_run: Mapped[SearchRun] = relationship(back_populates="leads")
@@ -122,6 +123,7 @@ class LeadList(Base):
     location_filter: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     search_run_id: Mapped[int | None] = mapped_column(ForeignKey("search_runs.id", ondelete="SET NULL"), nullable=True)
     only_never_emailed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    only_whatsapp_validated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     never_received_template_id: Mapped[int | None] = mapped_column(
         ForeignKey("email_templates.id", ondelete="SET NULL"),
         nullable=True,

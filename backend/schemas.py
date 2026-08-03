@@ -51,6 +51,7 @@ class LeadRead(BaseModel):
     phone: str
     website: str | None = None
     email: str
+    whatsapp_validated: bool | None = None
     validate_whatsapp: bool = False
     whatsapp_url: str = ""
     created_at: datetime
@@ -279,6 +280,7 @@ class LeadListCreate(BaseModel):
     location_filter: str = Field(default="", max_length=255)
     search_run_id: int | None = None
     only_never_emailed: bool = False
+    only_whatsapp_validated: bool = False
     never_received_template_id: int | None = None
 
     @field_validator("niche_filter", "location_filter", mode="before")
@@ -293,6 +295,7 @@ class LeadListUpdate(BaseModel):
     location_filter: str | None = Field(default=None, max_length=255)
     search_run_id: int | None = None
     only_never_emailed: bool | None = None
+    only_whatsapp_validated: bool | None = None
     never_received_template_id: int | None = None
 
     @field_validator("niche_filter", "location_filter", mode="before")
@@ -308,6 +311,7 @@ class LeadListRead(BaseModel):
     location_filter: str
     search_run_id: int | None
     only_never_emailed: bool
+    only_whatsapp_validated: bool
     never_received_template_id: int | None
     created_at: datetime
     updated_at: datetime

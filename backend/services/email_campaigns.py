@@ -126,6 +126,9 @@ def lead_query_for_list(lead_list: LeadList):
     if lead_list.search_run_id:
         stmt = stmt.where(Lead.run_id == lead_list.search_run_id)
 
+    if lead_list.only_whatsapp_validated:
+        stmt = stmt.where(Lead.whatsapp_validated.is_(True))
+
     blocked_stmt = select(LeadEmailPreference.lead_id).where(LeadEmailPreference.do_not_contact.is_(True))
     stmt = stmt.where(~Lead.id.in_(blocked_stmt))
 

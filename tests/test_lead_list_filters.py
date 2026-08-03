@@ -1,0 +1,151 @@
+from collections.abc import Generator
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from backend import main
+from backend.database import Base
+from backend.models import Lead, SearchRun
+from backend.schemas import LeadListCreate, LeadListUpdate
+from backend.scrapers.maps_scraper import MapLead
+from backend.services import jobs, whatsapp_campaigns
+from backend.services.whatsapp_validation import WhatsAppValidationResult
+
+
+@pytest.fixture()
+def db_session() -> Generator[Session, None, None]:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    testing_session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+    db = testing_session_local()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def seed_filter_leads(db: Session) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=True,
+        status="completed",
+        message="Busca concluída.",
+    )
+    db.add(run)
+    db.flush()
+    db.add_all(
+        [
+            Lead(
+                run_id=run.id,
+                name="Empresa Validada com Email",
+                address="Av. Paulista, 1000 - São Paulo, SP",
+                phone="(11) 99999-0000",
+                website="https://validada.example",
+                email="contato@validada.com.br",
+                whatsapp_validated=True,
+            ),
+            Lead(
+                run_id=run.id,
+                name="Empresa Sem Validacao",
+                address="Av. Paulista, 2000 - São Paulo, SP",
+                phone="(11) 98888-0000",
+                website="https://semvalidacao.example",
+                email="contato@semvalidacao.com.br",
+                whatsapp_validated=None,
+            ),
+            Lead(
+                run_id=run.id,
+                name="Empresa Validada sem Email",
+                address="Av. Paulista, 3000 - São Paulo, SP",
+                phone="(11) 97777-0000",
+                website=None,
+                email="",
+                whatsapp_validated=True,
+            ),
+        ]
+    )
+    db.commit()
+
+
+def test_lead_list_can_filter_only_whatsapp_validated_leads(db_session: Session) -> None:
+    seed_filter_leads(db_session)
+
+    lead_list = main.create_lead_list(
+        LeadListCreate(
+            name="WhatsApp validado",
+            only_whatsapp_validated=True,
+        ),
+        db=db_session,
+        username="test-user",
+    )
+
+    assert lead_list.only_whatsapp_validated is True
+    assert lead_list.lead_count == 1
+
+    whatsapp_leads = db_session.scalars(whatsapp_campaigns.lead_query_for_list(lead_list)).all()
+    assert [lead.name for lead in whatsapp_leads] == [
+        "Empresa Validada com Email",
+        "Empresa Validada sem Email",
+    ]
+
+    updated = main.update_lead_list(
+        lead_list.id,
+        LeadListUpdate(name="Todos os leads", only_whatsapp_validated=False),
+        db=db_session,
+        username="test-user",
+    )
+    assert updated.only_whatsapp_validated is False
+
+
+def test_scraping_marks_saved_lead_as_whatsapp_validated(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=False,
+        validate_whatsapp=True,
+        status="running",
+        message="Validando WhatsApp.",
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        jobs,
+        "validate_whatsapp_number",
+        lambda phone, address="": WhatsAppValidationResult(
+            phone=phone,
+            normalized_phone="+5511999990000",
+            status="valid",
+        ),
+    )
+
+    saved = jobs.save_scraped_lead(
+        db_session,
+        run,
+        MapLead(
+            name="Empresa Validada",
+            address="Av. Paulista, 1000 - São Paulo, SP",
+            phone="(11) 99999-0000",
+            website="",
+        ),
+    )
+
+    assert saved is True
+    lead = db_session.query(Lead).one()
+    assert lead.whatsapp_validated is True

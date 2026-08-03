@@ -7,7 +7,8 @@ from backend.database import Base
 def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
-    tables = set(inspect(engine).get_table_names())
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
 
     assert {
         "whatsapp_instances",
@@ -20,3 +21,9 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
         "crm_leads",
         "crm_stage_history",
     }.issubset(tables)
+
+    lead_columns = {column["name"] for column in inspector.get_columns("leads")}
+    lead_list_columns = {column["name"] for column in inspector.get_columns("lead_lists")}
+
+    assert "whatsapp_validated" in lead_columns
+    assert "only_whatsapp_validated" in lead_list_columns

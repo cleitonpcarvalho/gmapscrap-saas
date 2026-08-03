@@ -147,6 +147,7 @@ def _save_row(db: Session, run: SearchRun, lead: MapLead, website: str | None, e
         phone=lead.phone,
         website=website or None,
         email=email,
+        whatsapp_validated=True if run.validate_whatsapp else None,
     )
     db.add(row)
 

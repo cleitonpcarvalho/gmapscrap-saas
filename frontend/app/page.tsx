@@ -81,6 +81,7 @@ type Lead = {
   phone: string | null;
   website: string | null;
   email: string;
+  whatsapp_validated: boolean | null;
   validate_whatsapp: boolean;
   whatsapp_url: string;
   created_at: string;
@@ -174,6 +175,7 @@ type LeadList = {
   location_filter: string;
   search_run_id: number | null;
   only_never_emailed: boolean;
+  only_whatsapp_validated: boolean;
   never_received_template_id: number | null;
   lead_count: number;
 };
@@ -1001,11 +1003,13 @@ export default function Home() {
     location_filter: "",
     search_run_id: "",
     only_never_emailed: false,
+    only_whatsapp_validated: false,
     never_received_template_id: ""
   });
   const [editLeadListForm, setEditLeadListForm] = useState({
     name: "",
     only_never_emailed: false,
+    only_whatsapp_validated: false,
     never_received_template_id: ""
   });
   const [campaigns, setCampaigns] = useState<EmailCampaign[]>([]);
@@ -1697,6 +1701,7 @@ export default function Home() {
           location_filter: encodeListFilterValues(selectedListLocations),
           search_run_id: null,
           only_never_emailed: leadListForm.only_never_emailed,
+          only_whatsapp_validated: leadListForm.only_whatsapp_validated,
           never_received_template_id: leadListForm.never_received_template_id
             ? Number(leadListForm.never_received_template_id)
             : null
@@ -1721,6 +1726,7 @@ export default function Home() {
     setEditLeadListForm({
       name: list.name,
       only_never_emailed: list.only_never_emailed,
+      only_whatsapp_validated: list.only_whatsapp_validated,
       never_received_template_id: list.never_received_template_id ? String(list.never_received_template_id) : ""
     });
     setSelectedEditListNiches(decodeListFilterValues(list.niche_filter));
@@ -1735,6 +1741,7 @@ export default function Home() {
     setEditLeadListForm({
       name: "",
       only_never_emailed: false,
+      only_whatsapp_validated: false,
       never_received_template_id: ""
     });
   }
@@ -1762,6 +1769,7 @@ export default function Home() {
           location_filter: encodeListFilterValues(selectedEditListLocations),
           search_run_id: editingLeadList.search_run_id,
           only_never_emailed: editLeadListForm.only_never_emailed,
+          only_whatsapp_validated: editLeadListForm.only_whatsapp_validated,
           never_received_template_id: editLeadListForm.never_received_template_id
             ? Number(editLeadListForm.never_received_template_id)
             : null
@@ -3927,6 +3935,16 @@ export default function Home() {
                     selected={selectedListLocations}
                     onChange={setSelectedListLocations}
                   />
+                  <label className="checkbox-label">
+                    <input
+                      checked={leadListForm.only_whatsapp_validated}
+                      onChange={(event) =>
+                        setLeadListForm({ ...leadListForm, only_whatsapp_validated: event.target.checked })
+                      }
+                      type="checkbox"
+                    />
+                    Somente com WhatsApp válido
+                  </label>
                   <label>
                     Nunca recebeu template
                     <select
@@ -3993,6 +4011,7 @@ export default function Home() {
                       <small>
                         {formatListFilter(list.niche_filter, "Todos os nichos")} · {formatListFilter(list.location_filter, "Todas as localidades")}
                       </small>
+                      {list.only_whatsapp_validated ? <small>Somente WhatsApp válido</small> : null}
                       {list.only_never_emailed ? <small>Nunca recebeu e-mail</small> : null}
                       {list.never_received_template_id ? (
                         <small>
@@ -4391,6 +4410,16 @@ export default function Home() {
                 selected={selectedEditListLocations}
                 onChange={setSelectedEditListLocations}
               />
+              <label className="checkbox-label">
+                <input
+                  checked={editLeadListForm.only_whatsapp_validated}
+                  onChange={(event) =>
+                    setEditLeadListForm({ ...editLeadListForm, only_whatsapp_validated: event.target.checked })
+                  }
+                  type="checkbox"
+                />
+                Somente com WhatsApp válido
+              </label>
               <label>
                 Nunca recebeu template
                 <select
