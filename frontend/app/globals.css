@@ -1156,6 +1156,35 @@ td span {
   resize: vertical;
 }
 
+.whatsapp-ai-panel {
+  max-width: 920px;
+}
+
+.whatsapp-ai-toggle {
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 16px;
+}
+
+.whatsapp-ai-panel textarea {
+  min-height: 320px;
+  resize: vertical;
+}
+
+.whatsapp-ai-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.whatsapp-ai-footer small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .empty-state,
 .empty-cell {
   color: var(--muted);
@@ -1547,6 +1576,7 @@ td a {
   .pagination-row,
   .modal-actions,
   .inline-controls,
+  .whatsapp-ai-footer,
   .template-picker {
     width: 100%;
     align-items: stretch;

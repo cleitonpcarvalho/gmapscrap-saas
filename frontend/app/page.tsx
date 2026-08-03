@@ -109,6 +109,7 @@ type AppView =
   | "whatsappTemplates"
   | "whatsappCampaigns"
   | "whatsappCrm"
+  | "whatsappAi"
   | "templates"
   | "lists"
   | "campaigns"
@@ -295,6 +296,13 @@ type CrmLead = {
   conversation_id: number | null;
 };
 
+type WhatsAppAiSettings = {
+  id: number;
+  system_prompt: string;
+  enabled: boolean;
+  updated_at: string;
+};
+
 type WhatsAppInstanceFormErrors = {
   name?: string;
 };
@@ -452,6 +460,11 @@ const CRM_STAGES: { value: CrmStage; label: string }[] = [
   { value: "not_interested", label: "Sem interesse" },
   { value: "converted", label: "Convertido" }
 ];
+
+const defaultWhatsappAiForm = {
+  system_prompt: "",
+  enabled: false
+};
 
 const defaultManualLeadForm: ManualLeadForm = {
   niche: "",
@@ -1065,6 +1078,8 @@ export default function Home() {
   const [whatsappCampaigns, setWhatsappCampaigns] = useState<WhatsAppCampaign[]>([]);
   const [crmLeads, setCrmLeads] = useState<CrmLead[]>([]);
   const [crmNoteDrafts, setCrmNoteDrafts] = useState<Record<number, string>>({});
+  const [whatsappAiSettings, setWhatsappAiSettings] = useState<WhatsAppAiSettings | null>(null);
+  const [whatsappAiForm, setWhatsappAiForm] = useState(defaultWhatsappAiForm);
   const [whatsappInstanceForm, setWhatsappInstanceForm] = useState(defaultWhatsappInstanceForm);
   const [whatsappInstanceFormErrors, setWhatsappInstanceFormErrors] = useState<WhatsAppInstanceFormErrors>({});
   const [whatsappTemplateForm, setWhatsappTemplateForm] = useState(defaultWhatsappTemplateForm);
@@ -1289,16 +1304,22 @@ export default function Home() {
   }
 
   async function refreshWhatsappData() {
-    const [nextInstances, nextTemplates, nextCampaigns, nextCrmLeads] = await Promise.all([
+    const [nextInstances, nextTemplates, nextCampaigns, nextCrmLeads, nextAiSettings] = await Promise.all([
       apiFetch<WhatsAppInstance[]>("/api/whatsapp/instances"),
       apiFetch<WhatsAppMessageTemplate[]>("/api/whatsapp/templates"),
       apiFetch<WhatsAppCampaign[]>("/api/whatsapp/campaigns"),
-      apiFetch<CrmLead[]>("/api/crm/leads")
+      apiFetch<CrmLead[]>("/api/crm/leads"),
+      apiFetch<WhatsAppAiSettings>("/api/whatsapp/ai-settings")
     ]);
 
     setWhatsappInstances(nextInstances);
     setWhatsappTemplates(nextTemplates);
     setWhatsappCampaigns(nextCampaigns);
+    setWhatsappAiSettings(nextAiSettings);
+    setWhatsappAiForm({
+      system_prompt: nextAiSettings.system_prompt,
+      enabled: nextAiSettings.enabled
+    });
     setCrmLeads(nextCrmLeads);
     setCrmNoteDrafts((current) =>
       Object.fromEntries(
@@ -1331,6 +1352,8 @@ export default function Home() {
       setActiveView("whatsappCampaigns");
     } else if (window.location.pathname === "/whatsapp/crm") {
       setActiveView("whatsappCrm");
+    } else if (window.location.pathname === "/whatsapp/ia") {
+      setActiveView("whatsappAi");
     } else if (window.location.pathname === "/whatsapp" || window.location.hash === "#whatsapp") {
       setActiveView("whatsapp");
     } else if (window.location.hash === "#leads") {
@@ -1469,7 +1492,7 @@ export default function Home() {
   }, [user, activeView, previewContentLink, previewContentData]);
 
   const emailViews: AppView[] = ["dashboard", "templates", "lists", "campaigns", "history", "settings"];
-  const whatsappViews: AppView[] = ["whatsapp", "whatsappInstances", "whatsappTemplates", "whatsappCampaigns", "whatsappCrm"];
+  const whatsappViews: AppView[] = ["whatsapp", "whatsappInstances", "whatsappTemplates", "whatsappCampaigns", "whatsappCrm", "whatsappAi"];
 
   useEffect(() => {
     if (!user || !emailViews.includes(activeView)) return;
@@ -1495,6 +1518,7 @@ export default function Home() {
       whatsappTemplates: "/whatsapp/templates",
       whatsappCampaigns: "/whatsapp/campanhas",
       whatsappCrm: "/whatsapp/crm",
+      whatsappAi: "/whatsapp/ia",
       templates: "#templates",
       lists: "#listas",
       campaigns: "#campanhas",
@@ -2386,6 +2410,33 @@ export default function Home() {
     patchCrmLead(lead.lead_id, { qualification_notes: crmNoteDrafts[lead.lead_id] || null });
   }
 
+  async function handleSaveWhatsappAiSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setWhatsappBusyAction("save-ai-settings");
+
+    try {
+      const updatedSettings = await apiFetch<WhatsAppAiSettings>("/api/whatsapp/ai-settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          system_prompt: whatsappAiForm.system_prompt,
+          enabled: whatsappAiForm.enabled
+        })
+      });
+      setWhatsappAiSettings(updatedSettings);
+      setWhatsappAiForm({
+        system_prompt: updatedSettings.system_prompt,
+        enabled: updatedSettings.enabled
+      });
+      setWhatsappMessage("Configuração de IA salva.");
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível salvar a configuração de IA.");
+    } finally {
+      setWhatsappBusyAction("");
+    }
+  }
+
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError("");
@@ -2691,6 +2742,14 @@ export default function Home() {
             <Users size={18} />
             CRM
           </button>
+          <button
+            className={`nav-item ${activeView === "whatsappAi" ? "active" : ""}`}
+            onClick={() => switchView("whatsappAi")}
+            type="button"
+          >
+            <Sparkles size={18} />
+            IA
+          </button>
 
           <div className="nav-section-label">E-mail</div>
           <button
@@ -2764,13 +2823,15 @@ export default function Home() {
                                 ? "Campanhas WhatsApp"
                                 : activeView === "whatsappCrm"
                                   ? "CRM WhatsApp"
-                                  : activeView === "templates"
-                                    ? "Templates de e-mail"
-                                    : activeView === "lists"
-                                      ? "Listas de leads"
-                                      : activeView === "campaigns"
-                                        ? "Campanhas de e-mail"
-                                        : "Histórico de envios"}
+                                  : activeView === "whatsappAi"
+                                    ? "IA WhatsApp"
+                                    : activeView === "templates"
+                                      ? "Templates de e-mail"
+                                      : activeView === "lists"
+                                        ? "Listas de leads"
+                                        : activeView === "campaigns"
+                                          ? "Campanhas de e-mail"
+                                          : "Histórico de envios"}
             </h1>
           </div>
           {activeView === "search" || activeView === "leads" ? (
@@ -3895,6 +3956,50 @@ export default function Home() {
                 );
               })}
             </section>
+          </section>
+        ) : activeView === "whatsappAi" ? (
+          <section className="email-workspace whatsapp-workspace whatsapp-ai-workspace">
+            {(whatsappError || whatsappMessage) && (
+              <div className={`notice ${whatsappError ? "danger" : "success"}`}>{whatsappError || whatsappMessage}</div>
+            )}
+
+            <form className="panel email-panel whatsapp-ai-panel" onSubmit={handleSaveWhatsappAiSettings}>
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Resposta automática</p>
+                  <h2>Configuração da IA</h2>
+                </div>
+                <span className={`status-pill ${whatsappAiForm.enabled ? "connected" : "disconnected"}`}>
+                  {whatsappAiForm.enabled ? "Ativa" : "Inativa"}
+                </span>
+              </div>
+
+              <label className="checkbox-label whatsapp-ai-toggle">
+                <input
+                  checked={whatsappAiForm.enabled}
+                  onChange={(event) => setWhatsappAiForm({ ...whatsappAiForm, enabled: event.target.checked })}
+                  type="checkbox"
+                />
+                Ativar resposta automática
+              </label>
+
+              <label>
+                Prompt de sistema
+                <textarea
+                  rows={14}
+                  value={whatsappAiForm.system_prompt}
+                  onChange={(event) => setWhatsappAiForm({ ...whatsappAiForm, system_prompt: event.target.value })}
+                />
+              </label>
+
+              <div className="whatsapp-ai-footer">
+                <small>Última atualização: {formatDate(whatsappAiSettings?.updated_at || null)}</small>
+                <button className="primary-button" disabled={whatsappBusyAction === "save-ai-settings"} type="submit">
+                  {whatsappBusyAction === "save-ai-settings" ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+                  Salvar configuração
+                </button>
+              </div>
+            </form>
           </section>
         ) : activeView === "dashboard" ? (
           <section className="email-workspace">

@@ -432,6 +432,15 @@ class WhatsAppMessage(Base):
     conversation: Mapped[WhatsAppConversation] = relationship(back_populates="messages")
 
 
+class WhatsAppAiSettings(Base):
+    __tablename__ = "whatsapp_ai_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    system_prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class CrmLead(Base):
     __tablename__ = "crm_leads"
     __table_args__ = (

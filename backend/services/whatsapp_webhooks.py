@@ -10,6 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.models import Lead, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage
+from backend.services.whatsapp_ai_agent import handle_inbound_message
 from backend.services.crm import get_or_create_crm_lead
 from backend.services.openai_audio import transcribe_audio_bytes
 from backend.services.whatsapp_providers.evolution import EvolutionApiError, EvolutionProvider
@@ -81,17 +82,18 @@ def ingest_evolution_messages_upsert(
 
         conversation.last_message_at = message_created_at
         conversation.status = "open"
-        db.add(
-            WhatsAppMessage(
-                conversation_id=conversation.id,
-                direction="inbound",
-                content=content,
-                message_type=message_type,
-                audio_transcript=audio_transcript,
-                provider_message_id=provider_message_id,
-                created_at=message_created_at,
-            )
+        inbound_message = WhatsAppMessage(
+            conversation_id=conversation.id,
+            direction="inbound",
+            content=content,
+            message_type=message_type,
+            audio_transcript=audio_transcript,
+            provider_message_id=provider_message_id,
+            created_at=message_created_at,
         )
+        db.add(inbound_message)
+        db.flush()
+        handle_inbound_message(db, conversation, inbound_message, sender_phone=sender_phone, provider=provider)
         processed += 1
 
     return {"processed": processed, "ignored": ignored}

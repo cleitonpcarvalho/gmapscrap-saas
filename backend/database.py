@@ -60,6 +60,7 @@ def _ensure_whatsapp_crm_tables() -> None:
     from backend.models import (
         CrmLead,
         CrmStageHistory,
+        WhatsAppAiSettings,
         WhatsAppCampaign,
         WhatsAppCampaignTemplate,
         WhatsAppConversation,
@@ -79,6 +80,7 @@ def _ensure_whatsapp_crm_tables() -> None:
             WhatsAppSend.__table__,
             WhatsAppConversation.__table__,
             WhatsAppMessage.__table__,
+            WhatsAppAiSettings.__table__,
             CrmLead.__table__,
             CrmStageHistory.__table__,
         ],

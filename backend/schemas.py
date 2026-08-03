@@ -275,6 +275,20 @@ class CrmLeadRead(BaseModel):
     conversation_id: int | None = None
 
 
+class WhatsAppAiSettingsUpdate(BaseModel):
+    system_prompt: str | None = Field(default=None, max_length=8000)
+    enabled: bool | None = None
+
+
+class WhatsAppAiSettingsRead(BaseModel):
+    id: int
+    system_prompt: str
+    enabled: bool
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AiTemplateGenerateRequest(BaseModel):
     mode: Literal["single", "sequence"] = "sequence"
     count: int = Field(default=3, ge=1, le=5)

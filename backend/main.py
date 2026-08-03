@@ -18,7 +18,6 @@ from backend.config import get_settings
 from backend.database import get_db, init_db
 from backend.models import (
     CrmLead,
-    CrmStageHistory,
     EmailCampaign,
     EmailCampaignTemplate,
     EmailSend,
@@ -26,6 +25,7 @@ from backend.models import (
     Lead,
     LeadList,
     SearchRun,
+    WhatsAppAiSettings,
     WhatsAppCampaign,
     WhatsAppCampaignTemplate,
     WhatsAppConversation,
@@ -69,6 +69,8 @@ from backend.schemas import (
     UserRead,
     WhatsAppCampaignCreate,
     WhatsAppCampaignRead,
+    WhatsAppAiSettingsRead,
+    WhatsAppAiSettingsUpdate,
     WhatsAppInstanceCreate,
     WhatsAppInstanceRead,
     WhatsAppInstanceStatusRead,
@@ -78,7 +80,7 @@ from backend.schemas import (
     WhatsAppQrCodeRead,
 )
 from backend.scrapers.email_scraper import normalize_site_url
-from backend.services.crm import CRM_STAGES, get_or_create_crm_lead
+from backend.services.crm import CRM_STAGES, get_or_create_crm_lead, update_crm_stage
 from backend.services.content_preview import fetch_content_preview
 from backend.services.email_campaigns import (
     count_leads_for_list,
@@ -100,6 +102,7 @@ from backend.services.jobs import (
     submit_search_job,
 )
 from backend.services.whatsapp_validation import is_whatsapp_validation_configured
+from backend.services.whatsapp_ai_agent import DEFAULT_SYSTEM_PROMPT, get_or_create_ai_settings
 from backend.services.whatsapp_campaigns import (
     resume_running_campaigns as resume_running_whatsapp_campaigns,
     start_campaign_scheduler as start_whatsapp_campaign_scheduler,
@@ -948,6 +951,39 @@ def receive_evolution_webhook(
     return {"status": "ok", "event": event, **result}
 
 
+@app.get("/api/whatsapp/ai-settings", response_model=WhatsAppAiSettingsRead)
+def get_whatsapp_ai_settings(
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppAiSettings:
+    _ = username
+    settings_row = get_or_create_ai_settings(db)
+    db.commit()
+    db.refresh(settings_row)
+    return settings_row
+
+
+@app.put("/api/whatsapp/ai-settings", response_model=WhatsAppAiSettingsRead)
+def update_whatsapp_ai_settings(
+    payload: WhatsAppAiSettingsUpdate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppAiSettings:
+    _ = username
+    settings_row = get_or_create_ai_settings(db)
+    payload_data = payload.model_dump(exclude_unset=True)
+
+    if "system_prompt" in payload_data:
+        system_prompt = payload_data["system_prompt"]
+        settings_row.system_prompt = system_prompt.strip() if isinstance(system_prompt, str) and system_prompt.strip() else DEFAULT_SYSTEM_PROMPT
+    if "enabled" in payload_data and payload_data["enabled"] is not None:
+        settings_row.enabled = bool(payload_data["enabled"])
+
+    db.commit()
+    db.refresh(settings_row)
+    return settings_row
+
+
 @app.get("/api/crm/leads", response_model=list[CrmLeadRead])
 def list_crm_leads(
     stage: str | None = None,
@@ -989,18 +1025,7 @@ def update_crm_lead(
         next_stage = payload_data["stage"]
         if next_stage not in CRM_STAGES:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Estágio de CRM inválido")
-        if next_stage != crm_lead.stage:
-            previous_stage = crm_lead.stage
-            crm_lead.stage = next_stage
-            db.flush()
-            db.add(
-                CrmStageHistory(
-                    crm_lead_id=crm_lead.id,
-                    from_stage=previous_stage,
-                    to_stage=next_stage,
-                    changed_by="manual",
-                )
-            )
+        crm_lead = update_crm_stage(db, lead_id, next_stage, changed_by="manual")
 
     if "qualification_notes" in payload_data:
         notes = payload_data["qualification_notes"]
