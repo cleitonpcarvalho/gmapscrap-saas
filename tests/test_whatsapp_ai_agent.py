@@ -23,7 +23,9 @@ from backend.models import (
     WhatsAppConversation,
     WhatsAppInstance,
     WhatsAppMessage,
+    WhatsAppPortfolioItem,
 )
+from backend.schemas import WhatsAppPortfolioItemCreate
 from backend.services import whatsapp_ai_agent
 
 
@@ -164,6 +166,13 @@ def test_whatsapp_ai_generates_and_sends_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seed_lead_and_instance(db_session)
+    db_session.add(
+        WhatsAppPortfolioItem(
+            description="Site para clínica odontológica com agendamento",
+            url="https://portfolio.example/clinica",
+        )
+    )
+    db_session.commit()
     enable_ai(
         db_session,
         services_description="Automatizamos atendimento para clínicas e operações locais.",
@@ -195,11 +204,34 @@ def test_whatsapp_ai_generates_and_sends_reply(
     assert captured["openai_payload"]["tools"][0]["name"] == "update_lead_stage"
     assert "Automatizamos atendimento para clínicas e operações locais." in system_content
     assert "detalhes de investimento são tratados na reunião" in system_content
+    assert "Site para clínica odontológica com agendamento" in system_content
+    assert "no máximo 1 item de portfólio relevante" in system_content
+    assert "Nunca mencione portfólio no disparo inicial" in system_content
     assert len(messages) == 2
     assert messages[0].direction == "inbound"
     assert messages[1].direction == "outbound"
     assert messages[1].content == "Claro! Posso te ajudar com isso por aqui."
     assert messages[1].provider_message_id == "OUTBOUND_AI_1"
+
+
+def test_whatsapp_portfolio_crud_endpoints(db_session: Session) -> None:
+    created = main.create_whatsapp_portfolio_item(
+        WhatsAppPortfolioItemCreate(
+            description="Site para restaurante com cardápio online",
+            url="portfolio.example/restaurante",
+        ),
+        db=db_session,
+        username="test-user",
+    )
+
+    assert created.description == "Site para restaurante com cardápio online"
+    assert created.url == "https://portfolio.example/restaurante"
+    assert [(item.id, item.description, item.url) for item in main.list_whatsapp_portfolio(db=db_session, username="test-user")] == [
+        (created.id, "Site para restaurante com cardápio online", "https://portfolio.example/restaurante")
+    ]
+
+    assert main.delete_whatsapp_portfolio_item(created.id, db=db_session, username="test-user") == {"status": "ok"}
+    assert main.list_whatsapp_portfolio(db=db_session, username="test-user") == []
 
 
 def test_whatsapp_ai_function_call_updates_crm_stage_and_history(

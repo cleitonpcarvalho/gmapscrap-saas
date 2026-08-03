@@ -70,6 +70,7 @@ def _ensure_whatsapp_crm_tables() -> None:
         WhatsAppInstance,
         WhatsAppMessage,
         WhatsAppMessageTemplate,
+        WhatsAppPortfolioItem,
         WhatsAppWebhookSettings,
         WhatsAppSend,
     )
@@ -85,6 +86,7 @@ def _ensure_whatsapp_crm_tables() -> None:
             WhatsAppConversation.__table__,
             WhatsAppMessage.__table__,
             WhatsAppAiSettings.__table__,
+            WhatsAppPortfolioItem.__table__,
             WhatsAppWebhookSettings.__table__,
             CrmLead.__table__,
             CrmStageHistory.__table__,

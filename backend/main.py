@@ -32,6 +32,7 @@ from backend.models import (
     WhatsAppInstance,
     WhatsAppMessage,
     WhatsAppMessageTemplate,
+    WhatsAppPortfolioItem,
     WhatsAppWebhookSettings,
     WhatsAppSend,
 )
@@ -54,6 +55,7 @@ from backend.schemas import (
     EmailTemplateRead,
     EmailTemplateUpdate,
     LeadCreate,
+    LeadSiteInsightsEnrichmentResponse,
     LeadListCreate,
     LeadListRead,
     LeadListUpdate,
@@ -78,6 +80,8 @@ from backend.schemas import (
     WhatsAppMessageTemplateCreate,
     WhatsAppMessageTemplateRead,
     WhatsAppMessageTemplateUpdate,
+    WhatsAppPortfolioItemCreate,
+    WhatsAppPortfolioItemRead,
     WhatsAppQrCodeRead,
     WhatsAppTemplateGenerateRequest,
     WhatsAppTemplateGenerateResponse,
@@ -98,6 +102,9 @@ from backend.services.email_delivery import get_or_create_smtp_config, send_emai
 from backend.services.email_validation import validate_email_address
 from backend.services.ai_templates import generate_email_templates, generate_whatsapp_template_content
 from backend.services.jobs import (
+    BRAZIL_LOCATION_INFERENCE,
+    eligible_retroactive_site_insights_lead_ids,
+    submit_retroactive_site_insights_jobs,
     create_search_run,
     resume_unfinished_search_runs,
     save_enriched_lead,
@@ -619,6 +626,23 @@ def list_leads(
     return list(db.scalars(stmt).all())
 
 
+@app.post("/api/leads/enrich-site-insights", response_model=LeadSiteInsightsEnrichmentResponse)
+def enrich_existing_leads_site_insights(
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> LeadSiteInsightsEnrichmentResponse:
+    _ = username
+    eligible_ids = eligible_retroactive_site_insights_lead_ids(db)
+    queued_count = submit_retroactive_site_insights_jobs(eligible_ids)
+    status_value = "processing_started" if queued_count else "no_eligible_leads"
+    return LeadSiteInsightsEnrichmentResponse(
+        status=status_value,
+        eligible_count=len(eligible_ids),
+        queued_count=queued_count,
+        location_inference=BRAZIL_LOCATION_INFERENCE,
+    )
+
+
 @app.post("/api/leads", response_model=LeadRead)
 def create_manual_lead(
     payload: LeadCreate,
@@ -1033,6 +1057,49 @@ def update_whatsapp_ai_settings(
     db.commit()
     db.refresh(settings_row)
     return settings_row
+
+
+@app.get("/api/whatsapp/portfolio", response_model=list[WhatsAppPortfolioItemRead])
+def list_whatsapp_portfolio(
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> list[WhatsAppPortfolioItem]:
+    _ = username
+    return list(db.scalars(select(WhatsAppPortfolioItem).order_by(desc(WhatsAppPortfolioItem.created_at))).all())
+
+
+@app.post("/api/whatsapp/portfolio", response_model=WhatsAppPortfolioItemRead)
+def create_whatsapp_portfolio_item(
+    payload: WhatsAppPortfolioItemCreate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppPortfolioItem:
+    _ = username
+    normalized_url = normalize_site_url(payload.url)
+    if not normalized_url:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="URL de portfólio inválida")
+
+    item = WhatsAppPortfolioItem(description=payload.description.strip(), url=normalized_url)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+@app.delete("/api/whatsapp/portfolio/{item_id}")
+def delete_whatsapp_portfolio_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> dict[str, str]:
+    _ = username
+    item = db.get(WhatsAppPortfolioItem, item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Item de portfólio não encontrado")
+
+    db.delete(item)
+    db.commit()
+    return {"status": "ok"}
 
 
 @app.get("/api/crm/leads", response_model=list[CrmLeadRead])

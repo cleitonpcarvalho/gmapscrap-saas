@@ -24,7 +24,83 @@ executor = ThreadPoolExecutor(max_workers=2)
 site_insights_executor = ThreadPoolExecutor(max_workers=3)
 _active_run_ids: set[int] = set()
 _active_run_ids_lock = Lock()
+_active_site_insights_lead_ids: set[int] = set()
+_active_site_insights_lead_ids_lock = Lock()
 logger = logging.getLogger(__name__)
+BRAZIL_LOCATION_INFERENCE = (
+    "SearchRun.location contém Brasil/Brazil, nome de estado brasileiro ou token de UF brasileiro "
+    "(ex: SP, RJ, CE). Não há campo de país explícito no lead."
+)
+BRAZIL_STATE_TERMS = (
+    "brasil",
+    "brazil",
+    "acre",
+    "alagoas",
+    "amapá",
+    "amapa",
+    "amazonas",
+    "bahia",
+    "ceará",
+    "ceara",
+    "distrito federal",
+    "espírito santo",
+    "espirito santo",
+    "goiás",
+    "goias",
+    "maranhão",
+    "maranhao",
+    "mato grosso",
+    "mato grosso do sul",
+    "minas gerais",
+    "pará",
+    "paraíba",
+    "paraiba",
+    "paraná",
+    "parana",
+    "pernambuco",
+    "piauí",
+    "piaui",
+    "rio de janeiro",
+    "rio grande do norte",
+    "rio grande do sul",
+    "rondônia",
+    "rondonia",
+    "roraima",
+    "santa catarina",
+    "são paulo",
+    "sao paulo",
+    "sergipe",
+    "tocantins",
+)
+BRAZIL_UF_TOKENS = (
+    "AC",
+    "AL",
+    "AP",
+    "AM",
+    "BA",
+    "CE",
+    "DF",
+    "ES",
+    "GO",
+    "MA",
+    "MT",
+    "MS",
+    "MG",
+    "PA",
+    "PB",
+    "PR",
+    "PE",
+    "PI",
+    "RJ",
+    "RN",
+    "RS",
+    "RO",
+    "RR",
+    "SC",
+    "SP",
+    "SE",
+    "TO",
+)
 
 
 def _now() -> datetime:
@@ -173,8 +249,78 @@ def _save_row(db: Session, run: SearchRun, lead: MapLead, website: str | None, e
     return True
 
 
-def submit_site_insights_job(lead_id: int) -> None:
-    site_insights_executor.submit(_run_site_insights_job, lead_id)
+def _brazil_location_filter():
+    filters = [SearchRun.location.ilike(f"%{term}%") for term in BRAZIL_STATE_TERMS]
+    for uf in BRAZIL_UF_TOKENS:
+        filters.extend(
+            [
+                SearchRun.location.ilike(uf),
+                SearchRun.location.ilike(f"{uf},%"),
+                SearchRun.location.ilike(f"%, {uf}%"),
+                SearchRun.location.ilike(f"%- {uf}%"),
+                SearchRun.location.ilike(f"%/{uf}%"),
+                SearchRun.location.ilike(f"% {uf}%"),
+            ]
+        )
+    return or_(*filters)
+
+
+def eligible_retroactive_site_insights_lead_ids(db: Session) -> list[int]:
+    stmt = (
+        select(Lead.id)
+        .join(SearchRun)
+        .where(
+            Lead.whatsapp_validated.is_(True),
+            Lead.website.is_not(None),
+            Lead.website != "",
+            Lead.site_insights.is_(None),
+            _brazil_location_filter(),
+        )
+        .order_by(Lead.created_at)
+    )
+    return list(db.scalars(stmt).all())
+
+
+def count_eligible_retroactive_site_insights_leads(db: Session) -> int:
+    stmt = (
+        select(func.count(Lead.id))
+        .join(SearchRun)
+        .where(
+            Lead.whatsapp_validated.is_(True),
+            Lead.website.is_not(None),
+            Lead.website != "",
+            Lead.site_insights.is_(None),
+            _brazil_location_filter(),
+        )
+    )
+    return int(db.scalar(stmt) or 0)
+
+
+def submit_retroactive_site_insights_jobs(lead_ids: list[int]) -> int:
+    queued = 0
+    for lead_id in lead_ids:
+        if submit_site_insights_job(lead_id):
+            queued += 1
+    return queued
+
+
+def submit_site_insights_job(lead_id: int) -> bool:
+    with _active_site_insights_lead_ids_lock:
+        if lead_id in _active_site_insights_lead_ids:
+            return False
+
+        _active_site_insights_lead_ids.add(lead_id)
+
+    site_insights_executor.submit(_run_site_insights_job_and_release, lead_id)
+    return True
+
+
+def _run_site_insights_job_and_release(lead_id: int) -> None:
+    try:
+        _run_site_insights_job(lead_id)
+    finally:
+        with _active_site_insights_lead_ids_lock:
+            _active_site_insights_lead_ids.discard(lead_id)
 
 
 def _run_site_insights_job(lead_id: int) -> None:

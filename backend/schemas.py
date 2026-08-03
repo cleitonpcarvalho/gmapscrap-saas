@@ -260,6 +260,13 @@ class WhatsAppTemplateGenerateResponse(BaseModel):
     content: str
 
 
+class LeadSiteInsightsEnrichmentResponse(BaseModel):
+    status: str
+    eligible_count: int
+    queued_count: int
+    location_inference: str
+
+
 CrmStage = Literal["new", "responded", "qualified", "not_interested", "converted"]
 
 
@@ -298,6 +305,20 @@ class WhatsAppAiSettingsRead(BaseModel):
     services_description: str
     enabled: bool
     updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WhatsAppPortfolioItemCreate(BaseModel):
+    description: str = Field(min_length=3, max_length=500)
+    url: str = Field(min_length=3, max_length=1000)
+
+
+class WhatsAppPortfolioItemRead(BaseModel):
+    id: int
+    description: str
+    url: str
+    created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -451,6 +451,15 @@ class WhatsAppAiSettings(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class WhatsAppPortfolioItem(Base):
+    __tablename__ = "whatsapp_portfolio_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(String(1000), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class WhatsAppWebhookSettings(Base):
     __tablename__ = "whatsapp_webhook_settings"
 

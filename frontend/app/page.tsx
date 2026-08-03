@@ -314,6 +314,20 @@ type WhatsAppAiSettings = {
   updated_at: string;
 };
 
+type LeadSiteInsightsEnrichmentResponse = {
+  status: string;
+  eligible_count: number;
+  queued_count: number;
+  location_inference: string;
+};
+
+type WhatsAppPortfolioItem = {
+  id: number;
+  description: string;
+  url: string;
+  created_at: string;
+};
+
 type WhatsAppInstanceFormErrors = {
   name?: string;
 };
@@ -479,6 +493,11 @@ const defaultWhatsappAiForm = {
   system_prompt: "",
   services_description: "",
   enabled: false
+};
+
+const defaultWhatsappPortfolioForm = {
+  description: "",
+  url: ""
 };
 
 const defaultManualLeadForm: ManualLeadForm = {
@@ -1012,6 +1031,8 @@ export default function Home() {
   const [formError, setFormError] = useState("");
   const [runError, setRunError] = useState("");
   const [actionError, setActionError] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
+  const [leadEnrichmentBusy, setLeadEnrichmentBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [stats, setStats] = useState<Stats>(emptyStats);
   const [searches, setSearches] = useState<SearchRun[]>([]);
@@ -1096,6 +1117,8 @@ export default function Home() {
   const [crmNoteDrafts, setCrmNoteDrafts] = useState<Record<number, string>>({});
   const [whatsappAiSettings, setWhatsappAiSettings] = useState<WhatsAppAiSettings | null>(null);
   const [whatsappAiForm, setWhatsappAiForm] = useState(defaultWhatsappAiForm);
+  const [whatsappPortfolioItems, setWhatsappPortfolioItems] = useState<WhatsAppPortfolioItem[]>([]);
+  const [whatsappPortfolioForm, setWhatsappPortfolioForm] = useState(defaultWhatsappPortfolioForm);
   const [whatsappInstanceForm, setWhatsappInstanceForm] = useState(defaultWhatsappInstanceForm);
   const [whatsappInstanceFormErrors, setWhatsappInstanceFormErrors] = useState<WhatsAppInstanceFormErrors>({});
   const [whatsappTemplateForm, setWhatsappTemplateForm] = useState(defaultWhatsappTemplateForm);
@@ -1321,12 +1344,13 @@ export default function Home() {
   }
 
   async function refreshWhatsappData() {
-    const [nextInstances, nextTemplates, nextCampaigns, nextCrmLeads, nextAiSettings] = await Promise.all([
+    const [nextInstances, nextTemplates, nextCampaigns, nextCrmLeads, nextAiSettings, nextPortfolioItems] = await Promise.all([
       apiFetch<WhatsAppInstance[]>("/api/whatsapp/instances"),
       apiFetch<WhatsAppMessageTemplate[]>("/api/whatsapp/templates"),
       apiFetch<WhatsAppCampaign[]>("/api/whatsapp/campaigns"),
       apiFetch<CrmLead[]>("/api/crm/leads"),
-      apiFetch<WhatsAppAiSettings>("/api/whatsapp/ai-settings")
+      apiFetch<WhatsAppAiSettings>("/api/whatsapp/ai-settings"),
+      apiFetch<WhatsAppPortfolioItem[]>("/api/whatsapp/portfolio")
     ]);
 
     setWhatsappInstances(nextInstances);
@@ -1338,6 +1362,7 @@ export default function Home() {
       services_description: nextAiSettings.services_description || "",
       enabled: nextAiSettings.enabled
     });
+    setWhatsappPortfolioItems(nextPortfolioItems);
     setCrmLeads(nextCrmLeads);
     setCrmNoteDrafts((current) =>
       Object.fromEntries(
@@ -2493,6 +2518,51 @@ export default function Home() {
     }
   }
 
+  async function handleCreateWhatsappPortfolioItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setWhatsappError("");
+    setWhatsappMessage("");
+
+    if (!whatsappPortfolioForm.description.trim() || !whatsappPortfolioForm.url.trim()) {
+      setWhatsappError("Informe descrição e link do item de portfólio.");
+      return;
+    }
+
+    setWhatsappBusyAction("create-portfolio");
+    try {
+      await apiFetch<WhatsAppPortfolioItem>("/api/whatsapp/portfolio", {
+        method: "POST",
+        body: JSON.stringify({
+          description: whatsappPortfolioForm.description.trim(),
+          url: whatsappPortfolioForm.url.trim()
+        })
+      });
+      setWhatsappPortfolioForm(defaultWhatsappPortfolioForm);
+      setWhatsappMessage("Item de portfólio adicionado.");
+      await refreshWhatsappData();
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível adicionar o item de portfólio.");
+    } finally {
+      setWhatsappBusyAction("");
+    }
+  }
+
+  async function deleteWhatsappPortfolioItem(itemId: number) {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setWhatsappBusyAction(`delete-portfolio-${itemId}`);
+
+    try {
+      await apiFetch<{ status: string }>(`/api/whatsapp/portfolio/${itemId}`, { method: "DELETE" });
+      setWhatsappMessage("Item de portfólio removido.");
+      await refreshWhatsappData();
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível remover o item de portfólio.");
+    } finally {
+      setWhatsappBusyAction("");
+    }
+  }
+
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError("");
@@ -2545,6 +2615,28 @@ export default function Home() {
     }
 
     setSelectedIds((current) => Array.from(new Set([...current, ...visibleIds])));
+  }
+
+  async function handleEnrichExistingLeads() {
+    setActionError("");
+    setActionMessage("");
+    setLeadEnrichmentBusy(true);
+
+    try {
+      const response = await apiFetch<LeadSiteInsightsEnrichmentResponse>("/api/leads/enrich-site-insights", {
+        method: "POST"
+      });
+      setActionMessage(
+        response.queued_count > 0
+          ? `Enriquecimento iniciado: ${response.queued_count} de ${response.eligible_count} leads elegíveis entraram na fila.`
+          : "Nenhum lead elegível para enriquecer agora."
+      );
+      await refreshData();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Não foi possível iniciar o enriquecimento.");
+    } finally {
+      setLeadEnrichmentBusy(false);
+    }
   }
 
   function openManualLeadModal() {
@@ -3182,6 +3274,15 @@ export default function Home() {
                 <h2>Leads salvos</h2>
               </div>
               <div className="lead-actions">
+                <button
+                  className="secondary-button compact-button"
+                  disabled={leadEnrichmentBusy}
+                  onClick={handleEnrichExistingLeads}
+                  type="button"
+                >
+                  {leadEnrichmentBusy ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+                  Enriquecer leads existentes
+                </button>
                 <button className="primary-button compact-button" onClick={openManualLeadModal} type="button">
                   <Plus size={16} />
                   Adicionar lead
@@ -3200,6 +3301,7 @@ export default function Home() {
             </div>
 
             {actionError ? <p className="error-text">{actionError}</p> : null}
+            {actionMessage ? <div className="notice success">{actionMessage}</div> : null}
 
             <div className="lead-search-row">
               <label>
@@ -3263,18 +3365,18 @@ export default function Home() {
                     <th>Nicho</th>
                     <th>Localidade</th>
                     <th>Endereço</th>
-	                    <th>Telefone</th>
-	                    <th>Site</th>
-	                    <th>Insights site</th>
-	                    <th>E-mail</th>
-	                  </tr>
-	                </thead>
+                    <th>Telefone</th>
+                    <th>Site</th>
+                    <th>Insights site</th>
+                    <th>E-mail</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {filteredLeads.length === 0 ? (
                     <tr>
-	                      <td className="empty-cell" colSpan={10}>
-	                        <SkipForward size={18} />
-	                        Nenhum lead encontrado para os filtros.
+                      <td className="empty-cell" colSpan={10}>
+                        <SkipForward size={18} />
+                        Nenhum lead encontrado para os filtros.
                       </td>
                     </tr>
                   ) : null}
@@ -3320,13 +3422,20 @@ export default function Home() {
                       <td>
                         <PhoneCell lead={lead} />
                       </td>
-	                      <td>
-	                        <WebsiteCell website={lead.website} />
-	                      </td>
-	                      <td>
-	                        <span className="template-text-preview">{lead.site_insights || "-"}</span>
-	                      </td>
-	                      <td>{lead.email || "-"}</td>
+                      <td>
+                        <WebsiteCell website={lead.website} />
+                      </td>
+                      <td>
+                        {lead.site_insights ? (
+                          <details className="lead-insights-details">
+                            <summary>Ver insights</summary>
+                            <p>{lead.site_insights}</p>
+                          </details>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                      <td>{lead.email || "-"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -4137,6 +4246,87 @@ export default function Home() {
                 </button>
               </div>
             </form>
+
+            <section className="panel table-panel whatsapp-portfolio-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Contexto comercial</p>
+                  <h2>Portfólio</h2>
+                </div>
+                <span className="muted-count">{whatsappPortfolioItems.length} itens</span>
+              </div>
+
+              <form className="form-grid portfolio-form" onSubmit={handleCreateWhatsappPortfolioItem}>
+                <label>
+                  Descrição curta
+                  <input
+                    value={whatsappPortfolioForm.description}
+                    onChange={(event) => setWhatsappPortfolioForm({ ...whatsappPortfolioForm, description: event.target.value })}
+                    placeholder="Ex: site institucional para clínica odontológica"
+                  />
+                </label>
+                <label>
+                  Link
+                  <input
+                    value={whatsappPortfolioForm.url}
+                    onChange={(event) => setWhatsappPortfolioForm({ ...whatsappPortfolioForm, url: event.target.value })}
+                    placeholder="https://..."
+                  />
+                </label>
+                <button className="primary-button" disabled={whatsappBusyAction === "create-portfolio"} type="submit">
+                  {whatsappBusyAction === "create-portfolio" ? <Loader2 className="spin" size={18} /> : <Plus size={18} />}
+                  Adicionar
+                </button>
+              </form>
+
+              <div className="table-wrap">
+                <table className="whatsapp-table">
+                  <thead>
+                    <tr>
+                      <th>Descrição</th>
+                      <th>Link</th>
+                      <th>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {whatsappPortfolioItems.length === 0 ? (
+                      <tr>
+                        <td className="empty-cell" colSpan={3}>
+                          Nenhum item de portfólio cadastrado.
+                        </td>
+                      </tr>
+                    ) : null}
+                    {whatsappPortfolioItems.map((item) => {
+                      const deleteBusy = whatsappBusyAction === `delete-portfolio-${item.id}`;
+                      return (
+                        <tr key={item.id}>
+                          <td>
+                            <strong>{item.description}</strong>
+                            <span>{formatDate(item.created_at)}</span>
+                          </td>
+                          <td>
+                            <a href={item.url} rel="noreferrer" target="_blank">
+                              {item.url}
+                            </a>
+                          </td>
+                          <td>
+                            <button
+                              className="icon-button danger"
+                              disabled={deleteBusy}
+                              onClick={() => deleteWhatsappPortfolioItem(item.id)}
+                              title="Remover item"
+                              type="button"
+                            >
+                              {deleteBusy ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </section>
         ) : activeView === "dashboard" ? (
           <section className="email-workspace">

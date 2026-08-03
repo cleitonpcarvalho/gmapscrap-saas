@@ -235,3 +235,98 @@ def test_site_insights_job_updates_lead_without_breaking_search(
 
     db_session.refresh(lead)
     assert lead.site_insights == "Empresa atua em marketing e pode melhorar CTAs do site."
+
+
+def test_retroactive_site_insights_endpoint_filters_brazil_whatsapp_and_missing_insights(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    brazil_run = SearchRun(
+        niche="Marketing",
+        location="Fortaleza, CE",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=True,
+        status="completed",
+        message="Busca concluída.",
+    )
+    foreign_run = SearchRun(
+        niche="Marketing",
+        location="Miami, FL",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=True,
+        status="completed",
+        message="Busca concluída.",
+    )
+    db_session.add_all([brazil_run, foreign_run])
+    db_session.flush()
+    eligible = Lead(
+        run_id=brazil_run.id,
+        name="Empresa Elegível",
+        address="Rua A, Fortaleza, CE",
+        phone="(85) 99999-0000",
+        website="https://elegivel.example",
+        email="",
+        whatsapp_validated=True,
+    )
+    db_session.add_all(
+        [
+            eligible,
+            Lead(
+                run_id=brazil_run.id,
+                name="Empresa Sem WhatsApp",
+                address="Rua B, Fortaleza, CE",
+                phone="(85) 98888-0000",
+                website="https://sem-whatsapp.example",
+                email="",
+                whatsapp_validated=None,
+            ),
+            Lead(
+                run_id=brazil_run.id,
+                name="Empresa Já Enriquecida",
+                address="Rua C, Fortaleza, CE",
+                phone="(85) 97777-0000",
+                website="https://enriquecida.example",
+                email="",
+                whatsapp_validated=True,
+                site_insights="Insight existente.",
+            ),
+            Lead(
+                run_id=foreign_run.id,
+                name="Empresa Fora do Brasil",
+                address="100 Ocean Dr, Miami, FL",
+                phone="+13055550000",
+                website="https://miami.example",
+                email="",
+                whatsapp_validated=True,
+            ),
+            Lead(
+                run_id=brazil_run.id,
+                name="Empresa Sem Site",
+                address="Rua D, Fortaleza, CE",
+                phone="(85) 96666-0000",
+                website=None,
+                email="",
+                whatsapp_validated=True,
+            ),
+        ]
+    )
+    db_session.commit()
+    captured: dict[str, list[int]] = {}
+
+    def fake_submit(lead_ids: list[int]) -> int:
+        captured["lead_ids"] = lead_ids
+        return len(lead_ids)
+
+    monkeypatch.setattr(main, "submit_retroactive_site_insights_jobs", fake_submit)
+
+    response = main.enrich_existing_leads_site_insights(db=db_session, username="test-user")
+
+    assert response.status == "processing_started"
+    assert response.eligible_count == 1
+    assert response.queued_count == 1
+    assert captured["lead_ids"] == [eligible.id]
+    assert "SearchRun.location" in response.location_inference

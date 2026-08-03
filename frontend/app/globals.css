@@ -732,6 +732,25 @@ input:disabled {
   line-height: 1.45;
 }
 
+.lead-insights-details {
+  max-width: 360px;
+}
+
+.lead-insights-details summary {
+  cursor: pointer;
+  color: var(--accent-dark);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.lead-insights-details p {
+  margin: 8px 0 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
 .stat-pair {
   display: grid;
   gap: 4px;
@@ -803,6 +822,12 @@ td span {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.portfolio-form {
+  align-items: end;
+  margin-bottom: 16px;
 }
 
 .quantity-row {

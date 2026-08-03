@@ -12,7 +12,14 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from backend.config import get_settings
-from backend.models import Lead, WhatsAppAiSettings, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage
+from backend.models import (
+    Lead,
+    WhatsAppAiSettings,
+    WhatsAppConversation,
+    WhatsAppInstance,
+    WhatsAppMessage,
+    WhatsAppPortfolioItem,
+)
 from backend.services.crm import CRM_STAGES, update_crm_stage
 from backend.services.whatsapp_providers.evolution import EvolutionProvider
 
@@ -181,6 +188,7 @@ def _openai_payload(
     settings = get_settings()
     system_prompt = (ai_settings.system_prompt or DEFAULT_SYSTEM_PROMPT).strip()
     services_context = _services_context(ai_settings.services_description)
+    portfolio_context = _portfolio_context(db)
     lead_context = _lead_context(conversation.lead)
     history = _conversation_history(db, conversation.id)
     tool_instruction = (
@@ -196,7 +204,7 @@ def _openai_payload(
             {
                 "role": "system",
                 "content": (
-                    f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n{services_context}\n\n{tool_instruction}\n\n"
+                    f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n{services_context}\n\n{portfolio_context}\n\n{tool_instruction}\n\n"
                     f"Contexto do lead:\n{lead_context}"
                 ),
             },
@@ -256,6 +264,21 @@ def _services_context(services_description: str | None) -> str:
         f"Sobre a empresa/serviços:\n{description}\n\n"
         "Use essas informações para contextualizar a conversa. "
         "Nunca negocie, prometa ou confirme valores; quando o assunto for preço, diga que os detalhes de investimento são tratados na reunião."
+    )
+
+
+def _portfolio_context(db: Session) -> str:
+    items = list(db.scalars(select(WhatsAppPortfolioItem).order_by(desc(WhatsAppPortfolioItem.created_at)).limit(10)).all())
+    if not items:
+        return "Portfólio: nenhum item cadastrado. Não invente cases, links ou exemplos de portfólio."
+
+    portfolio_lines = "\n".join(f"- {item.description}: {item.url}" for item in items)
+    return (
+        "Portfólio disponível:\n"
+        f"{portfolio_lines}\n\n"
+        "Durante conversas de qualificação, você pode mencionar no máximo 1 item de portfólio relevante, "
+        "somente se fizer sentido pelo assunto tratado. Não force portfólio em toda resposta. "
+        "Nunca mencione portfólio no disparo inicial de campanha e não invente cases ou links."
     )
 
 
