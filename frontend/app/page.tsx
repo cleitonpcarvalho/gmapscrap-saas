@@ -188,12 +188,16 @@ type LeadList = {
   lead_count: number;
 };
 
+type EmailMessageMode = "template" | "ai_per_lead";
+
 type EmailCampaign = {
   id: number;
   name: string;
   list_id: number;
   list_name: string;
   status: "draft" | "running" | "paused" | "completed" | "failed";
+  objective: string;
+  message_mode: EmailMessageMode;
   message: string;
   error: string | null;
   min_delay_seconds: number;
@@ -363,6 +367,7 @@ type EmailSendLog = {
   subject: string;
   status: string;
   error: string | null;
+  generated_content: string | null;
   open_count: number;
   click_count: number;
   created_at: string;
@@ -443,6 +448,8 @@ const defaultAiTemplateForm: AiTemplateForm = {
 
 const defaultCampaignForm = {
   name: "",
+  objective: "",
+  message_mode: "template" as EmailMessageMode,
   list_id: "",
   template_ids: [] as number[],
   min_delay_seconds: 120,
@@ -1972,6 +1979,8 @@ export default function Home() {
     setEditingCampaignId(campaign.id);
     setCampaignForm({
       name: campaign.name,
+      objective: campaign.objective || "",
+      message_mode: campaign.message_mode || "template",
       list_id: String(campaign.list_id),
       template_ids: campaign.template_ids || [],
       min_delay_seconds: campaign.min_delay_seconds,
@@ -2016,7 +2025,12 @@ export default function Home() {
     setEmailMessage("");
 
     if (!campaignForm.list_id || campaignForm.template_ids.length === 0) {
-      setEmailError("Escolha uma lista e ao menos um template.");
+      setEmailError("Escolha uma lista e ao menos um template visual.");
+      return;
+    }
+
+    if (campaignForm.message_mode === "ai_per_lead" && !campaignForm.objective.trim()) {
+      setEmailError("Informe o objetivo para gerar e-mails individuais com IA.");
       return;
     }
 
@@ -4764,6 +4778,8 @@ export default function Home() {
                       <tr key={campaign.id}>
                         <td>
                           <strong>{campaign.name}</strong>
+                          <span>{campaign.message_mode === "ai_per_lead" ? "IA por lead" : "Template fixo"}</span>
+                          {campaign.objective ? <span>{campaign.objective}</span> : null}
                           <span>{campaign.message || campaign.error}</span>
                         </td>
                         <td>{campaign.list_name}</td>
@@ -5268,6 +5284,30 @@ export default function Home() {
                 </select>
               </label>
               <label>
+                Modo de mensagem
+                <select
+                  value={campaignForm.message_mode}
+                  onChange={(event) =>
+                    setCampaignForm({ ...campaignForm, message_mode: event.target.value as EmailMessageMode })
+                  }
+                >
+                  <option value="template">Template fixo</option>
+                  <option value="ai_per_lead">Gerar individual por IA</option>
+                </select>
+              </label>
+              <label className="wide-field">
+                Objetivo da campanha
+                <textarea
+                  placeholder="Ex: vender sites para empresas sem site, desenvolvimento gratuito, paga só se gostar"
+                  rows={3}
+                  value={campaignForm.objective}
+                  onChange={(event) => setCampaignForm({ ...campaignForm, objective: event.target.value })}
+                />
+                <span className="helper-text">
+                  Obrigatório no modo IA por lead. O template selecionado continua definindo o visual do e-mail.
+                </span>
+              </label>
+              <label>
                 Delay mínimo (s)
                 <input
                   min={1}
@@ -5347,6 +5387,11 @@ export default function Home() {
             </div>
 
             <div className="template-picker modal-template-picker">
+              <p className="helper-text">
+                {campaignForm.message_mode === "ai_per_lead"
+                  ? "Escolha o template visual que será usado como base para cores, logomarca e estrutura do e-mail."
+                  : "Escolha um ou mais templates fixos para alternar na campanha."}
+              </p>
               {templates.map((template) => (
                 <label className="checkbox-label" key={template.id}>
                   <input

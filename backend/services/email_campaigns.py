@@ -1,4 +1,6 @@
 import html
+import json
+import logging
 import random
 import re
 import time
@@ -8,6 +10,7 @@ from threading import Lock, Thread
 from urllib.parse import parse_qs, quote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import requests
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -27,6 +30,7 @@ from backend.services.content_preview import fetch_content_preview
 from backend.services.email_delivery import get_smtp_config, send_email
 
 
+logger = logging.getLogger(__name__)
 campaign_executor = ThreadPoolExecutor(max_workers=1)
 _active_campaign_ids: set[int] = set()
 _active_campaign_ids_lock = Lock()
@@ -35,6 +39,9 @@ _scheduler_lock = Lock()
 VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
 YOUTUBE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{6,}$")
 LIST_FILTER_SEPARATOR = "||"
+MESSAGE_MODE_AI_PER_LEAD = "ai_per_lead"
+MESSAGE_MODE_TEMPLATE = "template"
+OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 
 def _now() -> datetime:
@@ -320,6 +327,273 @@ def render_email(template: EmailTemplate, lead: Lead, campaign: EmailCampaign, s
     return subject, rendered_html, rendered_text
 
 
+def _extract_output_text(response_payload: dict) -> str:
+    if response_payload.get("output_text"):
+        return str(response_payload["output_text"])
+
+    chunks: list[str] = []
+    for item in response_payload.get("output", []):
+        for content in item.get("content", []):
+            if content.get("type") in {"output_text", "text"} and content.get("text"):
+                chunks.append(content["text"])
+    return "\n".join(chunks)
+
+
+def _ai_email_json_schema() -> dict:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["subject", "content_title", "paragraphs", "cta"],
+        "properties": {
+            "subject": {"type": "string"},
+            "content_title": {"type": "string"},
+            "paragraphs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 4,
+            },
+            "cta": {"type": "string"},
+        },
+    }
+
+
+def _ai_email_prompt(campaign: EmailCampaign, lead: Lead) -> str:
+    site_insights = (lead.site_insights or "").strip() or "Não disponível."
+    return f"""
+Gere o conteúdo textual individual de um e-mail comercial B2B.
+
+Objetivo da campanha:
+{campaign.objective}
+
+Dados reais do lead:
+- Empresa: {lead.name}
+- E-mail: {lead.email}
+- Telefone: {lead.phone}
+- Site: {lead.website or "Não informado"}
+- Nicho: {lead.niche or "Não informado"}
+- Localização: {lead.location or "Não informada"}
+- Endereço: {lead.address or "Não informado"}
+- Insights do site/negócio: {site_insights}
+
+Regras:
+- Responda em português do Brasil.
+- Retorne somente JSON compatível com o schema.
+- Gere subject, content_title, paragraphs e cta.
+- Não gere HTML, markdown, assinatura ou placeholders.
+- Não inclua saudação nos parágrafos; o layout do e-mail já adiciona uma saudação neutra.
+- Escreva de forma natural, pesquisada e consultiva, sem soar como disparo em massa.
+- Use no máximo 4 parágrafos curtos.
+- Cite algo específico do lead quando houver dado real. Priorize site_insights quando disponível.
+- Se site_insights estiver indisponível, use apenas empresa, nicho, localização, site ou endereço; não invente problemas, tecnologias, desempenho, nome de pessoa ou dados do site.
+- Preserve o gancho específico do objetivo. Se o objetivo citar uma oferta ou condição especial, mencione isso de forma leve.
+- Não negocie valores, preço fechado, contrato ou formas de pagamento.
+- Não prometa resultado garantido.
+- Não mencione scraping, automação de disparo, base de leads ou Google Maps.
+"""
+
+
+def _normalize_ai_email_content(generated: dict) -> dict[str, object]:
+    subject = str(generated.get("subject") or "").strip().strip('"')
+    content_title = str(generated.get("content_title") or "").strip().strip('"')
+    raw_paragraphs = generated.get("paragraphs") or []
+    paragraphs = [
+        str(paragraph).strip()
+        for paragraph in raw_paragraphs
+        if str(paragraph or "").strip()
+    ]
+    cta = str(generated.get("cta") or "").strip().strip('"')
+
+    if not subject or not content_title or not paragraphs or not cta:
+        raise RuntimeError("A OpenAI retornou conteúdo incompleto para o e-mail do lead.")
+
+    return {
+        "subject": subject[:500],
+        "content_title": content_title[:500],
+        "paragraphs": paragraphs[:4],
+        "cta": cta,
+    }
+
+
+def generate_ai_email_content_for_lead(campaign: EmailCampaign, lead: Lead) -> dict[str, object]:
+    settings = get_settings()
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY não está configurada no backend.")
+
+    request_payload = {
+        "model": settings.openai_model,
+        "input": [
+            {
+                "role": "system",
+                "content": (
+                    "Você escreve conteúdo textual individual para e-mails B2B em JSON estruturado. "
+                    "Use somente dados reais do lead e mantenha tom humano, pesquisado e objetivo."
+                ),
+            },
+            {"role": "user", "content": _ai_email_prompt(campaign, lead)},
+        ],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "email_campaign_message_generation",
+                "strict": True,
+                "schema": _ai_email_json_schema(),
+            }
+        },
+        "max_output_tokens": 700,
+    }
+
+    response = requests.post(
+        OPENAI_RESPONSES_URL,
+        headers={
+            "Authorization": f"Bearer {settings.openai_api_key}",
+            "Content-Type": "application/json",
+        },
+        json=request_payload,
+        timeout=60,
+    )
+    if response.status_code >= 400:
+        detail = response.text[:600]
+        raise RuntimeError(f"OpenAI retornou erro {response.status_code}: {detail}")
+
+    output_text = _extract_output_text(response.json())
+    if not output_text:
+        raise RuntimeError("A OpenAI não retornou conteúdo para o lead.")
+
+    try:
+        generated = json.loads(output_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("A OpenAI retornou um JSON inválido para o lead.") from exc
+
+    return _normalize_ai_email_content(generated)
+
+
+def _serialize_generated_email_content(generated: dict[str, object]) -> str:
+    return json.dumps(generated, ensure_ascii=False, separators=(",", ":"))
+
+
+def render_generated_email(
+    template: EmailTemplate,
+    lead: Lead,
+    campaign: EmailCampaign,
+    generated: dict[str, object],
+    send_id: int | None = None,
+) -> tuple[str, str, str]:
+    settings = get_settings()
+    company_name = lead.name
+    subject = str(generated["subject"])
+    content_title = str(generated["content_title"])
+    paragraphs = [str(paragraph) for paragraph in generated["paragraphs"]]
+    cta = str(generated["cta"])
+    get_in_touch_link = _mailto_link(settings.contact_email, company_name)
+
+    safe_background = html.escape(template.background_color or "#f4f4f4", quote=True)
+    safe_primary = html.escape(template.primary_color or "#0a0a0a", quote=True)
+    safe_text = html.escape(template.text_color or "#333333", quote=True)
+    safe_logo = html.escape(template.logo_url or "", quote=True)
+    safe_title = html.escape(content_title)
+    safe_cta = html.escape(cta)
+    safe_get_in_touch = html.escape(get_in_touch_link, quote=True)
+    safe_contact_email = html.escape(settings.contact_email)
+    safe_company_name = html.escape(company_name or "")
+    paragraph_html = "\n".join(
+        f'              <p style="font-size:16px;color:{safe_text};line-height:1.7;margin:0 0 16px 0;">{html.escape(paragraph)}</p>'
+        for paragraph in paragraphs
+    )
+
+    logo_block = (
+        f'              <img src="{safe_logo}" alt="Automa Soluct" height="64" style="display:block;margin:0 auto;max-width:220px;" />'
+        if safe_logo
+        else '              <p style="color:#ffffff;font-size:22px;font-weight:700;margin:0;">Automa Soluct</p>'
+    )
+    rendered_html = f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{html.escape(subject)}</title>
+</head>
+<body style="margin:0;padding:0;background-color:{safe_background};font-family:Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:{safe_background};padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background-color:{safe_primary};padding:32px 40px;text-align:center;">
+{logo_block}
+              <p style="color:#d7d7d7;font-size:13px;margin:12px 0 0 0;">Automation & Integrations</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:40px 40px 24px 40px;">
+              <p style="font-size:16px;color:{safe_text};margin:0 0 16px 0;">Oi, tudo bem?</p>
+              <h1 style="font-size:24px;color:{safe_text};line-height:1.3;margin:0 0 20px 0;">{safe_title}</h1>
+{paragraph_html}
+              <p style="font-size:16px;color:{safe_text};line-height:1.7;margin:0 0 20px 0;">{safe_cta}</p>
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="padding:10px 0 32px 0;">
+                    <a href="{safe_get_in_touch}" style="background-color:{safe_primary};color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:6px;font-size:15px;font-weight:600;display:inline-block;">Responder</a>
+                  </td>
+                </tr>
+              </table>
+              <hr style="border:none;border-top:1px solid #eeeeee;margin:0 0 28px 0;" />
+              <p style="font-size:13px;color:#888888;margin:0 0 12px 0;text-transform:uppercase;font-weight:600;">Contato</p>
+              <p style="font-size:15px;color:{safe_text};line-height:1.7;margin:0;">
+                Cleiton Carvalho<br />
+                Automation Specialist - Automa Soluct<br />
+                <a href="mailto:{safe_contact_email}" style="color:{safe_primary};text-decoration:none;">{safe_contact_email}</a>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:24px 40px 40px 40px;border-top:1px solid #eeeeee;">
+              <p style="margin:0;font-size:12px;color:#999999;line-height:1.6;">Este é um contato pontual da Automa Soluct para {safe_company_name}. Responda 'remover' se preferir não receber novas mensagens.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+    if send_id:
+        pixel = f'<img src="{_send_url(send_id, "/api/email/open")}.png" width="1" height="1" alt="" style="display:none" />'
+        rendered_html = f"{rendered_html}\n{pixel}"
+
+    rendered_text = "\n\n".join(
+        [
+            "Oi, tudo bem?",
+            content_title,
+            *paragraphs,
+            cta,
+            f"Responder: {settings.contact_email}",
+            "Cleiton Carvalho",
+            "Automa Soluct",
+        ]
+    )
+    return subject, rendered_html, rendered_text
+
+
+def _email_content_for_send(
+    campaign: EmailCampaign,
+    send: EmailSend,
+) -> tuple[str, str, str]:
+    if not send.template:
+        raise RuntimeError("Template de e-mail não encontrado para este envio.")
+    if not send.lead:
+        raise RuntimeError("Lead não encontrado para este envio.")
+
+    if campaign.message_mode == MESSAGE_MODE_AI_PER_LEAD:
+        generated = generate_ai_email_content_for_lead(campaign, send.lead)
+        send.generated_content = _serialize_generated_email_content(generated)
+        return render_generated_email(send.template, send.lead, campaign, generated, send.id)
+
+    send.generated_content = None
+    return render_email(send.template, send.lead, campaign, send.id)
+
+
 def _choose_template(campaign: EmailCampaign) -> EmailCampaignTemplate:
     choices = campaign.templates
     weights = [max(1, item.weight) for item in choices]
@@ -541,7 +815,7 @@ def run_campaign(campaign_id: int) -> None:
                 continue
 
             try:
-                subject, rendered_html, rendered_text = render_email(send.template, send.lead, campaign, send.id)
+                subject, rendered_html, rendered_text = _email_content_for_send(campaign, send)
                 send_email(config, send.recipient_email, subject, rendered_html, rendered_text)
                 send.subject = subject
                 send.status = "sent"
@@ -549,6 +823,7 @@ def run_campaign(campaign_id: int) -> None:
                 send.error = None
                 campaign.message = f"Enviado para {send.recipient_email}."
             except Exception as exc:
+                logger.exception("Falha no envio de e-mail da campanha %s para o lead %s", campaign.id, send.lead_id)
                 send.status = "failed"
                 send.error = str(exc)
                 campaign.message = f"Falha ao enviar para {send.recipient_email}."

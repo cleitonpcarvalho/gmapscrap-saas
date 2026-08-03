@@ -406,6 +406,7 @@ class LeadListRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+EmailMessageMode = Literal["template", "ai_per_lead"]
 WhatsAppMessageMode = Literal["template", "ai_per_lead"]
 
 
@@ -418,6 +419,8 @@ class EmailCampaignCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     list_id: int
     templates: list[CampaignTemplateInput] = Field(min_length=1)
+    objective: str | None = Field(default="", max_length=2000)
+    message_mode: EmailMessageMode = "template"
     min_delay_seconds: int = Field(default=120, ge=1, le=86400)
     max_delay_seconds: int = Field(default=300, ge=1, le=86400)
     daily_limit: int = Field(default=30, ge=1, le=500)
@@ -464,6 +467,8 @@ class EmailCampaignRead(BaseModel):
     list_id: int
     list_name: str
     status: str
+    objective: str
+    message_mode: EmailMessageMode
     message: str
     error: str | None
     min_delay_seconds: int
@@ -497,6 +502,7 @@ class EmailSendRead(BaseModel):
     subject: str
     status: str
     error: str | None
+    generated_content: str | None
     open_count: int
     click_count: int
     created_at: datetime

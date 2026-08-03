@@ -28,6 +28,8 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     lead_columns = {column["name"] for column in inspector.get_columns("leads")}
     search_run_columns = {column["name"] for column in inspector.get_columns("search_runs")}
     lead_list_columns = {column["name"] for column in inspector.get_columns("lead_lists")}
+    email_campaign_columns = {column["name"] for column in inspector.get_columns("email_campaigns")}
+    email_send_columns = {column["name"] for column in inspector.get_columns("email_sends")}
 
     assert "whatsapp_validated" in lead_columns
     assert "site_insights" in lead_columns
@@ -36,3 +38,6 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     assert "only_email_opened" in lead_list_columns
     assert "only_email_clicked" in lead_list_columns
     assert "email_engagement_filter_mode" in lead_list_columns
+    assert "message_mode" in email_campaign_columns
+    assert "objective" in email_campaign_columns
+    assert "generated_content" in email_send_columns

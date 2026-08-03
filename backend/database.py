@@ -57,6 +57,7 @@ def init_db() -> None:
     _ensure_lead_list_columns()
     _ensure_email_template_columns()
     _ensure_email_campaign_columns()
+    _ensure_email_send_columns()
 
 
 def _ensure_whatsapp_crm_tables() -> None:
@@ -316,6 +317,25 @@ def _ensure_email_campaign_columns() -> None:
     existing_columns = {column["name"] for column in inspector.get_columns("email_campaigns")}
     migrations = {
         "timezone_name": "ALTER TABLE email_campaigns ADD COLUMN timezone_name VARCHAR(80) NOT NULL DEFAULT 'America/New_York'",
+        "objective": "ALTER TABLE email_campaigns ADD COLUMN objective TEXT NOT NULL DEFAULT ''",
+        "message_mode": "ALTER TABLE email_campaigns ADD COLUMN message_mode VARCHAR(30) NOT NULL DEFAULT 'template'",
+    }
+
+    with engine.begin() as connection:
+        connection.execute(text("SET lock_timeout = '10s'"))
+        for column_name, statement in migrations.items():
+            if column_name not in existing_columns:
+                connection.execute(text(statement))
+
+
+def _ensure_email_send_columns() -> None:
+    inspector = inspect(engine)
+    if "email_sends" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("email_sends")}
+    migrations = {
+        "generated_content": "ALTER TABLE email_sends ADD COLUMN generated_content TEXT",
     }
 
     with engine.begin() as connection:

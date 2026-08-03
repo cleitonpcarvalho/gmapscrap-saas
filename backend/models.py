@@ -159,11 +159,19 @@ class LeadEmailPreference(Base):
 
 class EmailCampaign(Base):
     __tablename__ = "email_campaigns"
+    __table_args__ = (
+        CheckConstraint(
+            "message_mode IN ('template', 'ai_per_lead')",
+            name="ck_email_campaigns_message_mode",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     list_id: Mapped[int] = mapped_column(ForeignKey("lead_lists.id", ondelete="RESTRICT"), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
+    message_mode: Mapped[str] = mapped_column(String(30), default="template", nullable=False)
+    objective: Mapped[str] = mapped_column(Text, default="", nullable=False)
     message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     min_delay_seconds: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
@@ -224,6 +232,7 @@ class EmailSend(Base):
     subject: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    generated_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     open_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     click_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

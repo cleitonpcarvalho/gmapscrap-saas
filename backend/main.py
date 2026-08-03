@@ -1626,6 +1626,12 @@ def create_email_campaign(
     _ = username
     if payload.min_delay_seconds > payload.max_delay_seconds:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Delay mínimo maior que o máximo")
+    objective = (payload.objective or "").strip()
+    if payload.message_mode == "ai_per_lead" and not objective:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Informe o objetivo para gerar e-mails individuais com IA",
+        )
     if not db.get(LeadList, payload.list_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lista não encontrada")
 
@@ -1635,6 +1641,7 @@ def create_email_campaign(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Um ou mais templates não foram encontrados")
 
     data = payload.model_dump(exclude={"templates"})
+    data["objective"] = objective
     campaign = EmailCampaign(**data, status="draft", message="Campanha criada.")
     db.add(campaign)
     db.flush()
@@ -1662,6 +1669,12 @@ def update_email_campaign(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pause a campanha antes de editar")
     if payload.min_delay_seconds > payload.max_delay_seconds:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Delay mínimo maior que o máximo")
+    objective = (payload.objective or "").strip()
+    if payload.message_mode == "ai_per_lead" and not objective:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Informe o objetivo para gerar e-mails individuais com IA",
+        )
     if not db.get(LeadList, payload.list_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lista não encontrada")
 
@@ -1673,13 +1686,18 @@ def update_email_campaign(
     existing_sends = db.scalar(select(func.count(EmailSend.id)).where(EmailSend.campaign_id == campaign.id)) or 0
     current_template_ids = {item.template_id for item in campaign.templates}
     next_template_ids = set(template_ids)
-    if existing_sends and (campaign.list_id != payload.list_id or current_template_ids != next_template_ids):
+    if existing_sends and (
+        campaign.list_id != payload.list_id
+        or current_template_ids != next_template_ids
+        or campaign.message_mode != payload.message_mode
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Campanha com fila criada não pode trocar lista ou templates. Crie uma nova campanha para alterar a audiência.",
+            detail="Campanha com fila criada não pode trocar lista, templates ou modo de mensagem. Crie uma nova campanha para alterar a audiência.",
         )
 
     data = payload.model_dump(exclude={"templates"})
+    data["objective"] = objective
     for field, value in data.items():
         setattr(campaign, field, value.strip() if isinstance(value, str) else value)
 
