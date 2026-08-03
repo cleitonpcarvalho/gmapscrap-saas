@@ -49,7 +49,7 @@ class LeadRead(BaseModel):
     name: str
     address: str
     phone: str
-    website: str | None
+    website: str | None = None
     email: str
     validate_whatsapp: bool = False
     whatsapp_url: str = ""

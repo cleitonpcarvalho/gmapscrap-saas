@@ -47,10 +47,40 @@ def init_db() -> None:
 
     _wait_for_database()
     Base.metadata.create_all(bind=engine)
+    _ensure_whatsapp_crm_tables()
     _ensure_search_run_columns()
     _ensure_lead_columns()
     _ensure_email_template_columns()
     _ensure_email_campaign_columns()
+
+
+def _ensure_whatsapp_crm_tables() -> None:
+    from backend.models import (
+        CrmLead,
+        CrmStageHistory,
+        WhatsAppCampaign,
+        WhatsAppCampaignTemplate,
+        WhatsAppConversation,
+        WhatsAppInstance,
+        WhatsAppMessage,
+        WhatsAppMessageTemplate,
+        WhatsAppSend,
+    )
+
+    Base.metadata.create_all(
+        bind=engine,
+        tables=[
+            WhatsAppInstance.__table__,
+            WhatsAppMessageTemplate.__table__,
+            WhatsAppCampaign.__table__,
+            WhatsAppCampaignTemplate.__table__,
+            WhatsAppSend.__table__,
+            WhatsAppConversation.__table__,
+            WhatsAppMessage.__table__,
+            CrmLead.__table__,
+            CrmStageHistory.__table__,
+        ],
+    )
 
 
 def _wait_for_database(max_attempts: int = 30, delay_seconds: int = 2) -> None:

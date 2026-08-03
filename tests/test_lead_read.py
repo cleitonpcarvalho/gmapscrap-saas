@@ -41,3 +41,12 @@ def test_lead_read_omits_whatsapp_url_when_run_did_not_validate_whatsapp() -> No
 
     assert result.validate_whatsapp is False
     assert result.whatsapp_url == ""
+
+
+def test_lead_read_allows_null_website() -> None:
+    lead = _lead_for_run(validate_whatsapp=False)
+    lead.website = None
+
+    result = LeadRead.model_validate(lead)
+
+    assert result.website is None
