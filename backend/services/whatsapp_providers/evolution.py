@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 import requests
@@ -32,7 +33,7 @@ class EvolutionProvider(WhatsAppProvider):
             "integration": "WHATSAPP-BAILEYS",
         }
         if phone_number:
-            payload["number"] = phone_number
+            payload["number"] = _digits_only(phone_number)
 
         return self._request("POST", "/instance/create", json=payload, timeout=CREATE_INSTANCE_TIMEOUT_SECONDS)
 
@@ -102,3 +103,7 @@ class EvolutionProvider(WhatsAppProvider):
         if extra_headers:
             headers.update(extra_headers)
         return headers
+
+
+def _digits_only(value: str) -> str:
+    return re.sub(r"\D+", "", value or "")

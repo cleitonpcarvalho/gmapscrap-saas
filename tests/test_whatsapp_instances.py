@@ -59,6 +59,7 @@ def test_whatsapp_instance_lifecycle_endpoints(
         calls.append((method, url))
         if method == "POST" and url.endswith("/instance/create"):
             assert kwargs["json"]["instanceName"] == "sales-main"
+            assert kwargs["json"]["number"] == "5511999999999"
             assert kwargs["timeout"] == 30
             return FakeEvolutionResponse(201, {"instance": {"instanceName": "sales-main"}})
         if method == "GET" and url.endswith("/instance/connect/sales-main"):
@@ -87,7 +88,7 @@ def test_whatsapp_instance_lifecycle_endpoints(
     monkeypatch.setattr("backend.services.whatsapp_providers.evolution.requests.request", fake_request)
 
     instance = main.create_whatsapp_instance(
-        WhatsAppInstanceCreate(name="sales-main"),
+        WhatsAppInstanceCreate(name="sales-main", phone_number="+5511999999999"),
         db=db_session,
         username="test-user",
     )
