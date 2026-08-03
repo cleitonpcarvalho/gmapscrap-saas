@@ -59,13 +59,16 @@ def test_whatsapp_instance_lifecycle_endpoints(
         calls.append((method, url))
         if method == "POST" and url.endswith("/instance/create"):
             assert kwargs["json"]["instanceName"] == "sales-main"
+            assert kwargs["timeout"] == 30
             return FakeEvolutionResponse(201, {"instance": {"instanceName": "sales-main"}})
         if method == "GET" and url.endswith("/instance/connect/sales-main"):
+            assert kwargs["timeout"] == 5
             return FakeEvolutionResponse(
                 200,
                 {"base64": "data:image/png;base64,abc", "code": "2@example", "pairingCode": None},
             )
         if method == "GET" and url.endswith("/instance/connectionState/sales-main"):
+            assert kwargs["timeout"] == 5
             return FakeEvolutionResponse(
                 200,
                 {
@@ -77,6 +80,7 @@ def test_whatsapp_instance_lifecycle_endpoints(
                 },
             )
         if method == "DELETE" and url.endswith("/instance/delete/sales-main"):
+            assert kwargs["timeout"] == 5
             return FakeEvolutionResponse(200, {"status": "SUCCESS"})
         return FakeEvolutionResponse(500, {}, "unexpected request")
 

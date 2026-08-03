@@ -6,6 +6,9 @@ from backend.config import get_settings
 from backend.services.whatsapp_providers.base import WhatsAppProvider
 
 
+CREATE_INSTANCE_TIMEOUT_SECONDS = 30
+
+
 class EvolutionApiError(RuntimeError):
     def __init__(self, detail: str, status_code: int = 502):
         super().__init__(detail)
@@ -31,7 +34,7 @@ class EvolutionProvider(WhatsAppProvider):
         if phone_number:
             payload["number"] = phone_number
 
-        return self._request("POST", "/instance/create", json=payload)
+        return self._request("POST", "/instance/create", json=payload, timeout=CREATE_INSTANCE_TIMEOUT_SECONDS)
 
     def get_qr_code(self, instance_id: str) -> dict[str, Any]:
         return self._request("GET", f"/instance/connect/{instance_id}")
@@ -59,12 +62,13 @@ class EvolutionProvider(WhatsAppProvider):
         if not self.base_url or not self.api_key:
             raise EvolutionApiError("Evolution API não configurada no backend.", status_code=422)
 
+        request_timeout = kwargs.pop("timeout", self.timeout_seconds)
         try:
             response = requests.request(
                 method,
                 f"{self.base_url}{path}",
                 headers=self._headers(kwargs.pop("headers", None)),
-                timeout=self.timeout_seconds,
+                timeout=request_timeout,
                 **kwargs,
             )
         except requests.RequestException as exc:
