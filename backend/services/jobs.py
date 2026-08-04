@@ -114,6 +114,7 @@ def create_search_run(db: Session, payload: SearchCreate) -> SearchRun:
         target_quantity=None if payload.max_results else payload.quantity,
         max_results=payload.max_results,
         skip_without_website=payload.skip_without_website,
+        only_without_website=payload.only_without_website,
         validate_whatsapp=payload.validate_whatsapp,
         enrich_site_insights=payload.enrich_site_insights,
         status="queued",
@@ -359,7 +360,7 @@ def _save_lead(db: Session, run: SearchRun, lead: MapLead) -> bool:
         return _skip_lead(db, run, lead.name, "site inválido")
 
     if not website:
-        if run.skip_without_website:
+        if run.skip_without_website and not run.only_without_website:
             return _skip_lead(db, run, lead.name, "sem site")
 
         if not _validate_whatsapp_or_skip(db, run, lead):
@@ -369,6 +370,9 @@ def _save_lead(db: Session, run: SearchRun, lead: MapLead) -> bool:
             return _skip_lead(db, run, lead.name, "lead sem site duplicado")
 
         return _save_row(db, run, lead, None, "")
+
+    if run.only_without_website:
+        return _skip_lead(db, run, lead.name, "tem site")
 
     if _website_exists(db, website):
         return _skip_lead(db, run, lead.name, "site duplicado")
@@ -394,7 +398,10 @@ def save_enriched_lead(db: Session, run: SearchRun, lead: MapLead, email: str) -
     if raw_website and not website:
         return _skip_lead(db, run, lead.name, "site inválido")
 
-    if not website and run.skip_without_website:
+    if website and run.only_without_website:
+        return _skip_lead(db, run, lead.name, "tem site")
+
+    if not website and run.skip_without_website and not run.only_without_website:
         return _skip_lead(db, run, lead.name, "sem site")
 
     if _website_exists(db, website):
@@ -491,7 +498,7 @@ def run_search_job(run_id: int) -> None:
             run.niche,
             run.location,
             start_index=start_index,
-            skip_without_website=run.skip_without_website,
+            skip_without_website=run.skip_without_website and not run.only_without_website,
         ):
             run = _wait_if_paused(db, run_id)
             if not run:

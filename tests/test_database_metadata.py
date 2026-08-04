@@ -33,6 +33,7 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
 
     assert "whatsapp_validated" in lead_columns
     assert "site_insights" in lead_columns
+    assert "only_without_website" in search_run_columns
     assert "enrich_site_insights" in search_run_columns
     assert "only_whatsapp_validated" in lead_list_columns
     assert "only_email_opened" in lead_list_columns

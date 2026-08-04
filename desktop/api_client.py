@@ -107,6 +107,7 @@ class GmapScrapApiClient:
         skip_without_website: bool,
         validate_whatsapp: bool,
         enrich_site_insights: bool = False,
+        only_without_website: bool = False,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -117,6 +118,7 @@ class GmapScrapApiClient:
                 "quantity": quantity,
                 "max_results": max_results,
                 "skip_without_website": skip_without_website,
+                "only_without_website": only_without_website,
                 "validate_whatsapp": validate_whatsapp,
                 "enrich_site_insights": enrich_site_insights,
             },

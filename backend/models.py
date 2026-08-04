@@ -15,6 +15,7 @@ class SearchRun(Base):
     target_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_results: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     skip_without_website: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    only_without_website: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     validate_whatsapp: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     enrich_site_insights: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False)

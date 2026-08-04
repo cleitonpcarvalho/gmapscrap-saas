@@ -238,6 +238,7 @@ def _ensure_search_run_columns() -> None:
     existing_columns = {column["name"] for column in inspector.get_columns("search_runs")}
     migrations = {
         "skip_without_website": "ALTER TABLE search_runs ADD COLUMN skip_without_website BOOLEAN NOT NULL DEFAULT TRUE",
+        "only_without_website": "ALTER TABLE search_runs ADD COLUMN only_without_website BOOLEAN NOT NULL DEFAULT FALSE",
         "validate_whatsapp": "ALTER TABLE search_runs ADD COLUMN validate_whatsapp BOOLEAN NOT NULL DEFAULT FALSE",
         "enrich_site_insights": "ALTER TABLE search_runs ADD COLUMN enrich_site_insights BOOLEAN NOT NULL DEFAULT FALSE",
     }

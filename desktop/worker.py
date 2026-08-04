@@ -29,6 +29,7 @@ class SearchWorker(QObject):
         quantity: int | None,
         max_results: bool,
         skip_without_website: bool = True,
+        only_without_website: bool = False,
         validate_whatsapp: bool = False,
         enrich_site_insights: bool = False,
         run_id: int | None = None,
@@ -40,6 +41,7 @@ class SearchWorker(QObject):
         self.quantity = quantity
         self.max_results = max_results
         self.skip_without_website = skip_without_website
+        self.only_without_website = only_without_website
         self.validate_whatsapp = validate_whatsapp
         self.enrich_site_insights = enrich_site_insights
         self.resume_run_id = run_id
@@ -81,6 +83,7 @@ class SearchWorker(QObject):
                     self.skip_without_website,
                     self.validate_whatsapp,
                     self.enrich_site_insights,
+                    only_without_website=self.only_without_website,
                 )
                 run_id = int(run["id"])
 
@@ -95,7 +98,7 @@ class SearchWorker(QObject):
                 self.niche,
                 self.location,
                 start_index=self.start_index,
-                skip_without_website=self.skip_without_website,
+                skip_without_website=self.skip_without_website and not self.only_without_website,
             ):
                 if self._stop_requested:
                     finish_status = "paused"
@@ -120,6 +123,20 @@ class SearchWorker(QObject):
                     last_run = run
                     self.progress.emit(run)
                     self.log.emit(event.message)
+                    continue
+
+                if self.only_without_website and event.lead.website:
+                    message = f"{event.lead.name} ignorado: tem site."
+                    run = client.update_search(
+                        run_id,
+                        status="running",
+                        message=message,
+                        scanned_count=scanned_count,
+                        skipped_delta=1,
+                    )
+                    last_run = run
+                    self.progress.emit(run)
+                    self.log.emit(message)
                     continue
 
                 if event.lead.website:

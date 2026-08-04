@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from backend import main
 from backend.database import Base
 from backend.models import EmailCampaign, EmailSend, EmailTemplate, Lead, LeadList, SearchRun
-from backend.schemas import LeadListCreate, LeadListUpdate
+from backend.schemas import LeadListCreate, LeadListUpdate, SearchCreate
 from backend.scrapers.email_scraper import EmailResult
 from backend.scrapers.maps_scraper import MapLead
 from backend.services import email_campaigns, jobs, whatsapp_campaigns
@@ -302,6 +302,91 @@ def test_scraping_marks_saved_lead_as_whatsapp_validated(
     assert saved is True
     lead = db_session.query(Lead).one()
     assert lead.whatsapp_validated is True
+
+
+def test_search_create_only_without_website_disables_skip_without_website() -> None:
+    payload = SearchCreate(
+        niche="Marketing",
+        location="São Paulo",
+        quantity=10,
+        skip_without_website=True,
+        only_without_website=True,
+    )
+
+    assert payload.skip_without_website is False
+    assert payload.only_without_website is True
+
+
+def test_scraping_only_without_website_skips_lead_with_site(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=False,
+        only_without_website=True,
+        validate_whatsapp=False,
+        status="running",
+        message="Buscando somente sem site.",
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    def fail_extract_email(website: str) -> EmailResult:
+        raise AssertionError(f"não deveria buscar e-mail para {website}")
+
+    monkeypatch.setattr(jobs, "extract_email_from_site", fail_extract_email)
+
+    saved = jobs.save_scraped_lead(
+        db_session,
+        run,
+        MapLead(
+            name="Empresa Com Site",
+            address="Av. Paulista, 1000 - São Paulo, SP",
+            phone="(11) 99999-0000",
+            website="https://empresa.example",
+        ),
+    )
+
+    assert saved is False
+    assert db_session.query(Lead).count() == 0
+    assert run.skipped_count == 1
+    assert run.message == "Empresa Com Site ignorado: tem site."
+
+
+def test_scraping_only_without_website_saves_lead_without_site(db_session: Session) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=False,
+        only_without_website=True,
+        validate_whatsapp=False,
+        status="running",
+        message="Buscando somente sem site.",
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    saved = jobs.save_scraped_lead(
+        db_session,
+        run,
+        MapLead(
+            name="Empresa Sem Site",
+            address="Av. Paulista, 1000 - São Paulo, SP",
+            phone="(11) 99999-0000",
+            website="",
+        ),
+    )
+
+    assert saved is True
+    lead = db_session.query(Lead).one()
+    assert lead.name == "Empresa Sem Site"
+    assert lead.website is None
 
 
 def test_scraping_schedules_site_insights_when_enabled(

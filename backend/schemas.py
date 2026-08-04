@@ -27,6 +27,7 @@ class SearchCreate(BaseModel):
     quantity: int | None = Field(default=None, ge=1, le=500)
     max_results: bool = False
     skip_without_website: bool = True
+    only_without_website: bool = False
     validate_whatsapp: bool = False
     enrich_site_insights: bool = False
 
@@ -39,6 +40,8 @@ class SearchCreate(BaseModel):
     def validate_quantity(self) -> "SearchCreate":
         if not self.max_results and self.quantity is None:
             raise ValueError("Informe uma quantidade ou marque max_results.")
+        if self.only_without_website:
+            self.skip_without_website = False
         return self
 
 
@@ -106,6 +109,7 @@ class SearchRunRead(BaseModel):
     target_quantity: int | None
     max_results: bool
     skip_without_website: bool
+    only_without_website: bool
     validate_whatsapp: bool
     enrich_site_insights: bool
     status: str

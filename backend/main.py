@@ -453,6 +453,7 @@ def create_desktop_search(
         target_quantity=None if payload.max_results else payload.quantity,
         max_results=payload.max_results,
         skip_without_website=payload.skip_without_website,
+        only_without_website=payload.only_without_website,
         validate_whatsapp=payload.validate_whatsapp,
         enrich_site_insights=payload.enrich_site_insights,
         status="running",
