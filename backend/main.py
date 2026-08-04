@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -609,13 +609,18 @@ def list_leads(
     run_id: int | None = None,
     niche: str | None = None,
     location: str | None = None,
+    email_campaign_id: int | None = None,
+    email_opened: bool = False,
+    email_clicked: bool = False,
+    whatsapp_campaign_id: int | None = None,
+    whatsapp_replied: bool = False,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
 ) -> list[Lead]:
     _ = username
     stmt = select(Lead).options(selectinload(Lead.search_run)).join(SearchRun).order_by(desc(Lead.created_at)).limit(500)
 
-    if run_id:
+    if run_id is not None:
         stmt = stmt.where(Lead.run_id == run_id)
 
     if niche:
@@ -623,6 +628,47 @@ def list_leads(
 
     if location:
         stmt = stmt.where(SearchRun.location.ilike(f"%{location.strip()}%"))
+
+    if email_campaign_id is not None:
+        stmt = stmt.where(Lead.id.in_(select(EmailSend.lead_id).where(EmailSend.campaign_id == email_campaign_id)))
+
+    if email_opened:
+        opened_email_leads_stmt = select(EmailSend.lead_id).where(
+            or_(EmailSend.open_count > 0, EmailSend.opened_at.is_not(None))
+        )
+        if email_campaign_id is not None:
+            opened_email_leads_stmt = opened_email_leads_stmt.where(EmailSend.campaign_id == email_campaign_id)
+        stmt = stmt.where(Lead.id.in_(opened_email_leads_stmt))
+
+    if email_clicked:
+        clicked_email_leads_stmt = select(EmailSend.lead_id).where(
+            or_(EmailSend.click_count > 0, EmailSend.clicked_at.is_not(None))
+        )
+        if email_campaign_id is not None:
+            clicked_email_leads_stmt = clicked_email_leads_stmt.where(EmailSend.campaign_id == email_campaign_id)
+        stmt = stmt.where(Lead.id.in_(clicked_email_leads_stmt))
+
+    if whatsapp_campaign_id is not None:
+        stmt = stmt.where(
+            Lead.id.in_(select(WhatsAppSend.lead_id).where(WhatsAppSend.campaign_id == whatsapp_campaign_id))
+        )
+
+    if whatsapp_replied:
+        sent_whatsapp_leads_stmt = select(WhatsAppSend.lead_id)
+        if whatsapp_campaign_id is not None:
+            sent_whatsapp_leads_stmt = sent_whatsapp_leads_stmt.where(
+                WhatsAppSend.campaign_id == whatsapp_campaign_id
+            )
+        replied_leads_stmt = (
+            select(WhatsAppConversation.lead_id)
+            .join(WhatsAppMessage, WhatsAppMessage.conversation_id == WhatsAppConversation.id)
+            .where(
+                WhatsAppConversation.lead_id.is_not(None),
+                WhatsAppConversation.lead_id.in_(sent_whatsapp_leads_stmt),
+                WhatsAppMessage.direction == "inbound",
+            )
+        )
+        stmt = stmt.where(Lead.id.in_(replied_leads_stmt))
 
     return list(db.scalars(stmt).all())
 

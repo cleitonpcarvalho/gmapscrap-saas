@@ -1255,6 +1255,19 @@ td span {
   grid-template-columns: repeat(4, minmax(170px, 1fr)) auto;
 }
 
+.lead-campaign-filters-row {
+  grid-template-columns:
+    minmax(210px, 1.3fr)
+    minmax(130px, 0.6fr)
+    minmax(130px, 0.6fr)
+    minmax(210px, 1.3fr)
+    minmax(170px, 0.8fr);
+}
+
+.lead-campaign-filters-row .checkbox-label {
+  align-self: end;
+}
+
 .tag-filter {
   align-self: stretch;
 }
@@ -1558,7 +1571,8 @@ td a {
   .metrics-grid,
   .dashboard-metrics,
   .dashboard-grid,
-  .template-layout {
+  .template-layout,
+  .lead-campaign-filters-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

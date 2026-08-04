@@ -1051,6 +1051,11 @@ export default function Home() {
   const [leadNameQuery, setLeadNameQuery] = useState("");
   const [selectedLeadNiches, setSelectedLeadNiches] = useState<string[]>([]);
   const [selectedLeadLocations, setSelectedLeadLocations] = useState<string[]>([]);
+  const [selectedLeadEmailCampaignId, setSelectedLeadEmailCampaignId] = useState("");
+  const [leadEmailOpenedOnly, setLeadEmailOpenedOnly] = useState(false);
+  const [leadEmailClickedOnly, setLeadEmailClickedOnly] = useState(false);
+  const [selectedLeadWhatsappCampaignId, setSelectedLeadWhatsappCampaignId] = useState("");
+  const [leadWhatsappRepliedOnly, setLeadWhatsappRepliedOnly] = useState(false);
   const [leadPage, setLeadPage] = useState(1);
   const [runPage, setRunPage] = useState(1);
   const [emailError, setEmailError] = useState("");
@@ -1174,6 +1179,22 @@ export default function Home() {
 
   const leadNicheOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.niche)), [leads]);
   const leadLocationOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.location)), [leads]);
+  const leadApiPath = useMemo(() => {
+    const params = new URLSearchParams();
+    if (selectedLeadEmailCampaignId) params.set("email_campaign_id", selectedLeadEmailCampaignId);
+    if (leadEmailOpenedOnly) params.set("email_opened", "true");
+    if (leadEmailClickedOnly) params.set("email_clicked", "true");
+    if (selectedLeadWhatsappCampaignId) params.set("whatsapp_campaign_id", selectedLeadWhatsappCampaignId);
+    if (leadWhatsappRepliedOnly) params.set("whatsapp_replied", "true");
+    const query = params.toString();
+    return `/api/leads${query ? `?${query}` : ""}`;
+  }, [
+    leadEmailClickedOnly,
+    leadEmailOpenedOnly,
+    leadWhatsappRepliedOnly,
+    selectedLeadEmailCampaignId,
+    selectedLeadWhatsappCampaignId
+  ]);
   const filteredLeads = useMemo(() => {
     const normalizedLeadNameQuery = leadNameQuery.trim().toLowerCase();
     return leads.filter((lead) => {
@@ -1335,7 +1356,7 @@ export default function Home() {
     const [nextStats, nextSearches, nextLeads] = await Promise.all([
       apiFetch<Stats>("/api/stats"),
       apiFetch<SearchRun[]>("/api/searches"),
-      apiFetch<Lead[]>("/api/leads")
+      apiFetch<Lead[]>(leadApiPath)
     ]);
 
     setStats(nextStats);
@@ -1454,7 +1475,13 @@ export default function Home() {
     }, activeRun ? 2500 : 6000);
 
     return () => window.clearInterval(interval);
-  }, [user, activeRun]);
+  }, [user, activeRun, leadApiPath]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    refreshData().catch(() => undefined);
+  }, [user, leadApiPath]);
 
   useEffect(() => {
     setSelectedIds((current) => current.filter((id) => leads.some((lead) => lead.id === id)));
@@ -1462,7 +1489,16 @@ export default function Home() {
 
   useEffect(() => {
     setLeadPage(1);
-  }, [leadNameQuery, selectedLeadNiches, selectedLeadLocations]);
+  }, [
+    leadEmailClickedOnly,
+    leadEmailOpenedOnly,
+    leadNameQuery,
+    leadWhatsappRepliedOnly,
+    selectedLeadEmailCampaignId,
+    selectedLeadNiches,
+    selectedLeadLocations,
+    selectedLeadWhatsappCampaignId
+  ]);
 
   useEffect(() => {
     setHistoryPage(1);
@@ -1603,6 +1639,7 @@ export default function Home() {
       setPassword("");
       await refreshData();
       await refreshEmailData();
+      await refreshWhatsappData();
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : "Login inválido.");
     }
@@ -1620,6 +1657,11 @@ export default function Home() {
     setDeleteDialog(null);
     setSelectedLeadNiches([]);
     setSelectedLeadLocations([]);
+    setSelectedLeadEmailCampaignId("");
+    setLeadEmailOpenedOnly(false);
+    setLeadEmailClickedOnly(false);
+    setSelectedLeadWhatsappCampaignId("");
+    setLeadWhatsappRepliedOnly(false);
     setLeadPage(1);
     setTemplateDeleteDialog(null);
     setEmailMessage("");
@@ -3375,12 +3417,72 @@ export default function Home() {
                   setSelectedLeadNiches([]);
                   setSelectedLeadLocations([]);
                   setLeadNameQuery("");
+                  setSelectedLeadEmailCampaignId("");
+                  setLeadEmailOpenedOnly(false);
+                  setLeadEmailClickedOnly(false);
+                  setSelectedLeadWhatsappCampaignId("");
+                  setLeadWhatsappRepliedOnly(false);
                   setLeadPage(1);
                 }}
                 type="button"
               >
                 Limpar filtros
               </button>
+            </div>
+
+            <div className="filters-row lead-campaign-filters-row">
+              <label>
+                Campanha de e-mail
+                <select
+                  value={selectedLeadEmailCampaignId}
+                  onChange={(event) => setSelectedLeadEmailCampaignId(event.target.value)}
+                >
+                  <option value="">Todas as campanhas de e-mail</option>
+                  {campaigns.map((campaign) => (
+                    <option key={campaign.id} value={campaign.id}>
+                      {campaign.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="checkbox-label">
+                <input
+                  checked={leadEmailOpenedOnly}
+                  onChange={(event) => setLeadEmailOpenedOnly(event.target.checked)}
+                  type="checkbox"
+                />
+                Abriu e-mail
+              </label>
+              <label className="checkbox-label">
+                <input
+                  checked={leadEmailClickedOnly}
+                  onChange={(event) => setLeadEmailClickedOnly(event.target.checked)}
+                  type="checkbox"
+                />
+                Clicou e-mail
+              </label>
+              <label>
+                Campanha WhatsApp
+                <select
+                  value={selectedLeadWhatsappCampaignId}
+                  onChange={(event) => setSelectedLeadWhatsappCampaignId(event.target.value)}
+                >
+                  <option value="">Todas as campanhas WhatsApp</option>
+                  {whatsappCampaigns.map((campaign) => (
+                    <option key={campaign.id} value={campaign.id}>
+                      {campaign.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="checkbox-label">
+                <input
+                  checked={leadWhatsappRepliedOnly}
+                  onChange={(event) => setLeadWhatsappRepliedOnly(event.target.checked)}
+                  type="checkbox"
+                />
+                Respondeu WhatsApp
+              </label>
             </div>
 
             <div className="table-wrap">
