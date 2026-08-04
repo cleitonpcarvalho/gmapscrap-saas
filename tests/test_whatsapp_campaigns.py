@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -22,6 +23,7 @@ from backend.models import (
 )
 from backend.schemas import (
     WhatsAppCampaignCreate,
+    WhatsAppCampaignUpdate,
     WhatsAppMessageTemplateCreate,
     WhatsAppMessageTemplateUpdate,
     WhatsAppTemplateGenerateRequest,
@@ -155,6 +157,114 @@ def test_whatsapp_campaign_endpoint_lifecycle(
     assert main.list_whatsapp_campaigns(db=db_session, username="test-user") == []
 
 
+def test_update_whatsapp_campaign_can_change_template_before_sends_exist(db_session: Session) -> None:
+    ids = seed_campaign_records(db_session)
+    second_template = WhatsAppMessageTemplate(name="Segundo contato", content="Olá {nome_empresa}, tudo certo?")
+    db_session.add(second_template)
+    db_session.commit()
+
+    campaign = main.create_whatsapp_campaign(
+        WhatsAppCampaignCreate(
+            name="Campanha WhatsApp",
+            objective="Vender criação de site grátis, paga só se gostar.",
+            list_id=ids["list_id"],
+            instance_id=ids["instance_id"],
+            templates=[{"template_id": ids["template_id"], "weight": 1}],
+            min_delay_seconds=1,
+            max_delay_seconds=1,
+        ),
+        db=db_session,
+        username="test-user",
+    )
+    assert campaign.template_ids == [ids["template_id"]]
+
+    updated = main.update_whatsapp_campaign(
+        campaign.id,
+        WhatsAppCampaignUpdate(
+            name="Campanha WhatsApp",
+            objective="Vender criação de site grátis, paga só se gostar.",
+            list_id=ids["list_id"],
+            instance_id=ids["instance_id"],
+            templates=[{"template_id": second_template.id, "weight": 1}],
+            min_delay_seconds=1,
+            max_delay_seconds=1,
+        ),
+        db=db_session,
+        username="test-user",
+    )
+
+    assert updated.template_ids == [second_template.id]
+    assert updated.message == "Campanha atualizada."
+
+
+def test_update_whatsapp_campaign_blocks_template_change_once_sends_exist(db_session: Session) -> None:
+    ids = seed_campaign_records(db_session)
+    second_template = WhatsAppMessageTemplate(name="Segundo contato", content="Olá {nome_empresa}, tudo certo?")
+    db_session.add(second_template)
+    db_session.commit()
+
+    campaign = main.create_whatsapp_campaign(
+        WhatsAppCampaignCreate(
+            name="Campanha WhatsApp",
+            objective="Vender criação de site grátis, paga só se gostar.",
+            list_id=ids["list_id"],
+            instance_id=ids["instance_id"],
+            templates=[{"template_id": ids["template_id"], "weight": 1}],
+            min_delay_seconds=1,
+            max_delay_seconds=1,
+        ),
+        db=db_session,
+        username="test-user",
+    )
+    db_session.add(
+        WhatsAppSend(
+            campaign_id=campaign.id,
+            lead_id=ids["lead_id"],
+            template_id=ids["template_id"],
+            recipient_phone="5511995779865",
+            status="pending",
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        main.update_whatsapp_campaign(
+            campaign.id,
+            WhatsAppCampaignUpdate(
+                name="Campanha WhatsApp",
+                objective="Vender criação de site grátis, paga só se gostar.",
+                list_id=ids["list_id"],
+                instance_id=ids["instance_id"],
+                templates=[{"template_id": second_template.id, "weight": 1}],
+                min_delay_seconds=1,
+                max_delay_seconds=1,
+            ),
+            db=db_session,
+            username="test-user",
+        )
+
+    assert exc_info.value.status_code == 409
+
+    # A field unrelated to audience (e.g. daily_limit) can still be edited once sends exist.
+    updated = main.update_whatsapp_campaign(
+        campaign.id,
+        WhatsAppCampaignUpdate(
+            name="Campanha WhatsApp",
+            objective="Vender criação de site grátis, paga só se gostar.",
+            list_id=ids["list_id"],
+            instance_id=ids["instance_id"],
+            templates=[{"template_id": ids["template_id"], "weight": 1}],
+            daily_limit=5,
+            min_delay_seconds=1,
+            max_delay_seconds=1,
+        ),
+        db=db_session,
+        username="test-user",
+    )
+    assert updated.daily_limit == 5
+    assert updated.template_ids == [ids["template_id"]]
+
+
 def test_whatsapp_ai_per_lead_campaign_can_be_created_without_template(db_session: Session) -> None:
     ids = seed_campaign_records(db_session)
 
@@ -236,6 +346,8 @@ def test_whatsapp_template_generate_endpoint_uses_openai(
     assert captured["payload"]["text"]["format"]["name"] == "whatsapp_template_generation"
     assert "Comece obrigatoriamente com uma saudação breve" in captured["payload"]["input"][1]["content"]
     assert "Não omita a oferta ou gancho específico" in captured["payload"]["input"][1]["content"]
+    assert "Nunca repita a categoria do negócio duas vezes seguidas" in captured["payload"]["input"][1]["content"]
+    assert "estava pesquisando no Google sobre" in captured["payload"]["input"][1]["content"]
     assert "desenvolvimento sem custo inicial" in captured["payload"]["input"][1]["content"]
     assert "sem fechar detalhes" in captured["payload"]["input"][1]["content"]
     assert "Não use {lead_name}" in captured["payload"]["input"][1]["content"]
@@ -302,6 +414,127 @@ def test_whatsapp_campaign_runner_sends_pending_messages(
             },
         }
     ]
+
+
+def test_whatsapp_campaign_restart_after_pause_does_not_resend_already_sent_leads(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=False,
+        status="completed",
+        message="Busca concluída.",
+    )
+    db_session.add(run)
+    db_session.flush()
+    leads = [
+        Lead(
+            run_id=run.id,
+            name=f"Empresa {index}",
+            address="Av. Paulista, 1000 - São Paulo, SP",
+            phone=f"(11) 9999{index}-000{index}",
+            website=None,
+            email="",
+        )
+        for index in range(1, 4)
+    ]
+    lead_list = LeadList(name="Lista WhatsApp pausa", niche_filter="", location_filter="")
+    instance = WhatsAppInstance(
+        name="sales-restart",
+        provider="evolution",
+        status="connected",
+        evolution_instance_name="sales-restart",
+    )
+    template = WhatsAppMessageTemplate(name="Primeiro contato", content="Oi {nome_empresa}, tudo bem?")
+    db_session.add_all([*leads, lead_list, instance, template])
+    db_session.commit()
+
+    campaign = WhatsAppCampaign(
+        name="Campanha pausa e retomada",
+        list_id=lead_list.id,
+        instance_id=instance.id,
+        status="running",
+        message_mode="template",
+        min_delay_seconds=1,
+        max_delay_seconds=1,
+        daily_limit=30,
+        weekly_limit=150,
+        send_window_start="00:00",
+        send_window_end="23:59",
+        timezone_name="America/Sao_Paulo",
+        send_days="0,1,2,3,4,5,6",
+    )
+    db_session.add(campaign)
+    db_session.flush()
+    db_session.add(WhatsAppCampaignTemplate(campaign_id=campaign.id, template_id=template.id, weight=1))
+    db_session.commit()
+
+    sent_payloads: list[dict[str, Any]] = []
+
+    def fake_request(method: str, url: str, **kwargs) -> FakeEvolutionResponse:
+        sent_payloads.append({"method": method, "url": url, "json": kwargs["json"]})
+        return FakeEvolutionResponse(200, {"key": {"id": f"message-{len(sent_payloads)}"}, "status": "PENDING"})
+
+    monkeypatch.setattr("backend.services.whatsapp_providers.evolution.requests.request", fake_request)
+
+    # Simulate a real "pause" clicked by the user right after the first message goes out:
+    # the campaign status flips to "paused" during the post-send delay, causing the
+    # in-progress run_campaign loop to stop (same code path _sleep_with_pause_checks
+    # normally uses to detect a pause between sends).
+    def fake_pause_after_first_send(db: Session, campaign_id: int, seconds: int) -> None:
+        paused = db.get(WhatsAppCampaign, campaign_id)
+        assert paused is not None
+        paused.status = "paused"
+        paused.message = "Campanha pausada."
+        db.commit()
+
+    monkeypatch.setattr(whatsapp_campaigns, "_sleep_with_pause_checks", fake_pause_after_first_send)
+
+    whatsapp_campaigns.run_campaign(campaign.id)
+
+    db_session.expire_all()
+    paused_campaign = db_session.get(WhatsAppCampaign, campaign.id)
+    assert paused_campaign is not None
+    assert paused_campaign.status == "paused"
+    sends_after_first_run = list(
+        db_session.scalars(select(WhatsAppSend).where(WhatsAppSend.campaign_id == campaign.id)).all()
+    )
+    assert len(sends_after_first_run) == 3
+    sent_after_first_run = [send for send in sends_after_first_run if send.status == "sent"]
+    pending_after_first_run = [send for send in sends_after_first_run if send.status == "pending"]
+    assert len(sent_after_first_run) == 1
+    assert len(pending_after_first_run) == 2
+    assert len(sent_payloads) == 1
+    already_sent_recipient = sent_after_first_run[0].recipient_phone
+
+    # Restart: flip the campaign back to "running" (what the /start endpoint does) and let
+    # it run to completion this time.
+    monkeypatch.setattr(whatsapp_campaigns, "_sleep_with_pause_checks", lambda db, campaign_id, seconds: None)
+    paused_campaign.status = "running"
+    db_session.commit()
+
+    whatsapp_campaigns.run_campaign(campaign.id)
+
+    db_session.expire_all()
+    final_campaign = db_session.get(WhatsAppCampaign, campaign.id)
+    final_sends = list(db_session.scalars(select(WhatsAppSend).where(WhatsAppSend.campaign_id == campaign.id)).all())
+
+    assert final_campaign is not None
+    assert final_campaign.status == "completed"
+    assert len(final_sends) == 3
+    assert all(send.status == "sent" for send in final_sends)
+
+    # No duplicate: still exactly 3 provider calls total (one per lead), and the lead sent
+    # before the pause was never called again after the restart.
+    assert len(sent_payloads) == 3
+    recipients_called = [payload["json"]["number"] for payload in sent_payloads]
+    assert recipients_called.count(already_sent_recipient) == 1
+    assert len(set(recipients_called)) == 3
 
 
 def test_whatsapp_campaign_runner_generates_ai_message_per_lead(
@@ -378,6 +611,8 @@ def test_whatsapp_campaign_runner_generates_ai_message_per_lead(
     assert "desenvolvimento gratuito, paga só se gostar" in prompt
     assert "Site sem CTA claro" in prompt
     assert "Criamos sites rápidos" in prompt
+    assert "Nunca repita a categoria do negócio duas vezes seguidas" in prompt
+    assert "estava pesquisando no Google sobre" in prompt
     assert sent_payloads == [
         {
             "method": "POST",

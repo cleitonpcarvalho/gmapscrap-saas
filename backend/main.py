@@ -73,6 +73,7 @@ from backend.schemas import (
     UserRead,
     WhatsAppCampaignCreate,
     WhatsAppCampaignRead,
+    WhatsAppCampaignUpdate,
     WhatsAppAiSettingsRead,
     WhatsAppAiSettingsUpdate,
     WhatsAppInstanceCreate,
@@ -1362,6 +1363,75 @@ def create_whatsapp_campaign(
         for item in payload.templates:
             db.add(WhatsAppCampaignTemplate(campaign_id=campaign.id, template_id=item.template_id, weight=item.weight))
 
+    db.commit()
+    db.refresh(campaign)
+    return campaign
+
+
+@app.patch("/api/whatsapp/campaigns/{campaign_id}", response_model=WhatsAppCampaignRead)
+def update_whatsapp_campaign(
+    campaign_id: int,
+    payload: WhatsAppCampaignUpdate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> WhatsAppCampaign:
+    _ = username
+    campaign = db.get(WhatsAppCampaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campanha não encontrada")
+    if campaign.status == "running":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pause a campanha antes de editar")
+    if payload.min_delay_seconds > payload.max_delay_seconds:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Delay mínimo maior que o máximo")
+    if not db.get(LeadList, payload.list_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lista não encontrada")
+    if not db.get(WhatsAppInstance, payload.instance_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instância de WhatsApp não encontrada")
+
+    objective = (payload.objective or "").strip()
+    if payload.message_mode == "ai_per_lead" and not objective:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Informe o objetivo da campanha para gerar mensagens individuais com IA",
+        )
+
+    template_ids = [item.template_id for item in payload.templates]
+    if payload.message_mode == "template":
+        if not template_ids:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escolha um template de mensagem")
+
+        templates_found = db.scalar(
+            select(func.count(WhatsAppMessageTemplate.id)).where(WhatsAppMessageTemplate.id.in_(template_ids))
+        ) or 0
+        if templates_found != len(set(template_ids)):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Um ou mais templates não foram encontrados")
+
+    existing_sends = db.scalar(select(func.count(WhatsAppSend.id)).where(WhatsAppSend.campaign_id == campaign.id)) or 0
+    current_template_ids = {item.template_id for item in campaign.templates}
+    next_template_ids = set(template_ids)
+    if existing_sends and (
+        campaign.list_id != payload.list_id
+        or current_template_ids != next_template_ids
+        or campaign.message_mode != payload.message_mode
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Campanha com fila criada não pode trocar lista, templates ou modo de mensagem. Crie uma nova campanha para alterar a audiência.",
+        )
+
+    data = payload.model_dump(exclude={"templates"})
+    data["objective"] = objective
+    for field, value in data.items():
+        setattr(campaign, field, value.strip() if isinstance(value, str) else value)
+
+    if not existing_sends:
+        db.execute(delete(WhatsAppCampaignTemplate).where(WhatsAppCampaignTemplate.campaign_id == campaign.id))
+        if payload.message_mode == "template":
+            for item in payload.templates:
+                db.add(WhatsAppCampaignTemplate(campaign_id=campaign.id, template_id=item.template_id, weight=item.weight))
+
+    campaign.message = "Campanha atualizada."
+    campaign.error = None
     db.commit()
     db.refresh(campaign)
     return campaign

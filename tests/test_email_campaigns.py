@@ -211,6 +211,8 @@ def test_email_campaign_runner_generates_ai_email_per_lead(
     assert saved_generated["content_title"] == generated["content_title"]
     assert "Site sem CTA claro" in prompt
     assert "desenvolvimento gratuito, paga só se gostar" in prompt
+    assert "Nunca repita a categoria do negócio duas vezes seguidas" in prompt
+    assert "estava pesquisando no Google sobre" in prompt
     assert sent_payloads[0]["recipient"] == "contato@empresa-alfa.test"
     assert sent_payloads[0]["subject"] == generated["subject"]
     assert "https://assets.example.test/logo.png" in sent_payloads[0]["html"]
@@ -440,3 +442,121 @@ def test_email_campaign_runner_marks_ai_generation_failure_and_continues(
     assert sends_by_lead_name["Empresa Beta"].status == "sent"
     assert "Presença digital" in (sends_by_lead_name["Empresa Beta"].generated_content or "")
     assert sent_payloads == [{"recipient": "contato@empresa-beta.test", "subject": "Uma ideia para a Empresa Beta"}]
+
+
+def test_email_campaign_restart_after_pause_does_not_resend_already_sent_leads(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=False,
+        status="completed",
+        message="Busca concluída.",
+    )
+    db_session.add(run)
+    db_session.flush()
+    leads = [
+        Lead(
+            run_id=run.id,
+            name=f"Empresa {index}",
+            address="Av. Paulista, 1000 - São Paulo, SP",
+            phone=f"(11) 9999{index}-000{index}",
+            website=f"https://empresa{index}.test",
+            email=f"contato@empresa{index}.test",
+        )
+        for index in range(1, 4)
+    ]
+    lead_list = LeadList(name="Lista E-mail pausa", niche_filter="", location_filter="")
+    template = EmailTemplate(
+        name="Template pausa",
+        subject="Conteúdo para {{company_name}}",
+        html="<div>{{content_card_block}}</div>",
+        text="Oi {{lead_name}}",
+    )
+    db_session.add_all([*leads, lead_list, template])
+    db_session.commit()
+
+    campaign = EmailCampaign(
+        name="Campanha pausa e retomada",
+        list_id=lead_list.id,
+        status="running",
+        message_mode="template",
+        min_delay_seconds=1,
+        max_delay_seconds=1,
+        daily_limit=30,
+        weekly_limit=150,
+        send_window_start="00:00",
+        send_window_end="23:59",
+        timezone_name="America/Sao_Paulo",
+        send_days="0,1,2,3,4,5,6",
+    )
+    db_session.add(campaign)
+    db_session.flush()
+    db_session.add(EmailCampaignTemplate(campaign_id=campaign.id, template_id=template.id, weight=1))
+    db_session.commit()
+
+    sent_payloads: list[dict[str, str]] = []
+
+    def fake_send_email(config: object, recipient: str, subject: str, html_body: str, text_body: str) -> None:
+        sent_payloads.append({"recipient": recipient, "subject": subject})
+
+    monkeypatch.setattr(email_campaigns, "send_email", fake_send_email)
+
+    # Simulate a real "pause" clicked by the user right after the first message goes out:
+    # the campaign status flips to "paused" during the post-send delay, causing the
+    # in-progress run_campaign loop to stop (same code path _sleep_with_pause_checks
+    # normally uses to detect a pause between sends).
+    def fake_pause_after_first_send(db: Session, campaign_id: int, seconds: int) -> None:
+        paused = db.get(EmailCampaign, campaign_id)
+        assert paused is not None
+        paused.status = "paused"
+        paused.message = "Campanha pausada."
+        db.commit()
+
+    monkeypatch.setattr(email_campaigns, "_sleep_with_pause_checks", fake_pause_after_first_send)
+
+    email_campaigns.run_campaign(campaign.id)
+
+    db_session.expire_all()
+    paused_campaign = db_session.get(EmailCampaign, campaign.id)
+    assert paused_campaign is not None
+    assert paused_campaign.status == "paused"
+    sends_after_first_run = list(
+        db_session.scalars(select(EmailSend).where(EmailSend.campaign_id == campaign.id)).all()
+    )
+    assert len(sends_after_first_run) == 3
+    sent_after_first_run = [send for send in sends_after_first_run if send.status == "sent"]
+    pending_after_first_run = [send for send in sends_after_first_run if send.status == "pending"]
+    assert len(sent_after_first_run) == 1
+    assert len(pending_after_first_run) == 2
+    assert len(sent_payloads) == 1
+    already_sent_recipient = sent_after_first_run[0].recipient_email
+
+    # Restart: flip the campaign back to "running" (what the /start endpoint does) and let
+    # it run to completion this time.
+    monkeypatch.setattr(email_campaigns, "_sleep_with_pause_checks", lambda db, campaign_id, seconds: None)
+    paused_campaign.status = "running"
+    db_session.commit()
+
+    email_campaigns.run_campaign(campaign.id)
+
+    db_session.expire_all()
+    final_campaign = db_session.get(EmailCampaign, campaign.id)
+    final_sends = list(db_session.scalars(select(EmailSend).where(EmailSend.campaign_id == campaign.id)).all())
+
+    assert final_campaign is not None
+    assert final_campaign.status == "completed"
+    assert len(final_sends) == 3
+    assert all(send.status == "sent" for send in final_sends)
+
+    # No duplicate: still exactly 3 send calls total (one per lead), and the lead sent
+    # before the pause was never called again after the restart.
+    assert len(sent_payloads) == 3
+    recipients_called = [payload["recipient"] for payload in sent_payloads]
+    assert recipients_called.count(already_sent_recipient) == 1
+    assert len(set(recipients_called)) == 3

@@ -612,6 +612,10 @@ class WhatsAppCampaignCreate(BaseModel):
         return ",".join(str(day) for day in sorted(days))
 
 
+class WhatsAppCampaignUpdate(WhatsAppCampaignCreate):
+    pass
+
+
 class WhatsAppCampaignRead(BaseModel):
     id: int
     name: str

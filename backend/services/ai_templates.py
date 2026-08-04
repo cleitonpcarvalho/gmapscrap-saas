@@ -175,6 +175,7 @@ Regras:
 - Não use {{lead_name}} na mensagem gerada, pois não há nome de contato pessoal no scraping.
 - Não abra a mensagem como se estivesse chamando uma pessoa pelo nome da empresa. Evite aberturas como "Oi, {{nome_empresa}}!" ou "Olá, {{nome_empresa}}".
 - Cite nicho/localização/site de forma específica quando fizer sentido.
+- Se o objetivo mencionar o nicho/categoria do negócio, cite-o apenas uma vez, de forma natural, reforçando uma pesquisa genuína, como em "estava pesquisando no Google sobre [nicho] em [localidade] e notei que sua empresa ainda não tem site". Nunca repita a categoria do negócio duas vezes seguidas na mesma frase (evite algo como "a Empresa X, [nicho] em [localidade], ainda não tem site").
 - Não omita a oferta ou gancho específico descrito no objetivo; não reduza o objetivo a um resumo genérico do nicho.
 - Se o objetivo citar uma condição especial, desenvolvimento gratuito ou "paga só se gostar", mencione isso de forma natural, por exemplo como "uma condição especial", "desenvolvimento sem custo inicial" ou "só seguir se gostar/fizer sentido".
 - Evite frases robóticas ou comerciais demais, como "posso criar uma prévia sem compromisso", "oferta imperdível" ou "garanta agora".

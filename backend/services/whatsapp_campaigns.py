@@ -202,6 +202,7 @@ Regras:
 - Use no máximo 4 frases curtas.
 - Mencione algo específico do lead. Se houver insights do site/negócio, use um detalhe concreto desses insights.
 - Se os insights estiverem vazios, use apenas empresa, nicho, localização ou site; não invente dores, problemas, tecnologias, nome de pessoa ou dados do site.
+- Ao mencionar o nicho/categoria do negócio, cite-o apenas uma vez, de forma natural, reforçando uma pesquisa genuína, como em "estava pesquisando no Google sobre [nicho] em [localidade] e notei que...". Nunca repita a categoria do negócio duas vezes seguidas na mesma frase (evite algo como "a Empresa X, [nicho] em [localidade], ainda não tem site").
 - Preserve o gancho específico do objetivo. Se mencionar desenvolvimento gratuito, condição especial ou "paga só se gostar", transforme isso em uma frase natural, como "desenvolvimento sem custo inicial" e "só segue se gostar/fizer sentido".
 - Não negocie valores, preço fechado, contrato ou detalhes de pagamento na primeira mensagem.
 - Não use frases robóticas ou comerciais demais, como "oferta imperdível", "garanta agora" ou "posso criar uma prévia sem compromisso".

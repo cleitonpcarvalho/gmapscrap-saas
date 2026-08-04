@@ -340,6 +340,7 @@ Regras:
 - Use no máximo 4 parágrafos curtos.
 - Cite algo específico do lead quando houver dado real. Priorize site_insights quando disponível.
 - Se site_insights estiver indisponível, use apenas empresa, nicho, localização, site ou endereço; não invente problemas, tecnologias, desempenho, nome de pessoa ou dados do site.
+- Ao mencionar o nicho/categoria do negócio, cite-o apenas uma vez, de forma natural, reforçando uma pesquisa genuína, como em "estava pesquisando no Google sobre [nicho] em [localidade] e notei que sua empresa ainda não tem site". Nunca repita a categoria do negócio duas vezes seguidas na mesma frase (evite algo como "a Empresa X, [nicho] em [localidade], ainda não tem site").
 - Preserve o gancho específico do objetivo. Se o objetivo citar uma oferta ou condição especial, mencione isso de forma leve.
 - Não negocie valores, preço fechado, contrato ou formas de pagamento.
 - Não prometa resultado garantido.

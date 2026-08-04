@@ -1170,6 +1170,7 @@ export default function Home() {
   const [whatsappCampaignForm, setWhatsappCampaignForm] = useState(defaultWhatsappCampaignForm);
   const [whatsappCampaignFormErrors, setWhatsappCampaignFormErrors] = useState<WhatsAppCampaignFormErrors>({});
   const [whatsappCampaignModalOpen, setWhatsappCampaignModalOpen] = useState(false);
+  const [editingWhatsappCampaignId, setEditingWhatsappCampaignId] = useState<number | null>(null);
   const [whatsappQrModal, setWhatsappQrModal] = useState<{
     instance: WhatsAppInstance;
     qrCode: WhatsAppQrCodeResponse;
@@ -2428,12 +2429,39 @@ export default function Home() {
   function openNewWhatsappCampaignModal() {
     setWhatsappError("");
     setWhatsappMessage("");
+    setEditingWhatsappCampaignId(null);
     setWhatsappCampaignFormErrors({});
+    setWhatsappCampaignModalOpen(true);
+  }
+
+  function loadWhatsappCampaignForEdit(campaign: WhatsAppCampaign) {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setEditingWhatsappCampaignId(campaign.id);
+    setWhatsappCampaignFormErrors({});
+    setWhatsappCampaignForm({
+      name: campaign.name,
+      objective: campaign.objective || "",
+      message_mode: campaign.message_mode || "template",
+      language: campaign.language || "pt",
+      list_id: String(campaign.list_id),
+      instance_id: String(campaign.instance_id),
+      template_id: campaign.template_ids[0] ? String(campaign.template_ids[0]) : "",
+      min_delay_seconds: campaign.min_delay_seconds,
+      max_delay_seconds: campaign.max_delay_seconds,
+      daily_limit: campaign.daily_limit,
+      weekly_limit: campaign.weekly_limit,
+      send_window_start: campaign.send_window_start,
+      send_window_end: campaign.send_window_end,
+      timezone_name: campaign.timezone_name || "America/Sao_Paulo",
+      send_days: campaign.send_days
+    });
     setWhatsappCampaignModalOpen(true);
   }
 
   function closeWhatsappCampaignModal() {
     setWhatsappCampaignModalOpen(false);
+    setEditingWhatsappCampaignId(null);
     setWhatsappCampaignFormErrors({});
   }
 
@@ -2474,7 +2502,7 @@ export default function Home() {
     return Object.keys(errors).length === 0;
   }
 
-  async function handleCreateWhatsappCampaign(event: FormEvent<HTMLFormElement>) {
+  async function handleSaveWhatsappCampaign(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setWhatsappError("");
     setWhatsappMessage("");
@@ -2489,15 +2517,18 @@ export default function Home() {
     setWhatsappBusyAction("create-campaign");
 
     try {
-      await apiFetch<WhatsAppCampaign>("/api/whatsapp/campaigns", {
-        method: "POST",
-        body: JSON.stringify({
-          ...campaignPayload,
-          list_id: Number(whatsappCampaignForm.list_id),
-          instance_id: Number(whatsappCampaignForm.instance_id),
-          templates
-        })
-      });
+      await apiFetch<WhatsAppCampaign>(
+        editingWhatsappCampaignId ? `/api/whatsapp/campaigns/${editingWhatsappCampaignId}` : "/api/whatsapp/campaigns",
+        {
+          method: editingWhatsappCampaignId ? "PATCH" : "POST",
+          body: JSON.stringify({
+            ...campaignPayload,
+            list_id: Number(whatsappCampaignForm.list_id),
+            instance_id: Number(whatsappCampaignForm.instance_id),
+            templates
+          })
+        }
+      );
       setWhatsappCampaignForm({
         ...defaultWhatsappCampaignForm,
         list_id: whatsappLeadLists[0]?.id ? String(whatsappLeadLists[0].id) : "",
@@ -2505,10 +2536,11 @@ export default function Home() {
         template_id: whatsappTemplates[0]?.id ? String(whatsappTemplates[0].id) : ""
       });
       setWhatsappCampaignModalOpen(false);
-      setWhatsappMessage("Campanha criada.");
+      setWhatsappMessage(editingWhatsappCampaignId ? "Campanha atualizada." : "Campanha criada.");
+      setEditingWhatsappCampaignId(null);
       await refreshWhatsappData();
     } catch (error) {
-      setWhatsappError(error instanceof Error ? error.message : "Não foi possível criar a campanha.");
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível salvar a campanha.");
     } finally {
       setWhatsappBusyAction("");
     }
@@ -4039,6 +4071,15 @@ export default function Home() {
                           </td>
                           <td>
                             <div className="row-actions">
+                              <button
+                                className="icon-button"
+                                disabled={campaign.status === "running"}
+                                onClick={() => loadWhatsappCampaignForEdit(campaign)}
+                                title={campaign.status === "running" ? "Pause a campanha antes de editar" : "Editar campanha"}
+                                type="button"
+                              >
+                                <Edit3 size={16} />
+                              </button>
                               {campaign.status === "draft" || campaign.status === "paused" ? (
                                 <button
                                   className="icon-button"
@@ -5429,11 +5470,11 @@ export default function Home() {
 
       {whatsappCampaignModalOpen ? (
         <div className="modal-backdrop">
-          <form className="edit-modal template-modal" onSubmit={handleCreateWhatsappCampaign}>
+          <form className="edit-modal template-modal" onSubmit={handleSaveWhatsappCampaign}>
             <div className="panel-heading">
               <div>
                 <p className="eyebrow">Disparo controlado</p>
-                <h2>Adicionar campanha</h2>
+                <h2>{editingWhatsappCampaignId ? "Editar campanha" : "Adicionar campanha"}</h2>
               </div>
               <button className="icon-button" onClick={closeWhatsappCampaignModal} title="Fechar" type="button">
                 <X size={18} />
@@ -5663,7 +5704,7 @@ export default function Home() {
               </button>
               <button className="primary-button" disabled={whatsappBusyAction === "create-campaign"} type="submit">
                 {whatsappBusyAction === "create-campaign" ? <Loader2 className="spin" size={18} /> : <Megaphone size={18} />}
-                Criar campanha
+                {editingWhatsappCampaignId ? "Salvar campanha" : "Criar campanha"}
               </button>
             </div>
           </form>
