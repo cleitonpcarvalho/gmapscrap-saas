@@ -670,3 +670,51 @@ def test_site_insights_endpoint_enriches_selected_leads_with_site(
         selected_without_whatsapp.id,
         selected_foreign.id,
     ]
+
+
+def test_site_insights_endpoint_empty_selection_does_not_fallback_to_global(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = SearchRun(
+        niche="Marketing",
+        location="Fortaleza, CE",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=True,
+        status="completed",
+        message="Busca concluída.",
+    )
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(
+        Lead(
+            run_id=run.id,
+            name="Empresa global elegível",
+            address="Rua A, Fortaleza, CE",
+            phone="(85) 99999-0000",
+            website="https://global-elegivel.example",
+            email="",
+            whatsapp_validated=True,
+        )
+    )
+    db_session.commit()
+    captured: dict[str, list[int]] = {}
+
+    def fake_submit(lead_ids: list[int]) -> int:
+        captured["lead_ids"] = lead_ids
+        return len(lead_ids)
+
+    monkeypatch.setattr(main, "submit_retroactive_site_insights_jobs", fake_submit)
+
+    response = main.enrich_existing_leads_site_insights(
+        LeadSiteInsightsEnrichmentRequest(lead_ids=[-1, 0]),
+        db=db_session,
+        username="test-user",
+    )
+
+    assert response.status == "no_eligible_leads"
+    assert response.eligible_count == 0
+    assert response.queued_count == 0
+    assert captured["lead_ids"] == []

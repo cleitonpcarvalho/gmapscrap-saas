@@ -2703,10 +2703,13 @@ export default function Home() {
     setLeadEnrichmentBusy(true);
 
     try {
-      const payload: LeadSiteInsightsEnrichmentRequest = selectedIds.length > 0 ? { lead_ids: selectedIds } : {};
+      const request: RequestInit = { method: "POST" };
+      if (selectedIds.length > 0) {
+        const payload: LeadSiteInsightsEnrichmentRequest = { lead_ids: selectedIds };
+        request.body = JSON.stringify(payload);
+      }
       const response = await apiFetch<LeadSiteInsightsEnrichmentResponse>("/api/leads/enrich-site-insights", {
-        method: "POST",
-        body: JSON.stringify(payload)
+        ...request
       });
       const hasSelection = selectedIds.length > 0;
       setActionMessage(

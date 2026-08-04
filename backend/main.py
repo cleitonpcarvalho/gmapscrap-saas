@@ -677,8 +677,9 @@ def enrich_existing_leads_site_insights(
     username: str = Depends(require_user),
 ) -> LeadSiteInsightsEnrichmentResponse:
     _ = username
-    selected_ids = list(dict.fromkeys(lead_id for lead_id in (payload.lead_ids if payload else []) if lead_id > 0))
-    if selected_ids:
+    requested_ids = payload.lead_ids if payload is not None and payload.lead_ids else None
+    if requested_ids is not None:
+        selected_ids = list(dict.fromkeys(lead_id for lead_id in requested_ids if lead_id > 0))
         selected_eligible_ids = set(
             db.scalars(
                 select(Lead.id).where(
