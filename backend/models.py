@@ -124,10 +124,15 @@ class LeadList(Base):
             "email_engagement_filter_mode IN ('or', 'and')",
             name="ck_lead_lists_email_engagement_filter_mode",
         ),
+        CheckConstraint(
+            "channel IN ('email', 'whatsapp', 'both')",
+            name="ck_lead_lists_channel",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    channel: Mapped[str] = mapped_column(String(10), default="both", nullable=False)
     niche_filter: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     location_filter: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     search_run_id: Mapped[int | None] = mapped_column(ForeignKey("search_runs.id", ondelete="SET NULL"), nullable=True)

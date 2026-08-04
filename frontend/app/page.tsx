@@ -173,9 +173,12 @@ type AiTemplateForm = {
   background_color: string;
 };
 
+type LeadListChannel = "email" | "whatsapp" | "both";
+
 type LeadList = {
   id: number;
   name: string;
+  channel: LeadListChannel;
   niche_filter: string;
   location_filter: string;
   search_run_id: number | null;
@@ -1102,6 +1105,7 @@ export default function Home() {
   const [selectedEditListLocations, setSelectedEditListLocations] = useState<string[]>([]);
   const [leadListForm, setLeadListForm] = useState({
     name: "",
+    channel: "both" as LeadListChannel,
     niche_filter: "",
     location_filter: "",
     search_run_id: "",
@@ -1114,6 +1118,7 @@ export default function Home() {
   });
   const [editLeadListForm, setEditLeadListForm] = useState({
     name: "",
+    channel: "both" as LeadListChannel,
     only_never_emailed: false,
     only_whatsapp_validated: false,
     only_email_opened: false,
@@ -1180,6 +1185,15 @@ export default function Home() {
   const paginatedSearches = searches.slice(runPageStartIndex, runPageStartIndex + SEARCH_RUNS_PAGE_SIZE);
   const runPageStart = searches.length === 0 ? 0 : runPageStartIndex + 1;
   const runPageEnd = Math.min(runPageStartIndex + SEARCH_RUNS_PAGE_SIZE, searches.length);
+
+  const emailLeadLists = useMemo(
+    () => leadLists.filter((list) => list.channel === "email" || list.channel === "both"),
+    [leadLists]
+  );
+  const whatsappLeadLists = useMemo(
+    () => leadLists.filter((list) => list.channel === "whatsapp" || list.channel === "both"),
+    [leadLists]
+  );
 
   const leadNicheOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.niche)), [leads]);
   const leadLocationOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.location)), [leads]);
@@ -1530,10 +1544,10 @@ export default function Home() {
   useEffect(() => {
     setWhatsappCampaignForm((current) => {
       const listId =
-        current.list_id && leadLists.some((list) => String(list.id) === current.list_id)
+        current.list_id && whatsappLeadLists.some((list) => String(list.id) === current.list_id)
           ? current.list_id
-          : leadLists[0]?.id
-            ? String(leadLists[0].id)
+          : whatsappLeadLists[0]?.id
+            ? String(whatsappLeadLists[0].id)
             : "";
       const instanceId =
         current.instance_id && connectedWhatsappInstances.some((instance) => String(instance.id) === current.instance_id)
@@ -1553,7 +1567,7 @@ export default function Home() {
       if (listId === current.list_id && instanceId === current.instance_id && templateId === current.template_id) return current;
       return { ...current, list_id: listId, instance_id: instanceId, template_id: templateId };
     });
-  }, [connectedWhatsappInstances, leadLists, whatsappTemplates]);
+  }, [connectedWhatsappInstances, whatsappLeadLists, whatsappTemplates]);
 
   useEffect(() => {
     if (templates.length === 0) {
@@ -1885,6 +1899,7 @@ export default function Home() {
         method: "POST",
         body: JSON.stringify({
           name: leadListForm.name,
+          channel: leadListForm.channel,
           niche_filter: encodeListFilterValues(selectedListNiches),
           location_filter: encodeListFilterValues(selectedListLocations),
           search_run_id: null,
@@ -1916,6 +1931,7 @@ export default function Home() {
     setEditingLeadList(list);
     setEditLeadListForm({
       name: list.name,
+      channel: list.channel,
       only_never_emailed: list.only_never_emailed,
       only_whatsapp_validated: list.only_whatsapp_validated,
       only_email_opened: list.only_email_opened,
@@ -1934,6 +1950,7 @@ export default function Home() {
     setSelectedEditListLocations([]);
     setEditLeadListForm({
       name: "",
+      channel: "both",
       only_never_emailed: false,
       only_whatsapp_validated: false,
       only_email_opened: false,
@@ -1962,6 +1979,7 @@ export default function Home() {
         method: "PATCH",
         body: JSON.stringify({
           name: editLeadListForm.name,
+          channel: editLeadListForm.channel,
           niche_filter: encodeListFilterValues(selectedEditListNiches),
           location_filter: encodeListFilterValues(selectedEditListLocations),
           search_run_id: editingLeadList.search_run_id,
@@ -2008,7 +2026,7 @@ export default function Home() {
     setEditingCampaignId(null);
     setCampaignForm({
       ...defaultCampaignForm,
-      list_id: leadLists[0]?.id ? String(leadLists[0].id) : "",
+      list_id: emailLeadLists[0]?.id ? String(emailLeadLists[0].id) : "",
       template_ids: templates[0]?.id ? [templates[0].id] : []
     });
   }
@@ -2457,7 +2475,7 @@ export default function Home() {
       });
       setWhatsappCampaignForm({
         ...defaultWhatsappCampaignForm,
-        list_id: leadLists[0]?.id ? String(leadLists[0].id) : "",
+        list_id: whatsappLeadLists[0]?.id ? String(whatsappLeadLists[0].id) : "",
         instance_id: connectedWhatsappInstances[0]?.id ? String(connectedWhatsappInstances[0].id) : "",
         template_id: whatsappTemplates[0]?.id ? String(whatsappTemplates[0].id) : ""
       });
@@ -2947,6 +2965,14 @@ export default function Home() {
             <Users size={18} />
             CRM
           </button>
+          <button
+            className={`nav-item ${activeView === "lists" ? "active" : ""}`}
+            onClick={() => switchView("lists")}
+            type="button"
+          >
+            <ListFilter size={18} />
+            Listas
+          </button>
 
           <div className="nav-section-label">WhatsApp</div>
           <button
@@ -2998,14 +3024,6 @@ export default function Home() {
           >
             <FileText size={18} />
             Templates
-          </button>
-          <button
-            className={`nav-item ${activeView === "lists" ? "active" : ""}`}
-            onClick={() => switchView("lists")}
-            type="button"
-          >
-            <ListFilter size={18} />
-            Listas
           </button>
           <button
             className={`nav-item ${activeView === "campaigns" ? "active" : ""}`}
@@ -3993,7 +4011,7 @@ export default function Home() {
                       }}
                     >
                       <option value="">Escolha</option>
-                      {leadLists.map((list) => (
+                      {whatsappLeadLists.map((list) => (
                         <option key={list.id} value={list.id}>
                           {list.name} · {list.lead_count} leads
                         </option>
@@ -4700,6 +4718,19 @@ export default function Home() {
                     Nome
                     <input value={leadListForm.name} onChange={(event) => setLeadListForm({ ...leadListForm, name: event.target.value })} />
                   </label>
+                  <label>
+                    Canal
+                    <select
+                      value={leadListForm.channel}
+                      onChange={(event) =>
+                        setLeadListForm({ ...leadListForm, channel: event.target.value as LeadListChannel })
+                      }
+                    >
+                      <option value="both">Ambos</option>
+                      <option value="email">E-mail</option>
+                      <option value="whatsapp">WhatsApp</option>
+                    </select>
+                  </label>
                   <TagDropdown
                     allLabel="Todos os nichos"
                     label="Nichos"
@@ -4822,6 +4853,9 @@ export default function Home() {
                       <span>{list.lead_count} leads</span>
                       <small>
                         {formatListFilter(list.niche_filter, "Todos os nichos")} · {formatListFilter(list.location_filter, "Todas as localidades")}
+                      </small>
+                      <small>
+                        Canal: {list.channel === "email" ? "E-mail" : list.channel === "whatsapp" ? "WhatsApp" : "Ambos"}
                       </small>
                       {list.only_whatsapp_validated ? <small>Somente WhatsApp válido</small> : null}
                       {list.only_email_opened || list.only_email_clicked ? (
@@ -5220,6 +5254,19 @@ export default function Home() {
                   onChange={(event) => setEditLeadListForm({ ...editLeadListForm, name: event.target.value })}
                 />
               </label>
+              <label>
+                Canal
+                <select
+                  value={editLeadListForm.channel}
+                  onChange={(event) =>
+                    setEditLeadListForm({ ...editLeadListForm, channel: event.target.value as LeadListChannel })
+                  }
+                >
+                  <option value="both">Ambos</option>
+                  <option value="email">E-mail</option>
+                  <option value="whatsapp">WhatsApp</option>
+                </select>
+              </label>
               <TagDropdown
                 allLabel="Todos os nichos"
                 label="Nichos"
@@ -5391,7 +5438,7 @@ export default function Home() {
                 Lista
                 <select value={campaignForm.list_id} onChange={(event) => setCampaignForm({ ...campaignForm, list_id: event.target.value })}>
                   <option value="">Escolha</option>
-                  {leadLists.map((list) => (
+                  {emailLeadLists.map((list) => (
                     <option key={list.id} value={list.id}>
                       {list.name} · {list.lead_count} leads
                     </option>

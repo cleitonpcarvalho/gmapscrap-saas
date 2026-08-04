@@ -301,6 +301,9 @@ def _ensure_lead_list_columns() -> None:
         "email_engagement_filter_mode": (
             "ALTER TABLE lead_lists ADD COLUMN email_engagement_filter_mode VARCHAR(10) NOT NULL DEFAULT 'or'"
         ),
+        "channel": (
+            "ALTER TABLE lead_lists ADD COLUMN channel VARCHAR(10) NOT NULL DEFAULT 'both'"
+        ),
     }
 
     with engine.begin() as connection:

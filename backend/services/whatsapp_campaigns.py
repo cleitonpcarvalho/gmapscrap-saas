@@ -9,7 +9,7 @@ from threading import Lock, Thread
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.config import get_settings
@@ -17,7 +17,6 @@ from backend.database import SessionLocal
 from backend.models import (
     Lead,
     LeadList,
-    SearchRun,
     WhatsAppAiSettings,
     WhatsAppCampaign,
     WhatsAppCampaignTemplate,
@@ -25,6 +24,8 @@ from backend.models import (
     WhatsAppMessageTemplate,
     WhatsAppSend,
 )
+from backend.services.lead_lists import LIST_CHANNEL_WHATSAPP
+from backend.services.lead_lists import lead_query_for_list as _lead_query_for_list
 from backend.services.whatsapp_providers.evolution import EvolutionProvider
 from backend.services.whatsapp_validation import normalize_phone_e164
 
@@ -36,7 +37,6 @@ _active_campaign_ids_lock = Lock()
 _scheduler_started = False
 _scheduler_lock = Lock()
 VARIABLE_PATTERN = re.compile(r"{\s*([a-zA-Z0-9_]+)\s*}")
-LIST_FILTER_SEPARATOR = "||"
 SUCCESS_STATUSES = ("sent", "delivered", "read")
 MESSAGE_MODE_TEMPLATE = "template"
 MESSAGE_MODE_AI_PER_LEAD = "ai_per_lead"
@@ -45,16 +45,6 @@ logger = logging.getLogger(__name__)
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _split_list_filter(value: str) -> list[str]:
-    if not value:
-        return []
-
-    if LIST_FILTER_SEPARATOR in value:
-        return [item.strip() for item in value.split(LIST_FILTER_SEPARATOR) if item.strip()]
-
-    return [value.strip()] if value.strip() else []
 
 
 def submit_campaign_job(campaign_id: int) -> bool:
@@ -113,29 +103,7 @@ def _campaign_scheduler_loop(interval_seconds: int) -> None:
 
 
 def lead_query_for_list(lead_list: LeadList):
-    stmt = (
-        select(Lead)
-        .join(SearchRun)
-        .options(selectinload(Lead.search_run))
-        .where(Lead.phone != "")
-        .order_by(Lead.created_at)
-    )
-
-    niche_filters = _split_list_filter(lead_list.niche_filter)
-    if niche_filters:
-        stmt = stmt.where(or_(*(SearchRun.niche.ilike(f"%{value}%") for value in niche_filters)))
-
-    location_filters = _split_list_filter(lead_list.location_filter)
-    if location_filters:
-        stmt = stmt.where(or_(*(SearchRun.location.ilike(f"%{value}%") for value in location_filters)))
-
-    if lead_list.search_run_id:
-        stmt = stmt.where(Lead.run_id == lead_list.search_run_id)
-
-    if lead_list.only_whatsapp_validated:
-        stmt = stmt.where(Lead.whatsapp_validated.is_(True))
-
-    return stmt
+    return _lead_query_for_list(lead_list, LIST_CHANNEL_WHATSAPP)
 
 
 def render_message(template: WhatsAppMessageTemplate, lead: Lead) -> str:

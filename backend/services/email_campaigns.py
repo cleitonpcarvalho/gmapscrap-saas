@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from backend.config import get_settings
@@ -22,12 +22,12 @@ from backend.models import (
     EmailSend,
     EmailTemplate,
     Lead,
-    LeadEmailPreference,
     LeadList,
-    SearchRun,
 )
 from backend.services.content_preview import fetch_content_preview
 from backend.services.email_delivery import get_smtp_config, send_email
+from backend.services.lead_lists import LIST_CHANNEL_EMAIL
+from backend.services.lead_lists import lead_query_for_list as _lead_query_for_list
 
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,6 @@ _scheduler_started = False
 _scheduler_lock = Lock()
 VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
 YOUTUBE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{6,}$")
-LIST_FILTER_SEPARATOR = "||"
 MESSAGE_MODE_AI_PER_LEAD = "ai_per_lead"
 MESSAGE_MODE_TEMPLATE = "template"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
@@ -46,42 +45,6 @@ OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def _split_list_filter(value: str) -> list[str]:
-    if not value:
-        return []
-
-    if LIST_FILTER_SEPARATOR in value:
-        return [item.strip() for item in value.split(LIST_FILTER_SEPARATOR) if item.strip()]
-
-    return [value.strip()] if value.strip() else []
-
-
-def _opened_email_leads_stmt():
-    return select(EmailSend.lead_id).where(or_(EmailSend.open_count > 0, EmailSend.opened_at.is_not(None)))
-
-
-def _clicked_email_leads_stmt():
-    return select(EmailSend.lead_id).where(or_(EmailSend.click_count > 0, EmailSend.clicked_at.is_not(None)))
-
-
-def _apply_email_engagement_filter(stmt, lead_list: LeadList):
-    if not lead_list.only_email_opened and not lead_list.only_email_clicked:
-        return stmt
-
-    opened_stmt = _opened_email_leads_stmt()
-    clicked_stmt = _clicked_email_leads_stmt()
-
-    if lead_list.only_email_opened and lead_list.only_email_clicked:
-        if lead_list.email_engagement_filter_mode == "and":
-            return stmt.where(Lead.id.in_(opened_stmt), Lead.id.in_(clicked_stmt))
-        return stmt.where(or_(Lead.id.in_(opened_stmt), Lead.id.in_(clicked_stmt)))
-
-    if lead_list.only_email_opened:
-        return stmt.where(Lead.id.in_(opened_stmt))
-
-    return stmt.where(Lead.id.in_(clicked_stmt))
 
 
 def submit_campaign_job(campaign_id: int) -> bool:
@@ -140,50 +103,7 @@ def _campaign_scheduler_loop(interval_seconds: int) -> None:
 
 
 def lead_query_for_list(lead_list: LeadList):
-    stmt = (
-        select(Lead)
-        .join(SearchRun)
-        .options(selectinload(Lead.search_run))
-        .where(Lead.email != "")
-        .order_by(Lead.created_at)
-    )
-
-    niche_filters = _split_list_filter(lead_list.niche_filter)
-    if niche_filters:
-        stmt = stmt.where(or_(*(SearchRun.niche.ilike(f"%{value}%") for value in niche_filters)))
-
-    location_filters = _split_list_filter(lead_list.location_filter)
-    if location_filters:
-        stmt = stmt.where(or_(*(SearchRun.location.ilike(f"%{value}%") for value in location_filters)))
-
-    if lead_list.search_run_id:
-        stmt = stmt.where(Lead.run_id == lead_list.search_run_id)
-
-    if lead_list.only_whatsapp_validated:
-        stmt = stmt.where(Lead.whatsapp_validated.is_(True))
-
-    stmt = _apply_email_engagement_filter(stmt, lead_list)
-
-    blocked_stmt = select(LeadEmailPreference.lead_id).where(LeadEmailPreference.do_not_contact.is_(True))
-    stmt = stmt.where(~Lead.id.in_(blocked_stmt))
-
-    if lead_list.only_never_emailed:
-        sent_stmt = select(EmailSend.lead_id).where(EmailSend.status == "sent")
-        stmt = stmt.where(~Lead.id.in_(sent_stmt))
-
-    if lead_list.never_received_template_id:
-        template_sent_stmt = select(EmailSend.lead_id).where(
-            EmailSend.template_id == lead_list.never_received_template_id,
-            EmailSend.status.in_(("pending", "sent")),
-        )
-        stmt = stmt.where(~Lead.id.in_(template_sent_stmt))
-
-    return stmt
-
-
-def count_leads_for_list(db: Session, lead_list: LeadList) -> int:
-    leads = db.scalars(lead_query_for_list(lead_list)).all()
-    return len(leads)
+    return _lead_query_for_list(lead_list, LIST_CHANNEL_EMAIL)
 
 
 def _render(value: str, variables: dict[str, str]) -> str:

@@ -91,7 +91,6 @@ from backend.scrapers.email_scraper import normalize_site_url
 from backend.services.crm import CRM_STAGES, get_or_create_crm_lead, update_crm_stage
 from backend.services.content_preview import fetch_content_preview
 from backend.services.email_campaigns import (
-    count_leads_for_list,
     mark_clicked,
     mark_opened,
     render_email,
@@ -102,6 +101,7 @@ from backend.services.email_campaigns import (
 from backend.services.email_delivery import get_or_create_smtp_config, send_email, send_test_email, update_smtp_config
 from backend.services.email_validation import validate_email_address
 from backend.services.ai_templates import generate_email_templates, generate_whatsapp_template_content
+from backend.services.lead_lists import count_leads_for_list
 from backend.services.jobs import (
     BRAZIL_LOCATION_INFERENCE,
     eligible_retroactive_site_insights_lead_ids,
@@ -1591,7 +1591,7 @@ def delete_email_template(
 
 
 def _with_lead_count(db: Session, lead_list: LeadList) -> LeadList:
-    setattr(lead_list, "lead_count", count_leads_for_list(db, lead_list))
+    setattr(lead_list, "lead_count", count_leads_for_list(db, lead_list, lead_list.channel))
     return lead_list
 
 

@@ -357,10 +357,12 @@ class AiTemplateGenerateResponse(BaseModel):
 
 
 EmailEngagementFilterMode = Literal["or", "and"]
+LeadListChannel = Literal["email", "whatsapp", "both"]
 
 
 class LeadListCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
+    channel: LeadListChannel = "both"
     niche_filter: str = Field(default="", max_length=255)
     location_filter: str = Field(default="", max_length=255)
     search_run_id: int | None = None
@@ -379,6 +381,7 @@ class LeadListCreate(BaseModel):
 
 class LeadListUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=2, max_length=255)
+    channel: LeadListChannel | None = None
     niche_filter: str | None = Field(default=None, max_length=255)
     location_filter: str | None = Field(default=None, max_length=255)
     search_run_id: int | None = None
@@ -398,6 +401,7 @@ class LeadListUpdate(BaseModel):
 class LeadListRead(BaseModel):
     id: int
     name: str
+    channel: LeadListChannel
     niche_filter: str
     location_filter: str
     search_run_id: int | None

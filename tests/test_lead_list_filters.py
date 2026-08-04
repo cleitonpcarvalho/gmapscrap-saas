@@ -194,6 +194,7 @@ def test_lead_list_can_filter_only_whatsapp_validated_leads(db_session: Session)
     lead_list = main.create_lead_list(
         LeadListCreate(
             name="WhatsApp validado",
+            channel="whatsapp",
             only_whatsapp_validated=True,
         ),
         db=db_session,
@@ -201,7 +202,11 @@ def test_lead_list_can_filter_only_whatsapp_validated_leads(db_session: Session)
     )
 
     assert lead_list.only_whatsapp_validated is True
-    assert lead_list.lead_count == 1
+    assert lead_list.channel == "whatsapp"
+    # Displayed count must match the WhatsApp-oriented query (phone-based),
+    # not the email-oriented one: both validated leads have a phone, so both count,
+    # even though one of them has no email.
+    assert lead_list.lead_count == 2
 
     whatsapp_leads = db_session.scalars(whatsapp_campaigns.lead_query_for_list(lead_list)).all()
     assert [lead.name for lead in whatsapp_leads] == [
@@ -216,6 +221,94 @@ def test_lead_list_can_filter_only_whatsapp_validated_leads(db_session: Session)
         username="test-user",
     )
     assert updated.only_whatsapp_validated is False
+
+
+def test_lead_list_channel_defaults_to_both_and_backfills_existing_rows(db_session: Session) -> None:
+    seed_filter_leads(db_session)
+
+    lead_list = main.create_lead_list(
+        LeadListCreate(name="Sem canal definido"),
+        db=db_session,
+        username="test-user",
+    )
+
+    assert lead_list.channel == "both"
+    # "both" applies no email/phone requirement: all 3 seeded leads match.
+    assert lead_list.lead_count == 3
+
+
+def test_whatsapp_channel_list_count_matches_manual_leads_filter(db_session: Session) -> None:
+    """Regression test for the reported bug: a WhatsApp-channel list scoped to
+    niche=Sapataria + location=São Paulo + only_whatsapp_validated must show the
+    same leads as manually filtering the Leads screen by niche/location, even
+    when those leads have no e-mail."""
+    run = SearchRun(
+        niche="Sapataria",
+        location="São Paulo",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=False,
+        validate_whatsapp=True,
+        status="completed",
+        message="Busca concluída.",
+    )
+    db_session.add(run)
+    db_session.flush()
+    db_session.add_all(
+        [
+            Lead(
+                run_id=run.id,
+                name="Sapataria Sem Email",
+                address="Rua A, São Paulo, SP",
+                phone="(11) 91111-0000",
+                website=None,
+                email="",
+                whatsapp_validated=True,
+            ),
+            Lead(
+                run_id=run.id,
+                name="Sapataria Com Email",
+                address="Rua B, São Paulo, SP",
+                phone="(11) 92222-0000",
+                website="https://sapataria.example",
+                email="contato@sapataria.example",
+                whatsapp_validated=True,
+            ),
+            Lead(
+                run_id=run.id,
+                name="Sapataria Nao Validada",
+                address="Rua C, São Paulo, SP",
+                phone="(11) 93333-0000",
+                website=None,
+                email="",
+                whatsapp_validated=False,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    manual_leads = main.list_leads(niche="Sapataria", location="São Paulo", db=db_session, username="test-user")
+    assert sorted(lead.name for lead in manual_leads) == [
+        "Sapataria Com Email",
+        "Sapataria Nao Validada",
+        "Sapataria Sem Email",
+    ]
+
+    lead_list = main.create_lead_list(
+        LeadListCreate(
+            name="Sapataria WhatsApp",
+            channel="whatsapp",
+            niche_filter="Sapataria",
+            location_filter="São Paulo",
+            only_whatsapp_validated=True,
+        ),
+        db=db_session,
+        username="test-user",
+    )
+
+    assert lead_list.lead_count == 2
+    matching_leads = db_session.scalars(whatsapp_campaigns.lead_query_for_list(lead_list)).all()
+    assert sorted(lead.name for lead in matching_leads) == ["Sapataria Com Email", "Sapataria Sem Email"]
 
 
 def test_lead_list_filters_by_email_engagement_history(db_session: Session) -> None:

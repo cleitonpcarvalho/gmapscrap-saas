@@ -39,6 +39,7 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     assert "only_email_opened" in lead_list_columns
     assert "only_email_clicked" in lead_list_columns
     assert "email_engagement_filter_mode" in lead_list_columns
+    assert "channel" in lead_list_columns
     assert "message_mode" in email_campaign_columns
     assert "objective" in email_campaign_columns
     assert "generated_content" in email_send_columns
