@@ -6,8 +6,11 @@ from functools import lru_cache
 
 import phonenumbers
 import requests
+from sqlalchemy import desc, select
+from sqlalchemy.orm import Session
 
 from backend.config import get_settings
+from backend.models import WhatsAppInstance
 from backend.services.phone_region import infer_phone_region
 
 
@@ -23,17 +26,43 @@ class WhatsAppValidationResult:
         return self.status == "valid"
 
 
-def is_whatsapp_validation_configured() -> bool:
+def get_whatsapp_validation_instance_name(db: Session | None = None) -> str:
     settings = get_settings()
-    return bool(settings.evolution_api_base_url and settings.evolution_api_key and settings.evolution_instance_name)
+    configured_instance = settings.evolution_instance_name.strip()
+    if configured_instance:
+        return configured_instance
+
+    if db is None:
+        return ""
+
+    connected_instance = db.scalar(
+        select(WhatsAppInstance)
+        .where(WhatsAppInstance.provider == "evolution")
+        .order_by(
+            (WhatsAppInstance.status == "connected").desc(),
+            desc(WhatsAppInstance.connected_at),
+            desc(WhatsAppInstance.created_at),
+        )
+        .limit(1)
+    )
+    if not connected_instance:
+        return ""
+
+    return (connected_instance.evolution_instance_name or connected_instance.name or "").strip()
 
 
-def validate_whatsapp_number(phone: str, address: str = "") -> WhatsAppValidationResult:
+def is_whatsapp_validation_configured(db: Session | None = None) -> bool:
+    settings = get_settings()
+    return bool(_is_evolution_api_configured(settings) and get_whatsapp_validation_instance_name(db))
+
+
+def validate_whatsapp_number(phone: str, address: str = "", instance_name: str = "") -> WhatsAppValidationResult:
     normalized = normalize_phone_e164(phone, address)
     if not normalized:
         return WhatsAppValidationResult(phone=phone, normalized_phone="", status="invalid", reason="bad_phone")
 
-    if not is_whatsapp_validation_configured():
+    resolved_instance_name = (instance_name or get_whatsapp_validation_instance_name()).strip()
+    if not _is_evolution_api_configured(get_settings()) or not resolved_instance_name:
         return WhatsAppValidationResult(
             phone=phone,
             normalized_phone=normalized,
@@ -41,7 +70,7 @@ def validate_whatsapp_number(phone: str, address: str = "") -> WhatsAppValidatio
             reason="whatsapp_validation_not_configured",
         )
 
-    exists = _check_whatsapp_number(normalized)
+    exists = _check_whatsapp_number(normalized, resolved_instance_name)
     if exists is True:
         return WhatsAppValidationResult(phone=phone, normalized_phone=normalized, status="valid")
     if exists is False:
@@ -72,11 +101,15 @@ def normalize_phone_e164(phone: str, address: str = "") -> str:
 
     return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
 
+
+def _is_evolution_api_configured(settings) -> bool:
+    return bool(settings.evolution_api_base_url.strip() and settings.evolution_api_key.strip())
+
 @lru_cache(maxsize=4096)
-def _check_whatsapp_number(normalized_phone: str) -> bool | None:
+def _check_whatsapp_number(normalized_phone: str, instance_name: str = "") -> bool | None:
     settings = get_settings()
     base_url = settings.evolution_api_base_url.rstrip("/")
-    instance = settings.evolution_instance_name.strip().strip("/")
+    instance = (instance_name or settings.evolution_instance_name).strip().strip("/")
     url = f"{base_url}/chat/whatsappNumbers/{instance}"
 
     try:

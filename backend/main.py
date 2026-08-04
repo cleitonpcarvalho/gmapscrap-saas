@@ -153,8 +153,8 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def ensure_whatsapp_validation_available(validate_whatsapp: bool) -> None:
-    if validate_whatsapp and not is_whatsapp_validation_configured():
+def ensure_whatsapp_validation_available(validate_whatsapp: bool, db: Session) -> None:
+    if validate_whatsapp and not is_whatsapp_validation_configured(db):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Validação de WhatsApp não configurada no servidor.",
@@ -412,7 +412,7 @@ def start_search(
     username: str = Depends(require_user),
 ) -> SearchRun:
     _ = username
-    ensure_whatsapp_validation_available(payload.validate_whatsapp)
+    ensure_whatsapp_validation_available(payload.validate_whatsapp, db)
     return create_search_run(db, payload)
 
 
@@ -446,7 +446,7 @@ def create_desktop_search(
     username: str = Depends(require_user),
 ) -> SearchRun:
     _ = username
-    ensure_whatsapp_validation_available(payload.validate_whatsapp)
+    ensure_whatsapp_validation_available(payload.validate_whatsapp, db)
     run = SearchRun(
         niche=payload.niche.strip(),
         location=payload.location.strip(),

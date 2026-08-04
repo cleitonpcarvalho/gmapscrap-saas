@@ -17,7 +17,7 @@ from backend.scrapers.email_scraper import extract_email_from_site, normalize_si
 from backend.scrapers.maps_scraper import MapLead, ScrapeEvent, scrape_google_maps
 from backend.services.email_validation import validate_email_address
 from backend.services.site_insights import extract_site_insights
-from backend.services.whatsapp_validation import validate_whatsapp_number
+from backend.services.whatsapp_validation import get_whatsapp_validation_instance_name, validate_whatsapp_number
 
 
 executor = ThreadPoolExecutor(max_workers=2)
@@ -203,7 +203,11 @@ def _validate_whatsapp_or_skip(db: Session, run: SearchRun, lead: MapLead) -> bo
         return True
 
     validation_context = " ".join(value for value in (lead.address, run.location) if value)
-    result = validate_whatsapp_number(lead.phone, validation_context)
+    instance_name = get_whatsapp_validation_instance_name(db)
+    if instance_name:
+        result = validate_whatsapp_number(lead.phone, validation_context, instance_name=instance_name)
+    else:
+        result = validate_whatsapp_number(lead.phone, validation_context)
     if result.is_valid:
         return True
 
