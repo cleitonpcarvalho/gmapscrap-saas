@@ -632,21 +632,17 @@ def list_leads(
     if email_campaign_id is not None:
         stmt = stmt.where(Lead.id.in_(select(EmailSend.lead_id).where(EmailSend.campaign_id == email_campaign_id)))
 
-    if email_opened:
-        opened_email_leads_stmt = select(EmailSend.lead_id).where(
-            or_(EmailSend.open_count > 0, EmailSend.opened_at.is_not(None))
-        )
-        if email_campaign_id is not None:
-            opened_email_leads_stmt = opened_email_leads_stmt.where(EmailSend.campaign_id == email_campaign_id)
-        stmt = stmt.where(Lead.id.in_(opened_email_leads_stmt))
+    if email_opened or email_clicked:
+        email_engagement_conditions = []
+        if email_opened:
+            email_engagement_conditions.append(or_(EmailSend.open_count > 0, EmailSend.opened_at.is_not(None)))
+        if email_clicked:
+            email_engagement_conditions.append(or_(EmailSend.click_count > 0, EmailSend.clicked_at.is_not(None)))
 
-    if email_clicked:
-        clicked_email_leads_stmt = select(EmailSend.lead_id).where(
-            or_(EmailSend.click_count > 0, EmailSend.clicked_at.is_not(None))
-        )
+        engaged_email_leads_stmt = select(EmailSend.lead_id).where(or_(*email_engagement_conditions))
         if email_campaign_id is not None:
-            clicked_email_leads_stmt = clicked_email_leads_stmt.where(EmailSend.campaign_id == email_campaign_id)
-        stmt = stmt.where(Lead.id.in_(clicked_email_leads_stmt))
+            engaged_email_leads_stmt = engaged_email_leads_stmt.where(EmailSend.campaign_id == email_campaign_id)
+        stmt = stmt.where(Lead.id.in_(engaged_email_leads_stmt))
 
     if whatsapp_campaign_id is not None:
         stmt = stmt.where(

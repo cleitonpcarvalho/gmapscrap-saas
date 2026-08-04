@@ -156,7 +156,7 @@ def test_list_leads_filters_by_email_campaign_and_engagement(db_session: Session
         username="test-user",
     )
     clicked_any_campaign = main.list_leads(email_clicked=True, db=db_session, username="test-user")
-    opened_and_clicked = main.list_leads(
+    opened_or_clicked = main.list_leads(
         email_campaign_id=campaign.id,
         email_opened=True,
         email_clicked=True,
@@ -176,7 +176,11 @@ def test_list_leads_filters_by_email_campaign_and_engagement(db_session: Session
         "Lead Clicou",
         "Lead Outra Campanha",
     ]
-    assert [lead.name for lead in opened_and_clicked] == ["Lead Abriu e Clicou"]
+    assert sorted(lead.name for lead in opened_or_clicked) == [
+        "Lead Abriu",
+        "Lead Abriu e Clicou",
+        "Lead Clicou",
+    ]
 
 
 def test_list_leads_filters_by_whatsapp_campaign_and_replies(db_session: Session) -> None:
