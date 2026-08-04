@@ -466,10 +466,6 @@ input:disabled {
   grid-template-columns: minmax(280px, 0.42fr) minmax(520px, 0.58fr);
 }
 
-.whatsapp-campaign-grid {
-  grid-template-columns: minmax(360px, 0.46fr) minmax(540px, 0.54fr);
-}
-
 .whatsapp-template-grid {
   grid-template-columns: minmax(320px, 0.4fr) minmax(560px, 0.6fr);
 }

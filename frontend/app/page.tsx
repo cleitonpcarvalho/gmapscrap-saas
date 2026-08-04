@@ -1169,6 +1169,7 @@ export default function Home() {
   const [whatsappTemplateDeleteDialog, setWhatsappTemplateDeleteDialog] = useState<WhatsAppMessageTemplate | null>(null);
   const [whatsappCampaignForm, setWhatsappCampaignForm] = useState(defaultWhatsappCampaignForm);
   const [whatsappCampaignFormErrors, setWhatsappCampaignFormErrors] = useState<WhatsAppCampaignFormErrors>({});
+  const [whatsappCampaignModalOpen, setWhatsappCampaignModalOpen] = useState(false);
   const [whatsappQrModal, setWhatsappQrModal] = useState<{
     instance: WhatsAppInstance;
     qrCode: WhatsAppQrCodeResponse;
@@ -2424,6 +2425,18 @@ export default function Home() {
     });
   }
 
+  function openNewWhatsappCampaignModal() {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setWhatsappCampaignFormErrors({});
+    setWhatsappCampaignModalOpen(true);
+  }
+
+  function closeWhatsappCampaignModal() {
+    setWhatsappCampaignModalOpen(false);
+    setWhatsappCampaignFormErrors({});
+  }
+
   function validateWhatsappCampaignForm() {
     const errors: WhatsAppCampaignFormErrors = {};
     const minDelay = Number(whatsappCampaignForm.min_delay_seconds);
@@ -2491,6 +2504,7 @@ export default function Home() {
         instance_id: connectedWhatsappInstances[0]?.id ? String(connectedWhatsappInstances[0].id) : "",
         template_id: whatsappTemplates[0]?.id ? String(whatsappTemplates[0].id) : ""
       });
+      setWhatsappCampaignModalOpen(false);
       setWhatsappMessage("Campanha criada.");
       await refreshWhatsappData();
     } catch (error) {
@@ -3957,340 +3971,114 @@ export default function Home() {
               <div className={`notice ${whatsappError ? "danger" : "success"}`}>{whatsappError || whatsappMessage}</div>
             )}
 
-            <section className="email-grid whatsapp-campaign-grid">
-              <form className="panel email-panel" onSubmit={handleCreateWhatsappCampaign}>
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">Disparo controlado</p>
-                    <h2>Nova campanha</h2>
-                  </div>
-                  <Megaphone size={20} />
+            <section className="panel table-panel whatsapp-campaign-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Campanhas</p>
+                  <h2>Fila WhatsApp</h2>
                 </div>
-                <div className="form-grid">
-                  <label>
-                    Nome
-                    <input
-                      value={whatsappCampaignForm.name}
-                      onChange={(event) => {
-                        setWhatsappCampaignForm({ ...whatsappCampaignForm, name: event.target.value });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, name: "" }));
-                      }}
-                    />
-                    {whatsappCampaignFormErrors.name ? <small className="field-error">{whatsappCampaignFormErrors.name}</small> : null}
-                  </label>
-                  <label className="wide-field">
-                    Objetivo da campanha
-                    <textarea
-                      rows={3}
-                      value={whatsappCampaignForm.objective}
-                      onChange={(event) => {
-                        setWhatsappCampaignForm({ ...whatsappCampaignForm, objective: event.target.value });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, objective: "" }));
-                      }}
-                      placeholder="Ex: vender criação de site grátis, paga só se gostar"
-                    />
-                    {whatsappCampaignFormErrors.objective ? <small className="field-error">{whatsappCampaignFormErrors.objective}</small> : null}
-                  </label>
-                  <label>
-                    Modo de mensagem
-                    <select
-                      value={whatsappCampaignForm.message_mode}
-                      onChange={(event) => {
-                        const messageMode = event.target.value as WhatsAppMessageMode;
-                        setWhatsappCampaignForm({
-                          ...whatsappCampaignForm,
-                          message_mode: messageMode,
-                          template_id:
-                            messageMode === "ai_per_lead"
-                              ? ""
-                              : whatsappCampaignForm.template_id ||
-                                (whatsappTemplates[0]?.id ? String(whatsappTemplates[0].id) : "")
-                        });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, objective: "", template_id: "" }));
-                      }}
-                    >
-                      <option value="template">Template fixo</option>
-                      <option value="ai_per_lead">Gerar individual por IA</option>
-                    </select>
-                  </label>
-                  {whatsappCampaignForm.message_mode === "ai_per_lead" ? (
-                    <label>
-                      Idioma da mensagem
-                      <select
-                        value={whatsappCampaignForm.language}
-                        onChange={(event) =>
-                          setWhatsappCampaignForm({
-                            ...whatsappCampaignForm,
-                            language: event.target.value as AiMessageLanguage
-                          })
-                        }
-                      >
-                        {AI_MESSAGE_LANGUAGE_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                  <label>
-                    Lista de leads
-                    <select
-                      value={whatsappCampaignForm.list_id}
-                      onChange={(event) => {
-                        setWhatsappCampaignForm({ ...whatsappCampaignForm, list_id: event.target.value });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, list_id: "" }));
-                      }}
-                    >
-                      <option value="">Escolha</option>
-                      {whatsappLeadLists.map((list) => (
-                        <option key={list.id} value={list.id}>
-                          {list.name} · {list.lead_count} leads
-                        </option>
-                      ))}
-                    </select>
-                    {whatsappCampaignFormErrors.list_id ? <small className="field-error">{whatsappCampaignFormErrors.list_id}</small> : null}
-                  </label>
-                  <label>
-                    Instância conectada
-                    <select
-                      value={whatsappCampaignForm.instance_id}
-                      onChange={(event) => {
-                        setWhatsappCampaignForm({ ...whatsappCampaignForm, instance_id: event.target.value });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, instance_id: "" }));
-                      }}
-                    >
-                      <option value="">Escolha</option>
-                      {connectedWhatsappInstances.map((instance) => (
-                        <option key={instance.id} value={instance.id}>
-                          {instance.name}
-                        </option>
-                      ))}
-                    </select>
-                    {whatsappCampaignFormErrors.instance_id ? <small className="field-error">{whatsappCampaignFormErrors.instance_id}</small> : null}
-                  </label>
-                  {whatsappCampaignForm.message_mode === "template" ? (
-                    <label>
-                      Template
-                      <select
-                        value={whatsappCampaignForm.template_id}
-                        onChange={(event) => {
-                          setWhatsappCampaignForm({ ...whatsappCampaignForm, template_id: event.target.value });
-                          setWhatsappCampaignFormErrors((current) => ({ ...current, template_id: "" }));
-                        }}
-                      >
-                        <option value="">Escolha</option>
-                        {whatsappTemplates.map((template) => (
-                          <option key={template.id} value={template.id}>
-                            {template.name}
-                          </option>
-                        ))}
-                      </select>
-                      {whatsappCampaignFormErrors.template_id ? <small className="field-error">{whatsappCampaignFormErrors.template_id}</small> : null}
-                    </label>
-                  ) : null}
-                  <label>
-                    Delay mínimo (s)
-                    <input
-                      min={1}
-                      type="number"
-                      value={whatsappCampaignForm.min_delay_seconds}
-                      onChange={(event) => {
-                        setWhatsappCampaignForm({ ...whatsappCampaignForm, min_delay_seconds: Number(event.target.value) });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, min_delay_seconds: "", max_delay_seconds: "" }));
-                      }}
-                    />
-                    {whatsappCampaignFormErrors.min_delay_seconds ? (
-                      <small className="field-error">{whatsappCampaignFormErrors.min_delay_seconds}</small>
-                    ) : null}
-                  </label>
-                  <label>
-                    Delay máximo (s)
-                    <input
-                      min={1}
-                      type="number"
-                      value={whatsappCampaignForm.max_delay_seconds}
-                      onChange={(event) => {
-                        setWhatsappCampaignForm({ ...whatsappCampaignForm, max_delay_seconds: Number(event.target.value) });
-                        setWhatsappCampaignFormErrors((current) => ({ ...current, max_delay_seconds: "" }));
-                      }}
-                    />
-                    {whatsappCampaignFormErrors.max_delay_seconds ? (
-                      <small className="field-error">{whatsappCampaignFormErrors.max_delay_seconds}</small>
-                    ) : null}
-                  </label>
-                  <label>
-                    Limite diário
-                    <input
-                      min={1}
-                      type="number"
-                      value={whatsappCampaignForm.daily_limit}
-                      onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, daily_limit: Number(event.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Limite semanal
-                    <input
-                      min={1}
-                      type="number"
-                      value={whatsappCampaignForm.weekly_limit}
-                      onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, weekly_limit: Number(event.target.value) })}
-                    />
-                  </label>
-                  <label>
-                    Janela início
-                    <input
-                      type="time"
-                      value={whatsappCampaignForm.send_window_start}
-                      onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, send_window_start: event.target.value })}
-                    />
-                  </label>
-                  <label>
-                    Janela fim
-                    <input
-                      type="time"
-                      value={whatsappCampaignForm.send_window_end}
-                      onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, send_window_end: event.target.value })}
-                    />
-                  </label>
-                  <label className="wide-field">
-                    Fuso horário
-                    <select
-                      value={whatsappCampaignForm.timezone_name}
-                      onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, timezone_name: event.target.value })}
-                    >
-                      {CAMPAIGN_TIMEZONES.map((timezoneOption) => (
-                        <option key={timezoneOption.value} value={timezoneOption.value}>
-                          {timezoneOption.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <fieldset className="wide-field day-picker-field">
-                    <legend>Dias de envio</legend>
-                    <div className="send-day-picker">
-                      {CAMPAIGN_SEND_DAYS.map((day) => {
-                        const checked = selectedWhatsappCampaignSendDays.has(day.value);
-                        return (
-                          <label className={`send-day-option ${checked ? "active" : ""}`} key={day.value} title={day.label}>
-                            <input checked={checked} onChange={() => toggleWhatsappCampaignSendDay(day.value)} type="checkbox" />
-                            <span>{day.shortLabel}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                    {whatsappCampaignFormErrors.send_days ? <small className="field-error">{whatsappCampaignFormErrors.send_days}</small> : null}
-                  </fieldset>
-                </div>
-                <button className="primary-button" disabled={whatsappBusyAction === "create-campaign"} type="submit">
-                  {whatsappBusyAction === "create-campaign" ? <Loader2 className="spin" size={18} /> : <Megaphone size={18} />}
-                  Criar campanha
-                </button>
-              </form>
-
-              <section className="panel table-panel whatsapp-campaign-panel">
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">Campanhas</p>
-                    <h2>Fila WhatsApp</h2>
-                  </div>
+                <div className="lead-actions">
                   <span className="muted-count">{whatsappCampaigns.length} campanhas</span>
+                  <button className="secondary-button compact-button" onClick={openNewWhatsappCampaignModal} type="button">
+                    <Plus size={16} />
+                    Adicionar campanha
+                  </button>
                 </div>
-                <div className="table-wrap">
-                  <table className="campaign-table whatsapp-table">
-                    <thead>
+              </div>
+              <div className="table-wrap">
+                <table className="campaign-table whatsapp-table">
+                  <thead>
+                    <tr>
+                      <th>Campanha</th>
+                      <th>Instância</th>
+                      <th>Mensagem</th>
+                      <th>Status</th>
+                      <th>Enviados/total</th>
+                      <th>Janela</th>
+                      <th>Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {whatsappCampaigns.length === 0 ? (
                       <tr>
-                        <th>Campanha</th>
-                        <th>Instância</th>
-                        <th>Mensagem</th>
-                        <th>Status</th>
-                        <th>Enviados/total</th>
-                        <th>Janela</th>
-                        <th>Ações</th>
+                        <td className="empty-cell" colSpan={7}>
+                          Nenhuma campanha criada.
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {whatsappCampaigns.length === 0 ? (
-                        <tr>
-                          <td className="empty-cell" colSpan={7}>
-                            Nenhuma campanha criada.
+                    ) : null}
+                    {whatsappCampaigns.map((campaign) => {
+                      const successCount = campaign.sent_count + campaign.delivered_count + campaign.read_count;
+                      const total =
+                        campaign.pending_count + campaign.sent_count + campaign.delivered_count + campaign.read_count + campaign.failed_count;
+                      const startBusy = whatsappBusyAction === `start-campaign-${campaign.id}`;
+                      const pauseBusy = whatsappBusyAction === `pause-campaign-${campaign.id}`;
+                      const campaignTemplateNames = campaign.template_ids
+                        .map((templateId) => whatsappTemplates.find((template) => template.id === templateId)?.name || `#${templateId}`)
+                        .join(", ");
+                      return (
+                        <tr key={campaign.id}>
+                          <td>
+                            <strong>{campaign.name}</strong>
+                            {campaign.objective ? <span>{campaign.objective}</span> : null}
+                            <span>{campaign.message || campaign.error}</span>
+                          </td>
+                          <td>{campaign.instance_name}</td>
+                          <td>
+                            {campaign.message_mode === "ai_per_lead" ? "IA por lead" : campaignTemplateNames || "-"}
+                          </td>
+                          <td>
+                            <span className={`status-pill ${campaign.status}`}>{campaignStatusLabel(campaign.status)}</span>
+                          </td>
+                          <td>
+                            {successCount}/{total}
+                            {campaign.failed_count ? <span>{campaign.failed_count} falhas</span> : null}
+                          </td>
+                          <td>
+                            {campaign.send_window_start}-{campaign.send_window_end}
+                            <span>{formatCampaignSendDaysLabel(campaign.send_days)}</span>
+                          </td>
+                          <td>
+                            <div className="row-actions">
+                              {campaign.status === "draft" || campaign.status === "paused" ? (
+                                <button
+                                  className="icon-button"
+                                  disabled={startBusy}
+                                  onClick={() => requestStartWhatsappCampaign(campaign)}
+                                  title="Iniciar campanha"
+                                  type="button"
+                                >
+                                  {startBusy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
+                                </button>
+                              ) : null}
+                              {campaign.status === "running" ? (
+                                <button
+                                  className="icon-button"
+                                  disabled={pauseBusy}
+                                  onClick={() => pauseWhatsappCampaign(campaign)}
+                                  title="Pausar campanha"
+                                  type="button"
+                                >
+                                  {pauseBusy ? <Loader2 className="spin" size={16} /> : <Pause size={16} />}
+                                </button>
+                              ) : null}
+                              {campaign.status !== "running" ? (
+                                <button
+                                  className="icon-button danger"
+                                  onClick={() => requestDeleteWhatsappCampaign(campaign)}
+                                  title="Excluir campanha"
+                                  type="button"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              ) : null}
+                            </div>
                           </td>
                         </tr>
-                      ) : null}
-                      {whatsappCampaigns.map((campaign) => {
-                        const successCount = campaign.sent_count + campaign.delivered_count + campaign.read_count;
-                        const total =
-                          campaign.pending_count + campaign.sent_count + campaign.delivered_count + campaign.read_count + campaign.failed_count;
-                        const startBusy = whatsappBusyAction === `start-campaign-${campaign.id}`;
-                        const pauseBusy = whatsappBusyAction === `pause-campaign-${campaign.id}`;
-                        const campaignTemplateNames = campaign.template_ids
-                          .map((templateId) => whatsappTemplates.find((template) => template.id === templateId)?.name || `#${templateId}`)
-                          .join(", ");
-                        return (
-                          <tr key={campaign.id}>
-                            <td>
-                              <strong>{campaign.name}</strong>
-                              {campaign.objective ? <span>{campaign.objective}</span> : null}
-                              <span>{campaign.message || campaign.error}</span>
-                            </td>
-                            <td>{campaign.instance_name}</td>
-                            <td>
-                              {campaign.message_mode === "ai_per_lead" ? "IA por lead" : campaignTemplateNames || "-"}
-                            </td>
-                            <td>
-                              <span className={`status-pill ${campaign.status}`}>{campaignStatusLabel(campaign.status)}</span>
-                            </td>
-                            <td>
-                              {successCount}/{total}
-                              {campaign.failed_count ? <span>{campaign.failed_count} falhas</span> : null}
-                            </td>
-                            <td>
-                              {campaign.send_window_start}-{campaign.send_window_end}
-                              <span>{formatCampaignSendDaysLabel(campaign.send_days)}</span>
-                            </td>
-                            <td>
-                              <div className="row-actions">
-                                {campaign.status === "draft" || campaign.status === "paused" ? (
-                                  <button
-                                    className="icon-button"
-                                    disabled={startBusy}
-                                    onClick={() => requestStartWhatsappCampaign(campaign)}
-                                    title="Iniciar campanha"
-                                    type="button"
-                                  >
-                                    {startBusy ? <Loader2 className="spin" size={16} /> : <Play size={16} />}
-                                  </button>
-                                ) : null}
-                                {campaign.status === "running" ? (
-                                  <button
-                                    className="icon-button"
-                                    disabled={pauseBusy}
-                                    onClick={() => pauseWhatsappCampaign(campaign)}
-                                    title="Pausar campanha"
-                                    type="button"
-                                  >
-                                    {pauseBusy ? <Loader2 className="spin" size={16} /> : <Pause size={16} />}
-                                  </button>
-                                ) : null}
-                                {campaign.status !== "running" ? (
-                                  <button
-                                    className="icon-button danger"
-                                    onClick={() => requestDeleteWhatsappCampaign(campaign)}
-                                    title="Excluir campanha"
-                                    type="button"
-                                  >
-                                    <Trash2 size={16} />
-                                  </button>
-                                ) : null}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </section>
           </section>
         ) : activeView === "whatsappCrm" ? (
@@ -5633,6 +5421,249 @@ export default function Home() {
               <button className="primary-button" disabled={emailBusy} type="submit">
                 {emailBusy ? <Loader2 className="spin" size={18} /> : <Megaphone size={18} />}
                 {editingCampaignId ? "Salvar campanha" : "Criar campanha"}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {whatsappCampaignModalOpen ? (
+        <div className="modal-backdrop">
+          <form className="edit-modal template-modal" onSubmit={handleCreateWhatsappCampaign}>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Disparo controlado</p>
+                <h2>Adicionar campanha</h2>
+              </div>
+              <button className="icon-button" onClick={closeWhatsappCampaignModal} title="Fechar" type="button">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="edit-grid">
+              <label>
+                Nome
+                <input
+                  value={whatsappCampaignForm.name}
+                  onChange={(event) => {
+                    setWhatsappCampaignForm({ ...whatsappCampaignForm, name: event.target.value });
+                    setWhatsappCampaignFormErrors((current) => ({ ...current, name: "" }));
+                  }}
+                />
+                {whatsappCampaignFormErrors.name ? <small className="field-error">{whatsappCampaignFormErrors.name}</small> : null}
+              </label>
+              <label className="wide-field">
+                Objetivo da campanha
+                <textarea
+                  rows={3}
+                  value={whatsappCampaignForm.objective}
+                  onChange={(event) => {
+                    setWhatsappCampaignForm({ ...whatsappCampaignForm, objective: event.target.value });
+                    setWhatsappCampaignFormErrors((current) => ({ ...current, objective: "" }));
+                  }}
+                  placeholder="Ex: vender criação de site grátis, paga só se gostar"
+                />
+                {whatsappCampaignFormErrors.objective ? <small className="field-error">{whatsappCampaignFormErrors.objective}</small> : null}
+              </label>
+              <label>
+                Modo de mensagem
+                <select
+                  value={whatsappCampaignForm.message_mode}
+                  onChange={(event) => {
+                    const messageMode = event.target.value as WhatsAppMessageMode;
+                    setWhatsappCampaignForm({
+                      ...whatsappCampaignForm,
+                      message_mode: messageMode,
+                      template_id:
+                        messageMode === "ai_per_lead"
+                          ? ""
+                          : whatsappCampaignForm.template_id ||
+                            (whatsappTemplates[0]?.id ? String(whatsappTemplates[0].id) : "")
+                    });
+                    setWhatsappCampaignFormErrors((current) => ({ ...current, objective: "", template_id: "" }));
+                  }}
+                >
+                  <option value="template">Template fixo</option>
+                  <option value="ai_per_lead">Gerar individual por IA</option>
+                </select>
+              </label>
+              {whatsappCampaignForm.message_mode === "ai_per_lead" ? (
+                <label>
+                  Idioma da mensagem
+                  <select
+                    value={whatsappCampaignForm.language}
+                    onChange={(event) =>
+                      setWhatsappCampaignForm({
+                        ...whatsappCampaignForm,
+                        language: event.target.value as AiMessageLanguage
+                      })
+                    }
+                  >
+                    {AI_MESSAGE_LANGUAGE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <label>
+                Lista de leads
+                <select
+                  value={whatsappCampaignForm.list_id}
+                  onChange={(event) => {
+                    setWhatsappCampaignForm({ ...whatsappCampaignForm, list_id: event.target.value });
+                    setWhatsappCampaignFormErrors((current) => ({ ...current, list_id: "" }));
+                  }}
+                >
+                  <option value="">Escolha</option>
+                  {whatsappLeadLists.map((list) => (
+                    <option key={list.id} value={list.id}>
+                      {list.name} · {list.lead_count} leads
+                    </option>
+                  ))}
+                </select>
+                {whatsappCampaignFormErrors.list_id ? <small className="field-error">{whatsappCampaignFormErrors.list_id}</small> : null}
+              </label>
+              <label>
+                Instância conectada
+                <select
+                  value={whatsappCampaignForm.instance_id}
+                  onChange={(event) => {
+                    setWhatsappCampaignForm({ ...whatsappCampaignForm, instance_id: event.target.value });
+                    setWhatsappCampaignFormErrors((current) => ({ ...current, instance_id: "" }));
+                  }}
+                >
+                  <option value="">Escolha</option>
+                  {connectedWhatsappInstances.map((instance) => (
+                    <option key={instance.id} value={instance.id}>
+                      {instance.name}
+                    </option>
+                  ))}
+                </select>
+                {whatsappCampaignFormErrors.instance_id ? <small className="field-error">{whatsappCampaignFormErrors.instance_id}</small> : null}
+              </label>
+              {whatsappCampaignForm.message_mode === "template" ? (
+                <label>
+                  Template
+                  <select
+                    value={whatsappCampaignForm.template_id}
+                    onChange={(event) => {
+                      setWhatsappCampaignForm({ ...whatsappCampaignForm, template_id: event.target.value });
+                      setWhatsappCampaignFormErrors((current) => ({ ...current, template_id: "" }));
+                    }}
+                  >
+                    <option value="">Escolha</option>
+                    {whatsappTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
+                      </option>
+                    ))}
+                  </select>
+                  {whatsappCampaignFormErrors.template_id ? <small className="field-error">{whatsappCampaignFormErrors.template_id}</small> : null}
+                </label>
+              ) : null}
+              <label>
+                Delay mínimo (s)
+                <input
+                  min={1}
+                  type="number"
+                  value={whatsappCampaignForm.min_delay_seconds}
+                  onChange={(event) => {
+                    setWhatsappCampaignForm({ ...whatsappCampaignForm, min_delay_seconds: Number(event.target.value) });
+                    setWhatsappCampaignFormErrors((current) => ({ ...current, min_delay_seconds: "", max_delay_seconds: "" }));
+                  }}
+                />
+                {whatsappCampaignFormErrors.min_delay_seconds ? (
+                  <small className="field-error">{whatsappCampaignFormErrors.min_delay_seconds}</small>
+                ) : null}
+              </label>
+              <label>
+                Delay máximo (s)
+                <input
+                  min={1}
+                  type="number"
+                  value={whatsappCampaignForm.max_delay_seconds}
+                  onChange={(event) => {
+                    setWhatsappCampaignForm({ ...whatsappCampaignForm, max_delay_seconds: Number(event.target.value) });
+                    setWhatsappCampaignFormErrors((current) => ({ ...current, max_delay_seconds: "" }));
+                  }}
+                />
+                {whatsappCampaignFormErrors.max_delay_seconds ? (
+                  <small className="field-error">{whatsappCampaignFormErrors.max_delay_seconds}</small>
+                ) : null}
+              </label>
+              <label>
+                Limite diário
+                <input
+                  min={1}
+                  type="number"
+                  value={whatsappCampaignForm.daily_limit}
+                  onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, daily_limit: Number(event.target.value) })}
+                />
+              </label>
+              <label>
+                Limite semanal
+                <input
+                  min={1}
+                  type="number"
+                  value={whatsappCampaignForm.weekly_limit}
+                  onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, weekly_limit: Number(event.target.value) })}
+                />
+              </label>
+              <label>
+                Janela início
+                <input
+                  type="time"
+                  value={whatsappCampaignForm.send_window_start}
+                  onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, send_window_start: event.target.value })}
+                />
+              </label>
+              <label>
+                Janela fim
+                <input
+                  type="time"
+                  value={whatsappCampaignForm.send_window_end}
+                  onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, send_window_end: event.target.value })}
+                />
+              </label>
+              <label className="wide-field">
+                Fuso horário
+                <select
+                  value={whatsappCampaignForm.timezone_name}
+                  onChange={(event) => setWhatsappCampaignForm({ ...whatsappCampaignForm, timezone_name: event.target.value })}
+                >
+                  {CAMPAIGN_TIMEZONES.map((timezoneOption) => (
+                    <option key={timezoneOption.value} value={timezoneOption.value}>
+                      {timezoneOption.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <fieldset className="wide-field day-picker-field">
+                <legend>Dias de envio</legend>
+                <div className="send-day-picker">
+                  {CAMPAIGN_SEND_DAYS.map((day) => {
+                    const checked = selectedWhatsappCampaignSendDays.has(day.value);
+                    return (
+                      <label className={`send-day-option ${checked ? "active" : ""}`} key={day.value} title={day.label}>
+                        <input checked={checked} onChange={() => toggleWhatsappCampaignSendDay(day.value)} type="checkbox" />
+                        <span>{day.shortLabel}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {whatsappCampaignFormErrors.send_days ? <small className="field-error">{whatsappCampaignFormErrors.send_days}</small> : null}
+              </fieldset>
+            </div>
+
+            <div className="modal-actions">
+              <button className="secondary-button" onClick={closeWhatsappCampaignModal} type="button">
+                Cancelar
+              </button>
+              <button className="primary-button" disabled={whatsappBusyAction === "create-campaign"} type="submit">
+                {whatsappBusyAction === "create-campaign" ? <Loader2 className="spin" size={18} /> : <Megaphone size={18} />}
+                Criar campanha
               </button>
             </div>
           </form>
