@@ -1,4 +1,5 @@
 from collections.abc import Generator
+import html
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -277,6 +278,83 @@ def test_ai_email_prompt_instructs_selected_language(
     _, rendered_html, rendered_text = email_campaigns.render_generated_email(template, lead, campaign, generated)
     assert expected_greeting in rendered_html
     assert expected_greeting in rendered_text
+
+
+@pytest.mark.parametrize(
+    ("language", "expected_reply", "expected_contact_label", "expected_disclaimer"),
+    [
+        (
+            "pt",
+            "Responder",
+            "Contato",
+            "Este é um contato pontual da Automa Soluct para Empresa Alfa. Responda 'remover' se preferir não receber novas mensagens.",
+        ),
+        (
+            "en",
+            "Reply",
+            "Contact",
+            "This is a one-time message from Automa Soluct to Empresa Alfa. Reply 'remove' if you prefer not to receive future messages.",
+        ),
+        (
+            "es",
+            "Responder",
+            "Contacto",
+            "Este es un contacto puntual de Automa Soluct para Empresa Alfa. Responde 'eliminar' si prefieres no recibir más mensajes.",
+        ),
+    ],
+)
+def test_render_generated_email_localizes_fixed_footer(
+    db_session: Session,
+    language: str,
+    expected_reply: str,
+    expected_contact_label: str,
+    expected_disclaimer: str,
+) -> None:
+    ids = seed_email_campaign_records(db_session)
+    lead = db_session.get(Lead, ids["lead_id"])
+    assert lead is not None
+    campaign = EmailCampaign(
+        name=f"Campanha IA rodape ({language})",
+        list_id=ids["list_id"],
+        status="draft",
+        message_mode="ai_per_lead",
+        language=language,
+        objective="vender sites para empresas sem site",
+        message="Campanha criada.",
+    )
+    generated = {
+        "subject": "Subject line",
+        "content_title": "Content title",
+        "paragraphs": ["Paragraph one.", "Paragraph two."],
+        "cta": "Call to action",
+    }
+    template = EmailTemplate(
+        name=f"Template rodape {language}",
+        subject="Assunto {{company_name}}",
+        html="<div>{{content_card_block}}</div>",
+        text="",
+    )
+
+    _, rendered_html, rendered_text = email_campaigns.render_generated_email(template, lead, campaign, generated)
+
+    # Full render (subject already embedded via `generated["subject"]`, body and footer) is
+    # checked entirely in the target language: reply button, "Contact" section label, and the
+    # opt-out disclaimer, all interpolating the real lead/company name.
+    assert f">{html.escape(expected_reply)}</a>" in rendered_html
+    assert f">{html.escape(expected_contact_label)}</p>" in rendered_html
+    assert html.escape(expected_disclaimer) in rendered_html
+    assert f"{expected_reply}: cleiton@example.test" in rendered_text
+
+    # The person's name/role and the brand name are proper nouns and stay fixed in every language.
+    assert "Cleiton Carvalho" in rendered_html
+    assert "Automation Specialist - Automa Soluct" in rendered_html
+    assert "Automa Soluct" in rendered_text
+
+    if language != "pt":
+        # No Portuguese-only footer boilerplate should leak into an English/Spanish email.
+        assert "Este é um contato pontual" not in rendered_html
+        assert "Responda 'remover'" not in rendered_html
+        assert ">Contato</p>" not in rendered_html
 
 
 def test_email_campaign_runner_marks_ai_generation_failure_and_continues(

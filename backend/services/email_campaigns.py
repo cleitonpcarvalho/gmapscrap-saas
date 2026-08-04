@@ -51,6 +51,29 @@ AI_GREETING_EXAMPLES = {
     "en": "Hi, how are you?",
     "es": "Hola, ¿cómo estás?",
 }
+# Fixed footer chrome for ai_per_lead emails, keyed by campaign.language. The signature
+# name/role ("Cleiton Carvalho" / "Automation Specialist - Automa Soluct") and the brand
+# name "Automa Soluct" are proper nouns and stay unlocalized in every language.
+AI_EMAIL_FOOTER_TEXTS = {
+    "pt": {
+        "reply_button": "Responder",
+        "contact_label": "Contato",
+        "disclaimer": "Este é um contato pontual da Automa Soluct para {company}. Responda 'remover' se preferir não receber novas mensagens.",
+        "text_reply_label": "Responder",
+    },
+    "en": {
+        "reply_button": "Reply",
+        "contact_label": "Contact",
+        "disclaimer": "This is a one-time message from Automa Soluct to {company}. Reply 'remove' if you prefer not to receive future messages.",
+        "text_reply_label": "Reply",
+    },
+    "es": {
+        "reply_button": "Responder",
+        "contact_label": "Contacto",
+        "disclaimer": "Este es un contacto puntual de Automa Soluct para {company}. Responde 'eliminar' si prefieres no recibir más mensajes.",
+        "text_reply_label": "Responder",
+    },
+}
 
 
 def _now() -> datetime:
@@ -419,6 +442,8 @@ def render_generated_email(
     get_in_touch_link = _mailto_link(settings.contact_email, company_name)
     greeting = AI_GREETING_EXAMPLES.get(campaign.language, AI_GREETING_EXAMPLES["pt"])
     html_lang = {"pt": "pt-BR", "en": "en-US", "es": "es"}.get(campaign.language, "pt-BR")
+    footer_texts = AI_EMAIL_FOOTER_TEXTS.get(campaign.language, AI_EMAIL_FOOTER_TEXTS["pt"])
+    disclaimer = footer_texts["disclaimer"].format(company=company_name or "")
 
     safe_background = html.escape(template.background_color or "#f4f4f4", quote=True)
     safe_primary = html.escape(template.primary_color or "#0a0a0a", quote=True)
@@ -429,7 +454,9 @@ def render_generated_email(
     safe_greeting = html.escape(greeting)
     safe_get_in_touch = html.escape(get_in_touch_link, quote=True)
     safe_contact_email = html.escape(settings.contact_email)
-    safe_company_name = html.escape(company_name or "")
+    safe_reply_button = html.escape(footer_texts["reply_button"])
+    safe_contact_label = html.escape(footer_texts["contact_label"])
+    safe_disclaimer = html.escape(disclaimer)
     paragraph_html = "\n".join(
         f'              <p style="font-size:16px;color:{safe_text};line-height:1.7;margin:0 0 16px 0;">{html.escape(paragraph)}</p>'
         for paragraph in paragraphs
@@ -467,12 +494,12 @@ def render_generated_email(
               <table width="100%" cellpadding="0" cellspacing="0">
                 <tr>
                   <td align="center" style="padding:10px 0 32px 0;">
-                    <a href="{safe_get_in_touch}" style="background-color:{safe_primary};color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:6px;font-size:15px;font-weight:600;display:inline-block;">Responder</a>
+                    <a href="{safe_get_in_touch}" style="background-color:{safe_primary};color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:6px;font-size:15px;font-weight:600;display:inline-block;">{safe_reply_button}</a>
                   </td>
                 </tr>
               </table>
               <hr style="border:none;border-top:1px solid #eeeeee;margin:0 0 28px 0;" />
-              <p style="font-size:13px;color:#888888;margin:0 0 12px 0;text-transform:uppercase;font-weight:600;">Contato</p>
+              <p style="font-size:13px;color:#888888;margin:0 0 12px 0;text-transform:uppercase;font-weight:600;">{safe_contact_label}</p>
               <p style="font-size:15px;color:{safe_text};line-height:1.7;margin:0;">
                 Cleiton Carvalho<br />
                 Automation Specialist - Automa Soluct<br />
@@ -482,7 +509,7 @@ def render_generated_email(
           </tr>
           <tr>
             <td style="padding:24px 40px 40px 40px;border-top:1px solid #eeeeee;">
-              <p style="margin:0;font-size:12px;color:#999999;line-height:1.6;">Este é um contato pontual da Automa Soluct para {safe_company_name}. Responda 'remover' se preferir não receber novas mensagens.</p>
+              <p style="margin:0;font-size:12px;color:#999999;line-height:1.6;">{safe_disclaimer}</p>
             </td>
           </tr>
         </table>
@@ -502,7 +529,7 @@ def render_generated_email(
             content_title,
             *paragraphs,
             cta,
-            f"Responder: {settings.contact_email}",
+            f"{footer_texts['text_reply_label']}: {settings.contact_email}",
             "Cleiton Carvalho",
             "Automa Soluct",
         ]
