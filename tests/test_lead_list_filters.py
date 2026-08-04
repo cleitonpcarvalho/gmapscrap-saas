@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 from backend import main
 from backend.database import Base
 from backend.models import EmailCampaign, EmailSend, EmailTemplate, Lead, LeadList, SearchRun
-from backend.schemas import LeadListCreate, LeadListUpdate, SearchCreate
+from backend.schemas import LeadListCreate, LeadListUpdate, LeadSiteInsightsEnrichmentRequest, SearchCreate
 from backend.scrapers.email_scraper import EmailResult
 from backend.scrapers.maps_scraper import MapLead
 from backend.services import email_campaigns, jobs, whatsapp_campaigns
@@ -567,3 +567,106 @@ def test_retroactive_site_insights_endpoint_filters_brazil_whatsapp_and_missing_
     assert response.queued_count == 1
     assert captured["lead_ids"] == [eligible.id]
     assert "SearchRun.location" in response.location_inference
+
+
+def test_site_insights_endpoint_enriches_selected_leads_with_site(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = SearchRun(
+        niche="HVAC",
+        location="New York",
+        target_quantity=10,
+        max_results=False,
+        skip_without_website=True,
+        validate_whatsapp=False,
+        status="completed",
+        message="Busca concluída.",
+    )
+    db_session.add(run)
+    db_session.flush()
+    selected_without_whatsapp = Lead(
+        run_id=run.id,
+        name="Empresa selecionada sem WhatsApp",
+        address="New York, NY",
+        phone="+17185550000",
+        website="https://selected-no-whatsapp.example",
+        email="",
+        whatsapp_validated=None,
+    )
+    selected_foreign = Lead(
+        run_id=run.id,
+        name="Empresa selecionada fora do Brasil",
+        address="New York, NY",
+        phone="+17185550001",
+        website="https://selected-foreign.example",
+        email="",
+        whatsapp_validated=True,
+    )
+    selected_without_site = Lead(
+        run_id=run.id,
+        name="Empresa selecionada sem site",
+        address="New York, NY",
+        phone="+17185550002",
+        website=None,
+        email="",
+        whatsapp_validated=True,
+    )
+    selected_already_enriched = Lead(
+        run_id=run.id,
+        name="Empresa selecionada já enriquecida",
+        address="New York, NY",
+        phone="+17185550003",
+        website="https://selected-enriched.example",
+        email="",
+        site_insights="Insight existente.",
+        whatsapp_validated=True,
+    )
+    not_selected = Lead(
+        run_id=run.id,
+        name="Empresa não selecionada",
+        address="New York, NY",
+        phone="+17185550004",
+        website="https://not-selected.example",
+        email="",
+        whatsapp_validated=True,
+    )
+    db_session.add_all(
+        [
+            selected_without_whatsapp,
+            selected_foreign,
+            selected_without_site,
+            selected_already_enriched,
+            not_selected,
+        ]
+    )
+    db_session.commit()
+    captured: dict[str, list[int]] = {}
+
+    def fake_submit(lead_ids: list[int]) -> int:
+        captured["lead_ids"] = lead_ids
+        return len(lead_ids)
+
+    monkeypatch.setattr(main, "submit_retroactive_site_insights_jobs", fake_submit)
+
+    response = main.enrich_existing_leads_site_insights(
+        LeadSiteInsightsEnrichmentRequest(
+            lead_ids=[
+                selected_without_whatsapp.id,
+                selected_foreign.id,
+                selected_without_site.id,
+                selected_already_enriched.id,
+                selected_foreign.id,
+            ]
+        ),
+        db=db_session,
+        username="test-user",
+    )
+
+    assert response.status == "processing_started"
+    assert response.eligible_count == 2
+    assert response.queued_count == 2
+    assert captured["lead_ids"] == [
+        selected_without_whatsapp.id,
+        selected_foreign.id,
+    ]

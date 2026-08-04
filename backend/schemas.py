@@ -271,6 +271,10 @@ class LeadSiteInsightsEnrichmentResponse(BaseModel):
     location_inference: str
 
 
+class LeadSiteInsightsEnrichmentRequest(BaseModel):
+    lead_ids: list[int] = Field(default_factory=list, max_length=1000)
+
+
 CrmStage = Literal["new", "responded", "qualified", "not_interested", "converted"]
 
 

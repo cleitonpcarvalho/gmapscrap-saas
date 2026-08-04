@@ -55,6 +55,7 @@ from backend.schemas import (
     EmailTemplateRead,
     EmailTemplateUpdate,
     LeadCreate,
+    LeadSiteInsightsEnrichmentRequest,
     LeadSiteInsightsEnrichmentResponse,
     LeadListCreate,
     LeadListRead,
@@ -671,11 +672,26 @@ def list_leads(
 
 @app.post("/api/leads/enrich-site-insights", response_model=LeadSiteInsightsEnrichmentResponse)
 def enrich_existing_leads_site_insights(
+    payload: LeadSiteInsightsEnrichmentRequest | None = None,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
 ) -> LeadSiteInsightsEnrichmentResponse:
     _ = username
-    eligible_ids = eligible_retroactive_site_insights_lead_ids(db)
+    selected_ids = list(dict.fromkeys(lead_id for lead_id in (payload.lead_ids if payload else []) if lead_id > 0))
+    if selected_ids:
+        selected_eligible_ids = set(
+            db.scalars(
+                select(Lead.id).where(
+                    Lead.id.in_(selected_ids),
+                    Lead.website.is_not(None),
+                    Lead.website != "",
+                    Lead.site_insights.is_(None),
+                )
+            ).all()
+        )
+        eligible_ids = [lead_id for lead_id in selected_ids if lead_id in selected_eligible_ids]
+    else:
+        eligible_ids = eligible_retroactive_site_insights_lead_ids(db)
     queued_count = submit_retroactive_site_insights_jobs(eligible_ids)
     status_value = "processing_started" if queued_count else "no_eligible_leads"
     return LeadSiteInsightsEnrichmentResponse(

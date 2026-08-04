@@ -328,6 +328,10 @@ type LeadSiteInsightsEnrichmentResponse = {
   location_inference: string;
 };
 
+type LeadSiteInsightsEnrichmentRequest = {
+  lead_ids?: number[];
+};
+
 type WhatsAppPortfolioItem = {
   id: number;
   description: string;
@@ -1211,7 +1215,8 @@ export default function Home() {
   const leadPageStart = filteredLeads.length === 0 ? 0 : leadPageStartIndex + 1;
   const leadPageEnd = Math.min(leadPageStartIndex + LEADS_PAGE_SIZE, filteredLeads.length);
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const allVisibleSelected = paginatedLeads.length > 0 && paginatedLeads.every((lead) => selectedIdSet.has(lead.id));
+  const filteredLeadIds = useMemo(() => filteredLeads.map((lead) => lead.id), [filteredLeads]);
+  const allVisibleSelected = filteredLeadIds.length > 0 && filteredLeadIds.every((leadId) => selectedIdSet.has(leadId));
   const recentLeads = useMemo(() => leads.slice(0, 8), [leads]);
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId) || templates[0] || null,
@@ -2684,14 +2689,12 @@ export default function Home() {
   }
 
   function toggleAllVisible() {
-    const visibleIds = paginatedLeads.map((lead) => lead.id);
-
     if (allVisibleSelected) {
-      setSelectedIds((current) => current.filter((id) => !visibleIds.includes(id)));
+      setSelectedIds((current) => current.filter((id) => !filteredLeadIds.includes(id)));
       return;
     }
 
-    setSelectedIds((current) => Array.from(new Set([...current, ...visibleIds])));
+    setSelectedIds((current) => Array.from(new Set([...current, ...filteredLeadIds])));
   }
 
   async function handleEnrichExistingLeads() {
@@ -2700,13 +2703,20 @@ export default function Home() {
     setLeadEnrichmentBusy(true);
 
     try {
+      const payload: LeadSiteInsightsEnrichmentRequest = selectedIds.length > 0 ? { lead_ids: selectedIds } : {};
       const response = await apiFetch<LeadSiteInsightsEnrichmentResponse>("/api/leads/enrich-site-insights", {
-        method: "POST"
+        method: "POST",
+        body: JSON.stringify(payload)
       });
+      const hasSelection = selectedIds.length > 0;
       setActionMessage(
         response.queued_count > 0
-          ? `Enriquecimento iniciado: ${response.queued_count} de ${response.eligible_count} leads elegíveis entraram na fila.`
-          : "Nenhum lead elegível para enriquecer agora."
+          ? hasSelection
+            ? `Enriquecimento iniciado: ${response.queued_count} de ${response.eligible_count} leads selecionados elegíveis entraram na fila.`
+            : `Enriquecimento iniciado: ${response.queued_count} de ${response.eligible_count} leads elegíveis entraram na fila.`
+          : hasSelection
+            ? "Nenhum lead selecionado elegível para enriquecer agora."
+            : "Nenhum lead elegível para enriquecer agora."
       );
       await refreshData();
     } catch (error) {
