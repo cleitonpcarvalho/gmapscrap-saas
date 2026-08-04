@@ -192,6 +192,7 @@ type LeadList = {
 };
 
 type EmailMessageMode = "template" | "ai_per_lead";
+type AiMessageLanguage = "pt" | "en" | "es";
 
 type EmailCampaign = {
   id: number;
@@ -201,6 +202,7 @@ type EmailCampaign = {
   status: "draft" | "running" | "paused" | "completed" | "failed";
   objective: string;
   message_mode: EmailMessageMode;
+  language: AiMessageLanguage;
   message: string;
   error: string | null;
   min_delay_seconds: number;
@@ -270,6 +272,7 @@ type WhatsAppCampaign = {
   name: string;
   objective: string;
   message_mode: WhatsAppMessageMode;
+  language: AiMessageLanguage;
   list_id: number;
   list_name: string;
   instance_id: number;
@@ -453,10 +456,17 @@ const defaultAiTemplateForm: AiTemplateForm = {
   background_color: "#f4f4f4"
 };
 
+const AI_MESSAGE_LANGUAGE_OPTIONS: { value: AiMessageLanguage; label: string }[] = [
+  { value: "pt", label: "Português" },
+  { value: "en", label: "Inglês" },
+  { value: "es", label: "Espanhol" }
+];
+
 const defaultCampaignForm = {
   name: "",
   objective: "",
   message_mode: "template" as EmailMessageMode,
+  language: "pt" as AiMessageLanguage,
   list_id: "",
   template_ids: [] as number[],
   min_delay_seconds: 120,
@@ -478,6 +488,7 @@ const defaultWhatsappCampaignForm = {
   name: "",
   objective: "",
   message_mode: "template" as WhatsAppMessageMode,
+  language: "pt" as AiMessageLanguage,
   list_id: "",
   instance_id: "",
   template_id: "",
@@ -2046,6 +2057,7 @@ export default function Home() {
       name: campaign.name,
       objective: campaign.objective || "",
       message_mode: campaign.message_mode || "template",
+      language: campaign.language || "pt",
       list_id: String(campaign.list_id),
       template_ids: campaign.template_ids || [],
       min_delay_seconds: campaign.min_delay_seconds,
@@ -4001,6 +4013,26 @@ export default function Home() {
                       <option value="ai_per_lead">Gerar individual por IA</option>
                     </select>
                   </label>
+                  {whatsappCampaignForm.message_mode === "ai_per_lead" ? (
+                    <label>
+                      Idioma da mensagem
+                      <select
+                        value={whatsappCampaignForm.language}
+                        onChange={(event) =>
+                          setWhatsappCampaignForm({
+                            ...whatsappCampaignForm,
+                            language: event.target.value as AiMessageLanguage
+                          })
+                        }
+                      >
+                        {AI_MESSAGE_LANGUAGE_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                   <label>
                     Lista de leads
                     <select
@@ -5457,6 +5489,23 @@ export default function Home() {
                   <option value="ai_per_lead">Gerar individual por IA</option>
                 </select>
               </label>
+              {campaignForm.message_mode === "ai_per_lead" ? (
+                <label>
+                  Idioma da mensagem
+                  <select
+                    value={campaignForm.language}
+                    onChange={(event) =>
+                      setCampaignForm({ ...campaignForm, language: event.target.value as AiMessageLanguage })
+                    }
+                  >
+                    {AI_MESSAGE_LANGUAGE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <label className="wide-field">
                 Objetivo da campanha
                 <textarea

@@ -151,6 +151,7 @@ def _ensure_whatsapp_campaign_columns() -> None:
     migrations = {
         "objective": "ALTER TABLE whatsapp_campaigns ADD COLUMN objective TEXT NOT NULL DEFAULT ''",
         "message_mode": "ALTER TABLE whatsapp_campaigns ADD COLUMN message_mode VARCHAR(30) NOT NULL DEFAULT 'template'",
+        "language": "ALTER TABLE whatsapp_campaigns ADD COLUMN language VARCHAR(5) NOT NULL DEFAULT 'pt'",
     }
     missing_migrations = {
         column_name: statement
@@ -323,6 +324,7 @@ def _ensure_email_campaign_columns() -> None:
         "timezone_name": "ALTER TABLE email_campaigns ADD COLUMN timezone_name VARCHAR(80) NOT NULL DEFAULT 'America/New_York'",
         "objective": "ALTER TABLE email_campaigns ADD COLUMN objective TEXT NOT NULL DEFAULT ''",
         "message_mode": "ALTER TABLE email_campaigns ADD COLUMN message_mode VARCHAR(30) NOT NULL DEFAULT 'template'",
+        "language": "ALTER TABLE email_campaigns ADD COLUMN language VARCHAR(5) NOT NULL DEFAULT 'pt'",
     }
 
     with engine.begin() as connection:

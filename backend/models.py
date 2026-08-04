@@ -170,6 +170,10 @@ class EmailCampaign(Base):
             "message_mode IN ('template', 'ai_per_lead')",
             name="ck_email_campaigns_message_mode",
         ),
+        CheckConstraint(
+            "language IN ('pt', 'en', 'es')",
+            name="ck_email_campaigns_language",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
@@ -177,6 +181,7 @@ class EmailCampaign(Base):
     list_id: Mapped[int] = mapped_column(ForeignKey("lead_lists.id", ondelete="RESTRICT"), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
     message_mode: Mapped[str] = mapped_column(String(30), default="template", nullable=False)
+    language: Mapped[str] = mapped_column(String(5), default="pt", nullable=False)
     objective: Mapped[str] = mapped_column(Text, default="", nullable=False)
     message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -304,6 +309,10 @@ class WhatsAppCampaign(Base):
             "message_mode IN ('template', 'ai_per_lead')",
             name="ck_whatsapp_campaigns_message_mode",
         ),
+        CheckConstraint(
+            "language IN ('pt', 'en', 'es')",
+            name="ck_whatsapp_campaigns_language",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
@@ -312,6 +321,7 @@ class WhatsAppCampaign(Base):
     instance_id: Mapped[int] = mapped_column(ForeignKey("whatsapp_instances.id", ondelete="RESTRICT"), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
     message_mode: Mapped[str] = mapped_column(String(30), default="template", nullable=False)
+    language: Mapped[str] = mapped_column(String(5), default="pt", nullable=False)
     objective: Mapped[str] = mapped_column(Text, default="", nullable=False)
     message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -41,6 +41,16 @@ YOUTUBE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{6,}$")
 MESSAGE_MODE_AI_PER_LEAD = "ai_per_lead"
 MESSAGE_MODE_TEMPLATE = "template"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+AI_LANGUAGE_LABELS = {
+    "pt": "português do Brasil",
+    "en": "inglês dos Estados Unidos",
+    "es": "espanhol",
+}
+AI_GREETING_EXAMPLES = {
+    "pt": "Oi, tudo bem?",
+    "en": "Hi, how are you?",
+    "es": "Hola, ¿cómo estás?",
+}
 
 
 def _now() -> datetime:
@@ -280,6 +290,7 @@ def _ai_email_json_schema() -> dict:
 
 def _ai_email_prompt(campaign: EmailCampaign, lead: Lead) -> str:
     site_insights = (lead.site_insights or "").strip() or "Não disponível."
+    language_label = AI_LANGUAGE_LABELS.get(campaign.language, AI_LANGUAGE_LABELS["pt"])
     return f"""
 Gere o conteúdo textual individual de um e-mail comercial B2B.
 
@@ -297,11 +308,11 @@ Dados reais do lead:
 - Insights do site/negócio: {site_insights}
 
 Regras:
-- Responda em português do Brasil.
+- Escreva TODO o conteúdo (subject, content_title, paragraphs e cta) inteiramente em {language_label}, do início ao fim, incluindo qualquer expressão idiomática. Não escreva em português e traduza depois: gere diretamente nesse idioma.
 - Retorne somente JSON compatível com o schema.
 - Gere subject, content_title, paragraphs e cta.
 - Não gere HTML, markdown, assinatura ou placeholders.
-- Não inclua saudação nos parágrafos; o layout do e-mail já adiciona uma saudação neutra.
+- Não inclua saudação nos parágrafos; o layout do e-mail já adiciona uma saudação neutra no mesmo idioma.
 - Escreva de forma natural, pesquisada e consultiva, sem soar como disparo em massa.
 - Use no máximo 4 parágrafos curtos.
 - Cite algo específico do lead quando houver dado real. Priorize site_insights quando disponível.
@@ -406,6 +417,8 @@ def render_generated_email(
     paragraphs = [str(paragraph) for paragraph in generated["paragraphs"]]
     cta = str(generated["cta"])
     get_in_touch_link = _mailto_link(settings.contact_email, company_name)
+    greeting = AI_GREETING_EXAMPLES.get(campaign.language, AI_GREETING_EXAMPLES["pt"])
+    html_lang = {"pt": "pt-BR", "en": "en-US", "es": "es"}.get(campaign.language, "pt-BR")
 
     safe_background = html.escape(template.background_color or "#f4f4f4", quote=True)
     safe_primary = html.escape(template.primary_color or "#0a0a0a", quote=True)
@@ -413,6 +426,7 @@ def render_generated_email(
     safe_logo = html.escape(template.logo_url or "", quote=True)
     safe_title = html.escape(content_title)
     safe_cta = html.escape(cta)
+    safe_greeting = html.escape(greeting)
     safe_get_in_touch = html.escape(get_in_touch_link, quote=True)
     safe_contact_email = html.escape(settings.contact_email)
     safe_company_name = html.escape(company_name or "")
@@ -427,7 +441,7 @@ def render_generated_email(
         else '              <p style="color:#ffffff;font-size:22px;font-weight:700;margin:0;">Automa Soluct</p>'
     )
     rendered_html = f"""<!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="{html_lang}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -446,7 +460,7 @@ def render_generated_email(
           </tr>
           <tr>
             <td style="padding:40px 40px 24px 40px;">
-              <p style="font-size:16px;color:{safe_text};margin:0 0 16px 0;">Oi, tudo bem?</p>
+              <p style="font-size:16px;color:{safe_text};margin:0 0 16px 0;">{safe_greeting}</p>
               <h1 style="font-size:24px;color:{safe_text};line-height:1.3;margin:0 0 20px 0;">{safe_title}</h1>
 {paragraph_html}
               <p style="font-size:16px;color:{safe_text};line-height:1.7;margin:0 0 20px 0;">{safe_cta}</p>
@@ -484,7 +498,7 @@ def render_generated_email(
 
     rendered_text = "\n\n".join(
         [
-            "Oi, tudo bem?",
+            greeting,
             content_title,
             *paragraphs,
             cta,

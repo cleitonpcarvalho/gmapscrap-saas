@@ -420,6 +420,7 @@ class LeadListRead(BaseModel):
 
 EmailMessageMode = Literal["template", "ai_per_lead"]
 WhatsAppMessageMode = Literal["template", "ai_per_lead"]
+AiMessageLanguage = Literal["pt", "en", "es"]
 
 
 class CampaignTemplateInput(BaseModel):
@@ -433,6 +434,7 @@ class EmailCampaignCreate(BaseModel):
     templates: list[CampaignTemplateInput] = Field(min_length=1)
     objective: str | None = Field(default="", max_length=2000)
     message_mode: EmailMessageMode = "template"
+    language: AiMessageLanguage = "pt"
     min_delay_seconds: int = Field(default=120, ge=1, le=86400)
     max_delay_seconds: int = Field(default=300, ge=1, le=86400)
     daily_limit: int = Field(default=30, ge=1, le=500)
@@ -481,6 +483,7 @@ class EmailCampaignRead(BaseModel):
     status: str
     objective: str
     message_mode: EmailMessageMode
+    language: AiMessageLanguage
     message: str
     error: str | None
     min_delay_seconds: int
@@ -569,6 +572,7 @@ class WhatsAppCampaignCreate(BaseModel):
     name: str = Field(min_length=2, max_length=255)
     objective: str | None = Field(default="", max_length=2000)
     message_mode: WhatsAppMessageMode = "template"
+    language: AiMessageLanguage = "pt"
     list_id: int
     instance_id: int
     templates: list[CampaignTemplateInput] = Field(default_factory=list)
@@ -613,6 +617,7 @@ class WhatsAppCampaignRead(BaseModel):
     name: str
     objective: str
     message_mode: WhatsAppMessageMode
+    language: AiMessageLanguage
     list_id: int
     list_name: str
     instance_id: int

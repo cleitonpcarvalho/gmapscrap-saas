@@ -218,6 +218,67 @@ def test_email_campaign_runner_generates_ai_email_per_lead(
     assert generated["cta"] in sent_payloads[0]["text"]
 
 
+@pytest.mark.parametrize(
+    ("language", "expected_label", "expected_greeting"),
+    [
+        ("pt", "português do Brasil", "Oi, tudo bem?"),
+        ("en", "inglês dos Estados Unidos", "Hi, how are you?"),
+        ("es", "espanhol", "Hola, ¿cómo estás?"),
+    ],
+)
+def test_ai_email_prompt_instructs_selected_language(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    language: str,
+    expected_label: str,
+    expected_greeting: str,
+) -> None:
+    ids = seed_email_campaign_records(db_session)
+    campaign = EmailCampaign(
+        name=f"Campanha IA ({language})",
+        list_id=ids["list_id"],
+        status="draft",
+        message_mode="ai_per_lead",
+        language=language,
+        objective="vender sites para empresas sem site",
+        message="Campanha criada.",
+    )
+    db_session.add(campaign)
+    db_session.commit()
+    lead = db_session.get(Lead, ids["lead_id"])
+    assert lead is not None
+
+    captured_payloads: list[dict[str, Any]] = []
+    generated = {
+        "subject": "Assunto",
+        "content_title": "Título",
+        "paragraphs": ["Parágrafo único."],
+        "cta": "CTA",
+    }
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAiResponse:
+        captured_payloads.append(kwargs["json"])
+        return FakeOpenAiResponse(200, {"output_text": json.dumps(generated)})
+
+    monkeypatch.setattr(email_campaigns.requests, "post", fake_openai_post)
+
+    email_campaigns.generate_ai_email_content_for_lead(campaign, lead)
+
+    prompt = captured_payloads[0]["input"][1]["content"]
+    assert f"inteiramente em {expected_label}" in prompt
+    assert "Não escreva em português e traduza depois" in prompt
+
+    template = EmailTemplate(
+        name=f"Template {language}",
+        subject="Assunto {{company_name}}",
+        html="<div>{{content_card_block}}</div>",
+        text="",
+    )
+    _, rendered_html, rendered_text = email_campaigns.render_generated_email(template, lead, campaign, generated)
+    assert expected_greeting in rendered_html
+    assert expected_greeting in rendered_text
+
+
 def test_email_campaign_runner_marks_ai_generation_failure_and_continues(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,

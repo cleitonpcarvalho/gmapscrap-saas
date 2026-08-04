@@ -40,6 +40,16 @@ VARIABLE_PATTERN = re.compile(r"{\s*([a-zA-Z0-9_]+)\s*}")
 SUCCESS_STATUSES = ("sent", "delivered", "read")
 MESSAGE_MODE_TEMPLATE = "template"
 MESSAGE_MODE_AI_PER_LEAD = "ai_per_lead"
+AI_LANGUAGE_LABELS = {
+    "pt": "português do Brasil",
+    "en": "inglês dos Estados Unidos",
+    "es": "espanhol",
+}
+AI_GREETING_EXAMPLES = {
+    "pt": "Oi, tudo bem?",
+    "en": "Hi, how are you?",
+    "es": "Hola, ¿cómo estás?",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -166,6 +176,8 @@ def _lead_detail(value: str | None) -> str:
 
 
 def _ai_per_lead_prompt(campaign: WhatsAppCampaign, lead: Lead, services_description: str) -> str:
+    language_label = AI_LANGUAGE_LABELS.get(campaign.language, AI_LANGUAGE_LABELS["pt"])
+    greeting_example = AI_GREETING_EXAMPLES.get(campaign.language, AI_GREETING_EXAMPLES["pt"])
     return f"""
 Gere uma mensagem individual de abordagem inicial para WhatsApp.
 
@@ -184,9 +196,9 @@ Dados do lead:
 - Insights do site/negócio: {_lead_detail(lead.site_insights)}
 
 Regras:
-- Responda em português do Brasil.
+- Escreva a mensagem inteira em {language_label}, do início ao fim, incluindo a saudação e qualquer expressão idiomática. Não escreva em português e traduza depois: gere diretamente nesse idioma.
 - Gere o texto final da mensagem; não use variáveis de template.
-- Comece com uma saudação breve e natural, como "Oi, tudo bem?", sem chamar a pessoa pelo nome da empresa.
+- Comece com uma saudação breve e natural em {language_label}, como "{greeting_example}", sem chamar a pessoa pelo nome da empresa.
 - Use no máximo 4 frases curtas.
 - Mencione algo específico do lead. Se houver insights do site/negócio, use um detalhe concreto desses insights.
 - Se os insights estiverem vazios, use apenas empresa, nicho, localização ou site; não invente dores, problemas, tecnologias, nome de pessoa ou dados do site.
