@@ -1275,6 +1275,10 @@ export default function Home() {
     () => whatsappInstances.filter((instance) => instance.status === "connected"),
     [whatsappInstances]
   );
+  const disconnectedWhatsappInstances = useMemo(
+    () => whatsappInstances.filter((instance) => instance.status === "disconnected"),
+    [whatsappInstances]
+  );
   const whatsappDashboard = useMemo(() => {
     const connected = whatsappInstances.filter((instance) => instance.status === "connected").length;
     const running = whatsappCampaigns.filter((campaign) => campaign.status === "running").length;
@@ -1651,6 +1655,19 @@ export default function Home() {
 
     refreshWhatsappData().catch(() => undefined);
     refreshEmailData().catch(() => undefined);
+  }, [user, activeView]);
+
+  useEffect(() => {
+    if (!user || !whatsappViews.includes(activeView)) return;
+
+    // O backend reconfere o status da instância na Evolution periodicamente (mesmo
+    // scheduler das campanhas); este intervalo só mantém a tela sincronizada com o que
+    // já foi persistido, sem chamar a Evolution diretamente a partir do navegador.
+    const interval = window.setInterval(() => {
+      refreshWhatsappData().catch(() => undefined);
+    }, 60000);
+
+    return () => window.clearInterval(interval);
   }, [user, activeView]);
 
   function switchView(view: AppView) {
@@ -3185,6 +3202,21 @@ export default function Home() {
             </button>
           )}
         </header>
+
+        {whatsappViews.includes(activeView) && disconnectedWhatsappInstances.length > 0 ? (
+          <div className="notice warning">
+            {disconnectedWhatsappInstances.length === 1
+              ? `Instância "${disconnectedWhatsappInstances[0].name}" desconectada da Evolution. A IA não responde e campanhas que dependem dela ficam pausadas automaticamente.`
+              : `${disconnectedWhatsappInstances.length} instâncias desconectadas da Evolution (${disconnectedWhatsappInstances
+                  .map((instance) => instance.name)
+                  .join(", ")}). A IA não responde e campanhas que dependem delas ficam pausadas automaticamente.`}{" "}
+            {activeView !== "whatsappInstances" ? (
+              <button type="button" className="link-button" onClick={() => switchView("whatsappInstances")}>
+                Reconectar
+              </button>
+            ) : null}
+          </div>
+        ) : null}
 
         {activeView === "search" || activeView === "leads" ? (
           <section className="metrics-grid">

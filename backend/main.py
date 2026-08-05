@@ -120,6 +120,7 @@ from backend.services.whatsapp_campaigns import (
     start_campaign_scheduler as start_whatsapp_campaign_scheduler,
     submit_campaign_job as submit_whatsapp_campaign_job,
 )
+from backend.services.whatsapp_instance_monitor import pause_running_campaigns_for_instance
 from backend.services.whatsapp_providers.evolution import EvolutionApiError, EvolutionProvider
 from backend.services.whatsapp_webhooks import ingest_evolution_messages_upsert, is_evolution_messages_upsert_event
 from backend.scrapers.maps_scraper import MapLead
@@ -1019,6 +1020,8 @@ def get_whatsapp_instance_status(
         except EvolutionApiError as exc:
             db.rollback()
             _raise_evolution_http_error(exc)
+    else:
+        pause_running_campaigns_for_instance(db, instance)
     db.commit()
     db.refresh(instance)
     return WhatsAppInstanceStatusRead(

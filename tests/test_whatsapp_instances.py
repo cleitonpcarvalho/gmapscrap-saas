@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from backend import main
 from backend.database import Base
+from backend.models import LeadList, WhatsAppCampaign
 from backend.schemas import WhatsAppInstanceCreate
 
 
@@ -209,3 +210,44 @@ def test_evolution_provider_sends_text_message(
             "text": "Hello",
         },
     }
+
+
+def test_whatsapp_status_check_pauses_running_campaign_when_instance_disconnects(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_request(method: str, url: str, **kwargs) -> FakeEvolutionResponse:
+        if method == "POST" and url.endswith("/instance/create"):
+            return FakeEvolutionResponse(201, {"instance": {"instanceName": "sales-main"}})
+        if method == "POST" and url.endswith("/webhook/set/sales-main"):
+            return FakeEvolutionResponse(200, {"webhook": kwargs["json"]["webhook"]})
+        if method == "GET" and url.endswith("/instance/connectionState/sales-main"):
+            return FakeEvolutionResponse(200, {"instance": {"instanceName": "sales-main", "state": "close"}})
+        return FakeEvolutionResponse(500, {}, "unexpected request")
+
+    monkeypatch.setattr("backend.services.whatsapp_providers.evolution.requests.request", fake_request)
+
+    instance = main.create_whatsapp_instance(
+        WhatsAppInstanceCreate(name="sales-main"),
+        db=db_session,
+        username="test-user",
+    )
+    instance.status = "connected"
+    lead_list = LeadList(name="Lista WhatsApp", niche_filter="", location_filter="")
+    db_session.add(lead_list)
+    db_session.flush()
+    campaign = WhatsAppCampaign(
+        name="Lojas de Suplementos SP",
+        list_id=lead_list.id,
+        instance_id=instance.id,
+        status="running",
+    )
+    db_session.add(campaign)
+    db_session.commit()
+
+    result = main.get_whatsapp_instance_status(instance.id, db=db_session, username="test-user")
+
+    assert result.status == "disconnected"
+    db_session.refresh(campaign)
+    assert campaign.status == "paused"
+    assert campaign.error == "Instância de WhatsApp desconectada."

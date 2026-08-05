@@ -320,6 +320,22 @@ input:disabled {
   background: #fee4e2;
 }
 
+.notice.warning {
+  color: var(--warning);
+  background: #fff2d8;
+}
+
+.notice .link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;

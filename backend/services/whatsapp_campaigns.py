@@ -26,6 +26,7 @@ from backend.models import (
 )
 from backend.services.lead_lists import LIST_CHANNEL_WHATSAPP
 from backend.services.lead_lists import lead_query_for_list as _lead_query_for_list
+from backend.services.whatsapp_instance_monitor import refresh_all_instance_statuses
 from backend.services.whatsapp_providers.evolution import EvolutionProvider
 from backend.services.whatsapp_validation import normalize_phone_e164
 
@@ -108,6 +109,11 @@ def _campaign_scheduler_loop(interval_seconds: int) -> None:
             resume_running_campaigns()
         except Exception:
             pass
+
+        try:
+            refresh_all_instance_statuses()
+        except Exception:
+            logger.exception("Falha ao atualizar status automático das instâncias WhatsApp")
 
         time.sleep(interval_seconds)
 
