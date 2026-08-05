@@ -140,6 +140,8 @@ type EmailTemplate = {
   content_title: string;
   content_link: string;
   content_button_text: string;
+  contact_mailto_subject: string;
+  contact_mailto_body: string;
   logo_url: string;
   primary_color: string;
   text_color: string;
@@ -156,6 +158,8 @@ type ContentPreview = {
   image_url: string;
 };
 
+type AiEmailLanguage = "pt" | "en" | "es";
+
 type AiTemplateForm = {
   mode: "single" | "sequence";
   count: number;
@@ -167,7 +171,7 @@ type AiTemplateForm = {
   content_link: string;
   campaign_name: string;
   call_to_action: string;
-  language: string;
+  language: AiEmailLanguage;
   logo_url: string;
   primary_color: string;
   text_color: string;
@@ -450,7 +454,7 @@ const defaultAiTemplateForm: AiTemplateForm = {
   campaign_name: "",
   call_to_action:
     "Invite the reader to reply if they need help connecting tools, automating follow-ups, or reducing manual work.",
-  language: "English",
+  language: "pt",
   logo_url: DEFAULT_TEMPLATE_LOGO,
   primary_color: "#0a0a0a",
   text_color: "#333333",
@@ -736,11 +740,17 @@ type TemplatePreviewSource = {
   content_title: string;
   content_link: string;
   content_button_text: string;
+  contact_mailto_subject: string;
+  contact_mailto_body: string;
   logo_url: string;
   primary_color: string;
   text_color: string;
   background_color: string;
 };
+
+function substituteTemplateVariables(text: string, variables: Record<string, string>) {
+  return (text || "").replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, key: string) => variables[key] || "");
+}
 
 function renderTemplatePreview(template: TemplatePreviewSource, contentPreview?: ContentPreview, sampleLead?: Lead) {
   const sampleCompany = sampleLead?.name || "Example Company";
@@ -750,11 +760,16 @@ function renderTemplatePreview(template: TemplatePreviewSource, contentPreview?:
   const safeContentLink = template.content_link || "https://automasoluct.com.br";
   const safeContentTitle = template.content_title || contentPreview?.title || "How to automate your service workflows";
   const contactEmail = DEFAULT_CONTACT_EMAIL;
-  const getInTouchLink = `mailto:${contactEmail}?subject=${encodeURIComponent(
-    "Automation and integration help"
-  )}&body=${encodeURIComponent(
-    `Hi Cleiton,\n\nI saw your email about automation for ${sampleCompany} and would like to learn more.\n\n`
-  )}`;
+  const mailtoSubject = substituteTemplateVariables(
+    template.contact_mailto_subject || "Automation and integration help",
+    { company_name: sampleCompany }
+  );
+  const mailtoBody = substituteTemplateVariables(
+    template.contact_mailto_body ||
+      "Hi Cleiton,\n\nI saw your email about automation for {{company_name}} and would like to learn more.\n\n",
+    { company_name: sampleCompany }
+  );
+  const getInTouchLink = `mailto:${contactEmail}?subject=${encodeURIComponent(mailtoSubject)}&body=${encodeURIComponent(mailtoBody)}`;
   const contentCard = contentCardHtml(
     safeContentLink,
     thumbnailUrl,
@@ -1119,6 +1134,9 @@ export default function Home() {
     content_title: "",
     content_link: "",
     content_button_text: "Open the content",
+    contact_mailto_subject: "Automation and integration help",
+    contact_mailto_body:
+      "Hi Cleiton,\n\nI saw your email about automation for {{company_name}} and would like to learn more.\n\n",
     logo_url: DEFAULT_TEMPLATE_LOGO,
     primary_color: "#0a0a0a",
     text_color: "#333333",
@@ -1791,6 +1809,9 @@ export default function Home() {
       content_title: "",
       content_link: "",
       content_button_text: "Open the content",
+      contact_mailto_subject: "Automation and integration help",
+      contact_mailto_body:
+        "Hi Cleiton,\n\nI saw your email about automation for {{company_name}} and would like to learn more.\n\n",
       logo_url: DEFAULT_TEMPLATE_LOGO,
       primary_color: "#0a0a0a",
       text_color: "#333333",
@@ -1815,6 +1836,10 @@ export default function Home() {
       content_title: template.content_title,
       content_link: template.content_link,
       content_button_text: template.content_button_text || "Open the content",
+      contact_mailto_subject: template.contact_mailto_subject || "Automation and integration help",
+      contact_mailto_body:
+        template.contact_mailto_body ||
+        "Hi Cleiton,\n\nI saw your email about automation for {{company_name}} and would like to learn more.\n\n",
       logo_url: template.logo_url,
       primary_color: template.primary_color,
       text_color: template.text_color,
@@ -5813,7 +5838,14 @@ export default function Home() {
               </label>
               <label>
                 Idioma
-                <input value={aiForm.language} onChange={(event) => setAiForm({ ...aiForm, language: event.target.value })} />
+                <select
+                  value={aiForm.language}
+                  onChange={(event) => setAiForm({ ...aiForm, language: event.target.value as AiEmailLanguage })}
+                >
+                  <option value="pt">Português</option>
+                  <option value="en">Inglês</option>
+                  <option value="es">Espanhol</option>
+                </select>
               </label>
               <TagDropdown
                 allLabel="Todos os nichos"
@@ -5961,6 +5993,23 @@ export default function Home() {
                   placeholder="Ex.: Abrir conteúdo"
                   value={templateForm.content_button_text}
                   onChange={(event) => setTemplateForm({ ...templateForm, content_button_text: event.target.value })}
+                />
+              </label>
+              <label>
+                Assunto do e-mail de contato (mailto)
+                <input
+                  placeholder="Ex.: Ajuda com automação e integrações"
+                  value={templateForm.contact_mailto_subject}
+                  onChange={(event) => setTemplateForm({ ...templateForm, contact_mailto_subject: event.target.value })}
+                />
+              </label>
+              <label className="wide-field">
+                Corpo do e-mail de contato (mailto)
+                <textarea
+                  rows={3}
+                  placeholder="Ex.: Oi Cleiton, vi seu e-mail sobre automação para {{company_name}} e gostaria de saber mais."
+                  value={templateForm.contact_mailto_body}
+                  onChange={(event) => setTemplateForm({ ...templateForm, contact_mailto_body: event.target.value })}
                 />
               </label>
               <label className="wide-field">

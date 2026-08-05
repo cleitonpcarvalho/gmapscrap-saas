@@ -60,18 +60,24 @@ AI_EMAIL_FOOTER_TEXTS = {
         "contact_label": "Contato",
         "disclaimer": "Este é um contato pontual da Automa Soluct para {company}. Responda 'remover' se preferir não receber novas mensagens.",
         "text_reply_label": "Responder",
+        "mailto_subject": "Ajuda com automação e integrações",
+        "mailto_body": "Oi Cleiton,\n\nVi seu e-mail sobre automação para {company} e gostaria de saber mais.\n\n",
     },
     "en": {
         "reply_button": "Reply",
         "contact_label": "Contact",
         "disclaimer": "This is a one-time message from Automa Soluct to {company}. Reply 'remove' if you prefer not to receive future messages.",
         "text_reply_label": "Reply",
+        "mailto_subject": "Automation and integration help",
+        "mailto_body": "Hi Cleiton,\n\nI saw your email about automation for {company} and would like to learn more.\n\n",
     },
     "es": {
         "reply_button": "Responder",
         "contact_label": "Contacto",
         "disclaimer": "Este es un contacto puntual de Automa Soluct para {company}. Responde 'eliminar' si prefieres no recibir más mensajes.",
         "text_reply_label": "Responder",
+        "mailto_subject": "Ayuda con automatización e integraciones",
+        "mailto_body": "Hola Cleiton,\n\nVi tu correo sobre automatización para {company} y me gustaría saber más.\n\n",
     },
 }
 
@@ -193,11 +199,9 @@ def _content_thumbnail_url(url: str) -> str:
         return ""
 
 
-def _mailto_link(contact_email: str, company_name: str) -> str:
-    subject = quote("Automation and integration help")
-    body = quote(
-        f"Hi Cleiton,\n\nI saw your email about automation for {company_name or 'our company'} and would like to learn more.\n\n"
-    )
+def _mailto_link(contact_email: str, subject_text: str, body_text: str) -> str:
+    subject = quote(subject_text)
+    body = quote(body_text)
     return f"mailto:{contact_email}?subject={subject}&body={body}"
 
 
@@ -247,7 +251,6 @@ def render_email(template: EmailTemplate, lead: Lead, campaign: EmailCampaign, s
     tracked_content_link = _send_url(send_id, "/api/email/click") if send_id and raw_content_link else raw_content_link
     thumbnail_url = _content_thumbnail_url(raw_content_link)
     company_name = lead.name
-    get_in_touch_link = _mailto_link(settings.contact_email, company_name)
 
     variables = {
         # Não prefixar com texto fixo em inglês (ex.: "team at"): o template controla
@@ -267,12 +270,17 @@ def render_email(template: EmailTemplate, lead: Lead, campaign: EmailCampaign, s
         "raw_content_link": raw_content_link,
         "content_thumbnail_url": thumbnail_url,
         "contact_email": settings.contact_email,
-        "get_in_touch_link": get_in_touch_link,
         "logo_url": template.logo_url,
         "primary_color": template.primary_color,
         "text_color": template.text_color,
         "background_color": template.background_color,
     }
+
+    # O assunto/corpo do mailto são texto editável do template (com suporte às mesmas
+    # {{variáveis}}), não mais texto fixo em inglês.
+    mailto_subject = _render(template.contact_mailto_subject, variables)
+    mailto_body = _render(template.contact_mailto_body, variables)
+    variables["get_in_touch_link"] = _mailto_link(settings.contact_email, mailto_subject, mailto_body)
 
     escaped_variables = {key: html.escape(value or "") for key, value in variables.items()}
     content_card = _content_card_block(
@@ -451,11 +459,13 @@ def render_generated_email(
     content_title = str(generated["content_title"])
     paragraphs = [str(paragraph) for paragraph in generated["paragraphs"]]
     cta = str(generated["cta"])
-    get_in_touch_link = _mailto_link(settings.contact_email, company_name)
     greeting = AI_GREETING_EXAMPLES.get(campaign.language, AI_GREETING_EXAMPLES["pt"])
     html_lang = {"pt": "pt-BR", "en": "en-US", "es": "es"}.get(campaign.language, "pt-BR")
     footer_texts = AI_EMAIL_FOOTER_TEXTS.get(campaign.language, AI_EMAIL_FOOTER_TEXTS["pt"])
     disclaimer = footer_texts["disclaimer"].format(company=company_name or "")
+    mailto_subject = footer_texts["mailto_subject"]
+    mailto_body = footer_texts["mailto_body"].format(company=company_name or "")
+    get_in_touch_link = _mailto_link(settings.contact_email, mailto_subject, mailto_body)
 
     safe_background = html.escape(template.background_color or "#f4f4f4", quote=True)
     safe_primary = html.escape(template.primary_color or "#0a0a0a", quote=True)

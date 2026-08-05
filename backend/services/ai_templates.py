@@ -32,6 +32,16 @@ EMAIL_CHROME_TEXTS = {
         "sign_off": "Atenciosamente,",
         "disclaimer": "Esta \u00e9 uma mensagem de baixo volume sobre conte\u00fado da Automa Soluct. Responda 'remover' se preferir n\u00e3o receber novos materiais.",
         "content_button": "Abrir conte\u00fado",
+        "mailto_subject": "Ajuda com automa\u00e7\u00e3o e integra\u00e7\u00f5es",
+        "mailto_body": "Oi Cleiton,\n\nVi seu e-mail sobre automa\u00e7\u00e3o para {{company_name}} e gostaria de saber mais.\n\n",
+        "fallback_subject": "Recurso \u00fatil de automa\u00e7\u00e3o para {{company_name}}",
+        "fallback_paragraph": (
+            "Eu queria compartilhar um recurso pr\u00e1tico que pode ajudar sua equipe a reduzir "
+            "tarefas manuais e manter os follow-ups organizados."
+        ),
+        "fallback_cta": "Se fizer sentido para voc\u00ea, \u00e9 s\u00f3 responder este e-mail que conversamos com calma.",
+        "job_title": "Especialista em Automa\u00e7\u00e3o",
+        "html_lang": "pt-BR",
     },
     "en": {
         "greeting": "Hi",
@@ -40,6 +50,16 @@ EMAIL_CHROME_TEXTS = {
         "sign_off": "Best,",
         "disclaimer": "This is a low-volume content note from Automa Soluct. Reply 'remove' if you prefer not to receive future resources.",
         "content_button": "Open the content",
+        "mailto_subject": "Automation and integration help",
+        "mailto_body": "Hi Cleiton,\n\nI saw your email about automation for {{company_name}} and would like to learn more.\n\n",
+        "fallback_subject": "Useful automation resource for {{company_name}}",
+        "fallback_paragraph": (
+            "I wanted to share a practical resource that may help your team reduce manual work "
+            "and keep follow-ups organized."
+        ),
+        "fallback_cta": "If this sounds useful, just reply to this email and we can talk it through.",
+        "job_title": "Automation Specialist",
+        "html_lang": "en-US",
     },
     "es": {
         "greeting": "Hola",
@@ -48,17 +68,24 @@ EMAIL_CHROME_TEXTS = {
         "sign_off": "Saludos,",
         "disclaimer": "Este es un mensaje puntual de contenido de Automa Soluct. Responde 'eliminar' si prefieres no recibir futuros materiales.",
         "content_button": "Abrir contenido",
+        "mailto_subject": "Ayuda con automatizaci\u00f3n e integraciones",
+        "mailto_body": "Hola Cleiton,\n\nVi tu correo sobre automatizaci\u00f3n para {{company_name}} y me gustar\u00eda saber m\u00e1s.\n\n",
+        "fallback_subject": "Recurso \u00fatil de automatizaci\u00f3n para {{company_name}}",
+        "fallback_paragraph": (
+            "Quer\u00eda compartir un recurso pr\u00e1ctico que puede ayudar a tu equipo a reducir el "
+            "trabajo manual y mantener los seguimientos organizados."
+        ),
+        "fallback_cta": "Si te parece \u00fatil, responde este correo y lo conversamos con calma.",
+        "job_title": "Especialista en Automatizaci\u00f3n",
+        "html_lang": "es",
     },
 }
 
-
-def _email_language_code(language: str) -> str:
-    normalized = (language or "").strip().lower()
-    if "portu" in normalized or normalized == "pt":
-        return "pt"
-    if "esp" in normalized or "span" in normalized or normalized == "es":
-        return "es"
-    return "en"
+EMAIL_LANGUAGE_LABELS = {
+    "pt": "Portuguese (Brazil)",
+    "en": "English (United States)",
+    "es": "Spanish",
+}
 
 
 def _template_html(paragraphs: list[str], cta_paragraph: str, chrome: dict[str, str]) -> str:
@@ -70,7 +97,7 @@ def _template_html(paragraphs: list[str], cta_paragraph: str, chrome: dict[str, 
     safe_cta = html.escape(cta_paragraph.strip())
 
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="{chrome["html_lang"]}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -104,7 +131,7 @@ def _template_html(paragraphs: list[str], cta_paragraph: str, chrome: dict[str, 
               <p style="font-size:13px;color:#888888;margin:0 0 12px 0;text-transform:uppercase;font-weight:600;">{chrome["get_in_touch"]}</p>
               <p style="font-size:15px;color:{{{{text_color}}}};line-height:1.7;margin:0;">
                 Cleiton Carvalho<br />
-                Automation Specialist - Automa Soluct<br />
+                {chrome["job_title"]} - Automa Soluct<br />
                 <a href="https://automasoluct.com.br" style="color:{{{{primary_color}}}};text-decoration:none;">automasoluct.com.br</a>
               </p>
             </td>
@@ -326,13 +353,15 @@ def _json_schema() -> dict:
 
 def _prompt(payload: AiTemplateGenerateRequest) -> str:
     count = 1 if payload.mode == "single" else payload.count
+    language_label = EMAIL_LANGUAGE_LABELS[payload.language]
+    greeting = EMAIL_CHROME_TEXTS[payload.language]["greeting"]
     return f"""
 Generate {count} email template(s) for Automa Soluct.
 
 Context:
 - Automa Soluct provides automation and integration services for local service businesses.
 - The email is low-pressure and content-led, not spammy and not aggressively salesy.
-- Language: {payload.language}
+- Target language: {language_label}.
 - Selected niche context for strategy only: {payload.niche or "all niches"}
 - Selected location context for strategy only: {payload.location or "all locations"}
 - Objective: {payload.objective}
@@ -342,20 +371,22 @@ Context:
 - Desired CTA: {payload.call_to_action}
 
 Rules:
-- Use the greeting placeholder context naturally, but do not include the greeting itself. The system adds "Hi {{{{lead_name}}}},".
+- CRITICAL: every field you return (name, subject, content_title, paragraphs, cta_paragraph) must be written entirely in {language_label}. Translate the objective, tone, and CTA guidance above into {language_label} rather than copying their wording verbatim if they are written in a different language. Do not leave a single word, phrase, or sentence in any other language.
+- Use the greeting placeholder context naturally, but do not include the greeting itself. The system adds "{greeting} {{{{lead_name}}}},".
 - Use "{{{{content_title}}}}" exactly where the content title should appear.
 - Never write literal niche names or literal location names in subject or body copy.
 - If you refer to the lead's industry, use "{{{{niche}}}}" exactly.
 - If you refer to the lead's market or region, use "{{{{location}}}}" exactly.
 - Company/name context must stay dynamic through the system greeting; do not invent company names.
 - Do not include raw URLs, markdown links, bracketed placeholders, or standalone link lines.
-- Do not write button labels. The system inserts the content card and CTA buttons automatically.
+- Do not write button labels. The system inserts the content card and CTA buttons automatically, already translated into {language_label}.
 - Do not promise guaranteed results.
 - Do not mention scraping or Google Maps.
 - For sequences, make each email feel connected but not repetitive.
 - Never use U+2014 em dash or U+2015 horizontal bar in any subject, title, paragraph, or CTA.
 - Do not use long dashes as comma or parenthetical punctuation. Use commas, periods, colons, semicolons, or parentheses instead.
 - Normal ASCII hyphens inside compound words are allowed when grammatically needed.
+- Before answering, double check every field is 100% in {language_label} with no mixed-language words.
 - Return only the JSON that matches the schema.
 """
 
@@ -410,7 +441,7 @@ def generate_email_templates(db: Session, payload: AiTemplateGenerateRequest) ->
     except json.JSONDecodeError as exc:
         raise RuntimeError("A OpenAI retornou um JSON inválido.") from exc
 
-    chrome = EMAIL_CHROME_TEXTS[_email_language_code(payload.language)]
+    chrome = EMAIL_CHROME_TEXTS[payload.language]
     templates_data = generated.get("templates", [])[:count]
     saved_templates: list[EmailTemplate] = []
     for index, item in enumerate(templates_data, start=1):
@@ -420,19 +451,17 @@ def generate_email_templates(db: Session, payload: AiTemplateGenerateRequest) ->
             if str(paragraph).strip()
         ]
         if not paragraphs:
-            paragraphs = [
-                "I wanted to share a practical resource that may help your team reduce manual work and keep follow-ups organized.",
-            ]
+            paragraphs = [chrome["fallback_paragraph"]]
 
         cta_paragraph = _avoid_ai_dashes(
-            _enforce_dynamic_context(str(item.get("cta_paragraph") or payload.call_to_action).strip(), payload)
-        )
+            _enforce_dynamic_context(str(item.get("cta_paragraph") or "").strip(), payload)
+        ) or chrome["fallback_cta"]
         base_name = _avoid_ai_dashes(str(item.get("name") or f"{payload.campaign_name or 'AI Campaign'} Email {index}"))
         content_title = _avoid_ai_dashes(str(payload.content_title or item.get("content_title") or "{{content_title}}").strip())
         subject = _avoid_ai_dashes(_enforce_dynamic_context(
-            str(item.get("subject") or f"Useful automation resource for {{company_name}}").strip(),
+            str(item.get("subject") or "").strip(),
             payload,
-        ))
+        )) or chrome["fallback_subject"]
 
         template = EmailTemplate(
             name=_unique_name(db, base_name),
@@ -442,6 +471,8 @@ def generate_email_templates(db: Session, payload: AiTemplateGenerateRequest) ->
             content_title=content_title[:500],
             content_link=payload.content_link.strip(),
             content_button_text=chrome["content_button"],
+            contact_mailto_subject=chrome["mailto_subject"],
+            contact_mailto_body=chrome["mailto_body"],
             logo_url=payload.logo_url.strip() or DEFAULT_LOGO_URL,
             primary_color=payload.primary_color or "#0a0a0a",
             text_color=payload.text_color or "#333333",

@@ -201,6 +201,10 @@ class EmailTemplateCreate(BaseModel):
     content_title: str = Field(default="", max_length=500)
     content_link: str = Field(default="", max_length=1000)
     content_button_text: str = Field(default="Open the content", max_length=200)
+    contact_mailto_subject: str = Field(default="Automation and integration help", max_length=300)
+    contact_mailto_body: str = Field(
+        default="Hi Cleiton,\n\nI saw your email about automation for {{company_name}} and would like to learn more.\n\n"
+    )
     logo_url: str = Field(default="", max_length=1000)
     primary_color: str = Field(default="#0a0a0a", max_length=20)
     text_color: str = Field(default="#333333", max_length=20)
@@ -215,6 +219,8 @@ class EmailTemplateUpdate(BaseModel):
     content_title: str | None = Field(default=None, max_length=500)
     content_link: str | None = Field(default=None, max_length=1000)
     content_button_text: str | None = Field(default=None, max_length=200)
+    contact_mailto_subject: str | None = Field(default=None, max_length=300)
+    contact_mailto_body: str | None = None
     logo_url: str | None = Field(default=None, max_length=1000)
     primary_color: str | None = Field(default=None, max_length=20)
     text_color: str | None = Field(default=None, max_length=20)
@@ -230,6 +236,8 @@ class EmailTemplateRead(BaseModel):
     content_title: str
     content_link: str
     content_button_text: str
+    contact_mailto_subject: str
+    contact_mailto_body: str
     logo_url: str
     primary_color: str
     text_color: str
@@ -348,7 +356,7 @@ class AiTemplateGenerateRequest(BaseModel):
         default="Invite the reader to reply if they need help with automation, integrations, follow-ups, or reducing manual work.",
         max_length=1000,
     )
-    language: str = Field(default="English", max_length=80)
+    language: Literal["pt", "en", "es"] = "pt"
     logo_url: str = Field(default="", max_length=1000)
     primary_color: str = Field(default="#0a0a0a", max_length=20)
     text_color: str = Field(default="#333333", max_length=20)

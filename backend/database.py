@@ -226,6 +226,15 @@ def _ensure_email_template_columns() -> None:
             "ALTER TABLE email_templates ADD COLUMN content_button_text VARCHAR(200) "
             "NOT NULL DEFAULT 'Open the content'"
         ),
+        "contact_mailto_subject": (
+            "ALTER TABLE email_templates ADD COLUMN contact_mailto_subject VARCHAR(300) "
+            "NOT NULL DEFAULT 'Automation and integration help'"
+        ),
+        "contact_mailto_body": (
+            "ALTER TABLE email_templates ADD COLUMN contact_mailto_body TEXT "
+            "NOT NULL DEFAULT 'Hi Cleiton, I saw your email about automation for {{company_name}} "
+            "and would like to learn more.'"
+        ),
     }
 
     with engine.begin() as connection:
