@@ -200,6 +200,7 @@ class EmailTemplateCreate(BaseModel):
     text: str = ""
     content_title: str = Field(default="", max_length=500)
     content_link: str = Field(default="", max_length=1000)
+    content_button_text: str = Field(default="Open the content", max_length=200)
     logo_url: str = Field(default="", max_length=1000)
     primary_color: str = Field(default="#0a0a0a", max_length=20)
     text_color: str = Field(default="#333333", max_length=20)
@@ -213,6 +214,7 @@ class EmailTemplateUpdate(BaseModel):
     text: str | None = None
     content_title: str | None = Field(default=None, max_length=500)
     content_link: str | None = Field(default=None, max_length=1000)
+    content_button_text: str | None = Field(default=None, max_length=200)
     logo_url: str | None = Field(default=None, max_length=1000)
     primary_color: str | None = Field(default=None, max_length=20)
     text_color: str | None = Field(default=None, max_length=20)
@@ -227,6 +229,7 @@ class EmailTemplateRead(BaseModel):
     text: str
     content_title: str
     content_link: str
+    content_button_text: str
     logo_url: str
     primary_color: str
     text_color: str

@@ -253,15 +253,17 @@ def _evolution_webhook_url() -> str:
 
 
 def _get_or_create_evolution_webhook_secret(db: Session) -> str:
-    configured_secret = get_settings().evolution_webhook_secret.strip()
-    if configured_secret:
-        return configured_secret
-
+    # A linha em whatsapp_webhook_settings é a única fonte de verdade: uma vez criada, o
+    # secret nunca deve mudar entre redeploys ou re-checagens de status. A env var
+    # EVOLUTION_WEBHOOK_SECRET só é usada para semear a criação inicial (ex.: impor um
+    # valor específico em um primeiro deploy); se ela sumir, mudar ou for reintroduzida
+    # depois, isso não pode dessincronizar o secret já registrado na Evolution.
     settings_row = db.get(WhatsAppWebhookSettings, 1)
     if settings_row:
         return settings_row.secret
 
-    settings_row = WhatsAppWebhookSettings(id=1, secret=secrets.token_urlsafe(48))
+    seed_secret = get_settings().evolution_webhook_secret.strip()
+    settings_row = WhatsAppWebhookSettings(id=1, secret=seed_secret or secrets.token_urlsafe(48))
     db.add(settings_row)
     db.flush()
     return settings_row.secret

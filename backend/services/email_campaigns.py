@@ -201,12 +201,19 @@ def _mailto_link(contact_email: str, company_name: str) -> str:
     return f"mailto:{contact_email}?subject={subject}&body={body}"
 
 
-def _content_card_block(content_link: str, thumbnail_url: str, content_title: str, primary_color: str) -> str:
+def _content_card_block(
+    content_link: str,
+    thumbnail_url: str,
+    content_title: str,
+    primary_color: str,
+    button_text: str,
+) -> str:
     if not content_link:
         return ""
 
+    safe_button_text = html.escape(button_text or "Open the content")
     safe_link = html.escape(content_link, quote=True)
-    safe_title = html.escape(content_title or "Open the content")
+    safe_title = html.escape(content_title or safe_button_text)
     safe_primary_color = html.escape(primary_color or "#0a0a0a", quote=True)
 
     if thumbnail_url:
@@ -225,7 +232,7 @@ def _content_card_block(content_link: str, thumbnail_url: str, content_title: st
                   <td align="center">
                     <a href="{safe_link}" target="_blank" rel="noopener noreferrer" style="display:block;text-decoration:none;color:inherit;">
 {media}
-                      <span style="display:inline-block;margin-top:12px;background-color:{safe_primary_color};color:#ffffff;border-radius:999px;padding:12px 18px;font-size:14px;font-weight:700;">Open the content</span>
+                      <span style="display:inline-block;margin-top:12px;background-color:{safe_primary_color};color:#ffffff;border-radius:999px;padding:12px 18px;font-size:14px;font-weight:700;">{safe_button_text}</span>
                     </a>
                   </td>
                 </tr>
@@ -243,7 +250,9 @@ def render_email(template: EmailTemplate, lead: Lead, campaign: EmailCampaign, s
     get_in_touch_link = _mailto_link(settings.contact_email, company_name)
 
     variables = {
-        "lead_name": f"team at {company_name}" if company_name else "there",
+        # Não prefixar com texto fixo em inglês (ex.: "team at"): o template controla
+        # totalmente a saudação (em qualquer idioma) em torno de {{lead_name}}.
+        "lead_name": company_name or "there",
         "company_name": company_name,
         "name": company_name,
         "email": lead.email,
@@ -266,7 +275,9 @@ def render_email(template: EmailTemplate, lead: Lead, campaign: EmailCampaign, s
     }
 
     escaped_variables = {key: html.escape(value or "") for key, value in variables.items()}
-    content_card = _content_card_block(tracked_content_link, thumbnail_url, content_title, template.primary_color)
+    content_card = _content_card_block(
+        tracked_content_link, thumbnail_url, content_title, template.primary_color, template.content_button_text
+    )
     escaped_variables["content_video_block"] = content_card
     escaped_variables["content_card_block"] = content_card
     subject = _render(template.subject, variables)

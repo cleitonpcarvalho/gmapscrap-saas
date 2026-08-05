@@ -275,3 +275,25 @@ def test_evolution_webhook_rejects_invalid_secret(
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.detail == "Webhook Evolution não autorizado"
+
+
+def test_webhook_secret_stays_stable_once_persisted_even_if_env_var_changes(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_secret = main._get_or_create_evolution_webhook_secret(db_session)
+    db_session.commit()
+    assert first_secret == WEBHOOK_SECRET
+
+    monkeypatch.setattr(main, "get_settings", lambda: SimpleNamespace(evolution_webhook_secret=""))
+    assert main._get_or_create_evolution_webhook_secret(db_session) == first_secret
+
+    monkeypatch.setattr(main, "get_settings", lambda: SimpleNamespace(evolution_webhook_secret="some-other-secret"))
+    assert main._get_or_create_evolution_webhook_secret(db_session) == first_secret
+
+    response = main.receive_evolution_webhook(
+        evolution_text_payload(message_id="STABLE_SECRET_1"),
+        request=webhook_request(secret=first_secret),
+        db=db_session,
+    )
+    assert response["status"] == "ok"

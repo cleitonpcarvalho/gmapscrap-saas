@@ -19,8 +19,49 @@ EM_DASH_PATTERN = re.compile(r"\s*[\u2014\u2015]\s*")
 SPACED_EN_DASH_PATTERN = re.compile(r"\s+\u2013\s+")
 WHATSAPP_VARIABLES = ["nome_empresa", "lead_name", "website", "phone", "niche", "location"]
 
+# Chrome (sauda\u00e7\u00e3o, bot\u00f5es, rodap\u00e9) que envolve o conte\u00fado gerado pela IA. Antes ficava
+# fixo em ingl\u00eas mesmo quando o template era gerado em outro idioma (ex.: "Hi {{lead_name}}"
+# e o bot\u00e3o "Open the content" apareciam sem tradu\u00e7\u00e3o e sem ficarem edit\u00e1veis na tela de
+# template). Agora esse texto acompanha o idioma escolhido na gera\u00e7\u00e3o e o bot\u00e3o do card de
+# conte\u00fado tamb\u00e9m fica salvo em EmailTemplate.content_button_text, edit\u00e1vel pelo usu\u00e1rio.
+EMAIL_CHROME_TEXTS = {
+    "pt": {
+        "greeting": "Ol\u00e1",
+        "tagline": "Automa\u00e7\u00e3o e Integra\u00e7\u00f5es",
+        "get_in_touch": "Fale conosco",
+        "sign_off": "Atenciosamente,",
+        "disclaimer": "Esta \u00e9 uma mensagem de baixo volume sobre conte\u00fado da Automa Soluct. Responda 'remover' se preferir n\u00e3o receber novos materiais.",
+        "content_button": "Abrir conte\u00fado",
+    },
+    "en": {
+        "greeting": "Hi",
+        "tagline": "Automation & Integrations",
+        "get_in_touch": "Get in touch",
+        "sign_off": "Best,",
+        "disclaimer": "This is a low-volume content note from Automa Soluct. Reply 'remove' if you prefer not to receive future resources.",
+        "content_button": "Open the content",
+    },
+    "es": {
+        "greeting": "Hola",
+        "tagline": "Automatizaci\u00f3n e Integraciones",
+        "get_in_touch": "Cont\u00e1ctanos",
+        "sign_off": "Saludos,",
+        "disclaimer": "Este es un mensaje puntual de contenido de Automa Soluct. Responde 'eliminar' si prefieres no recibir futuros materiales.",
+        "content_button": "Abrir contenido",
+    },
+}
 
-def _template_html(paragraphs: list[str], cta_paragraph: str) -> str:
+
+def _email_language_code(language: str) -> str:
+    normalized = (language or "").strip().lower()
+    if "portu" in normalized or normalized == "pt":
+        return "pt"
+    if "esp" in normalized or "span" in normalized or normalized == "es":
+        return "es"
+    return "en"
+
+
+def _template_html(paragraphs: list[str], cta_paragraph: str, chrome: dict[str, str]) -> str:
     body = "\n".join(
         f'              <p style="font-size:16px;color:{{{{text_color}}}};line-height:1.7;margin:0 0 16px 0;">{html.escape(paragraph)}</p>'
         for paragraph in paragraphs
@@ -43,24 +84,24 @@ def _template_html(paragraphs: list[str], cta_paragraph: str) -> str:
           <tr>
             <td style="background-color:{{{{primary_color}}}};padding:32px 40px;text-align:center;">
               <img src="{{{{logo_url}}}}" alt="Automa Soluct" height="64" style="display:block;margin:0 auto;" />
-              <p style="color:#d7d7d7;font-size:13px;margin:12px 0 0 0;">Automation & Integrations</p>
+              <p style="color:#d7d7d7;font-size:13px;margin:12px 0 0 0;">{chrome["tagline"]}</p>
             </td>
           </tr>
           <tr>
             <td style="padding:40px 40px 24px 40px;">
-              <p style="font-size:16px;color:{{{{text_color}}}};margin:0 0 16px 0;">Hi {{{{lead_name}}}},</p>
+              <p style="font-size:16px;color:{{{{text_color}}}};margin:0 0 16px 0;">{chrome["greeting"]} {{{{lead_name}}}},</p>
 {body}
               {{{{content_card_block}}}}
               <p style="font-size:16px;color:{{{{text_color}}}};line-height:1.7;margin:0 0 16px 0;">{safe_cta}</p>
               <table width="100%" cellpadding="0" cellspacing="0">
                 <tr>
                   <td align="center" style="padding:10px 0 32px 0;">
-                    <a href="{{{{get_in_touch_link}}}}" style="background-color:{{{{primary_color}}}};color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:6px;font-size:15px;font-weight:600;display:inline-block;">Get in touch</a>
+                    <a href="{{{{get_in_touch_link}}}}" style="background-color:{{{{primary_color}}}};color:#ffffff;text-decoration:none;padding:14px 32px;border-radius:6px;font-size:15px;font-weight:600;display:inline-block;">{chrome["get_in_touch"]}</a>
                   </td>
                 </tr>
               </table>
               <hr style="border:none;border-top:1px solid #eeeeee;margin:0 0 28px 0;" />
-              <p style="font-size:13px;color:#888888;margin:0 0 12px 0;text-transform:uppercase;font-weight:600;">Get in touch</p>
+              <p style="font-size:13px;color:#888888;margin:0 0 12px 0;text-transform:uppercase;font-weight:600;">{chrome["get_in_touch"]}</p>
               <p style="font-size:15px;color:{{{{text_color}}}};line-height:1.7;margin:0;">
                 Cleiton Carvalho<br />
                 Automation Specialist - Automa Soluct<br />
@@ -70,7 +111,7 @@ def _template_html(paragraphs: list[str], cta_paragraph: str) -> str:
           </tr>
           <tr>
             <td style="padding:24px 40px 40px 40px;border-top:1px solid #eeeeee;">
-              <p style="margin:0;font-size:12px;color:#999999;line-height:1.6;">This is a low-volume content note from Automa Soluct. Reply 'remove' if you prefer not to receive future resources.</p>
+              <p style="margin:0;font-size:12px;color:#999999;line-height:1.6;">{chrome["disclaimer"]}</p>
             </td>
           </tr>
         </table>
@@ -81,14 +122,14 @@ def _template_html(paragraphs: list[str], cta_paragraph: str) -> str:
 </html>"""
 
 
-def _plain_text(paragraphs: list[str], cta_paragraph: str) -> str:
-    parts = ["Hi {{lead_name}},", *[paragraph.strip() for paragraph in paragraphs if paragraph.strip()]]
+def _plain_text(paragraphs: list[str], cta_paragraph: str, chrome: dict[str, str]) -> str:
+    parts = [f'{chrome["greeting"]} {{{{lead_name}}}},', *[paragraph.strip() for paragraph in paragraphs if paragraph.strip()]]
     parts.extend(
         [
             "{{content_title}}",
             "{{content_link}}",
             cta_paragraph.strip(),
-            "Best,",
+            chrome["sign_off"],
             "Cleiton Carvalho",
             "Automa Soluct",
         ]
@@ -369,6 +410,7 @@ def generate_email_templates(db: Session, payload: AiTemplateGenerateRequest) ->
     except json.JSONDecodeError as exc:
         raise RuntimeError("A OpenAI retornou um JSON inválido.") from exc
 
+    chrome = EMAIL_CHROME_TEXTS[_email_language_code(payload.language)]
     templates_data = generated.get("templates", [])[:count]
     saved_templates: list[EmailTemplate] = []
     for index, item in enumerate(templates_data, start=1):
@@ -395,10 +437,11 @@ def generate_email_templates(db: Session, payload: AiTemplateGenerateRequest) ->
         template = EmailTemplate(
             name=_unique_name(db, base_name),
             subject=subject[:500],
-            html=_template_html(paragraphs, cta_paragraph),
-            text=_plain_text(paragraphs, cta_paragraph),
+            html=_template_html(paragraphs, cta_paragraph, chrome),
+            text=_plain_text(paragraphs, cta_paragraph, chrome),
             content_title=content_title[:500],
             content_link=payload.content_link.strip(),
+            content_button_text=chrome["content_button"],
             logo_url=payload.logo_url.strip() or DEFAULT_LOGO_URL,
             primary_color=payload.primary_color or "#0a0a0a",
             text_color=payload.text_color or "#333333",

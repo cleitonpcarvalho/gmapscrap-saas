@@ -109,6 +109,7 @@ class EmailTemplate(Base):
     text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     content_title: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     content_link: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
+    content_button_text: Mapped[str] = mapped_column(String(200), default="Open the content", nullable=False)
     logo_url: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
     primary_color: Mapped[str] = mapped_column(String(20), default="#0a0a0a", nullable=False)
     text_color: Mapped[str] = mapped_column(String(20), default="#333333", nullable=False)

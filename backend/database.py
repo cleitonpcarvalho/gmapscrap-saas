@@ -222,6 +222,10 @@ def _ensure_email_template_columns() -> None:
         "primary_color": "ALTER TABLE email_templates ADD COLUMN primary_color VARCHAR(20) NOT NULL DEFAULT '#0a0a0a'",
         "text_color": "ALTER TABLE email_templates ADD COLUMN text_color VARCHAR(20) NOT NULL DEFAULT '#333333'",
         "background_color": "ALTER TABLE email_templates ADD COLUMN background_color VARCHAR(20) NOT NULL DEFAULT '#f4f4f4'",
+        "content_button_text": (
+            "ALTER TABLE email_templates ADD COLUMN content_button_text VARCHAR(200) "
+            "NOT NULL DEFAULT 'Open the content'"
+        ),
     }
 
     with engine.begin() as connection:

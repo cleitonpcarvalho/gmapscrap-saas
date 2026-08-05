@@ -139,6 +139,7 @@ type EmailTemplate = {
   text: string;
   content_title: string;
   content_link: string;
+  content_button_text: string;
   logo_url: string;
   primary_color: string;
   text_color: string;
@@ -734,6 +735,7 @@ type TemplatePreviewSource = {
   text: string;
   content_title: string;
   content_link: string;
+  content_button_text: string;
   logo_url: string;
   primary_color: string;
   text_color: string;
@@ -753,9 +755,15 @@ function renderTemplatePreview(template: TemplatePreviewSource, contentPreview?:
   )}&body=${encodeURIComponent(
     `Hi Cleiton,\n\nI saw your email about automation for ${sampleCompany} and would like to learn more.\n\n`
   )}`;
-  const contentCard = contentCardHtml(safeContentLink, thumbnailUrl, safeContentTitle, template.primary_color);
+  const contentCard = contentCardHtml(
+    safeContentLink,
+    thumbnailUrl,
+    safeContentTitle,
+    template.primary_color,
+    template.content_button_text
+  );
   const variables: Record<string, string> = {
-    lead_name: `team at ${sampleCompany}`,
+    lead_name: sampleCompany,
     company_name: sampleCompany,
     name: sampleCompany,
     email: sampleLead?.email || "hello@example.com",
@@ -787,7 +795,7 @@ function renderTemplateSubject(template: TemplatePreviewSource, sampleLead?: Lea
   const sampleCompany = sampleLead?.name || "Example Company";
   return (template.subject || "").replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, key: string) => {
     const values: Record<string, string> = {
-      lead_name: `team at ${sampleCompany}`,
+      lead_name: sampleCompany,
       company_name: sampleCompany,
       name: sampleCompany,
       niche: sampleLead?.niche || "local service",
@@ -828,12 +836,20 @@ function youtubeThumbnailUrl(url: string) {
   return videoId ? `https://i.ytimg.com/vi/${videoId}/hq720.jpg` : "";
 }
 
-function contentCardHtml(contentLink: string, thumbnailUrl: string, contentTitle: string, primaryColor: string) {
+function contentCardHtml(
+  contentLink: string,
+  thumbnailUrl: string,
+  contentTitle: string,
+  primaryColor: string,
+  buttonText?: string
+) {
   if (!contentLink) return "";
 
+  const safeButtonText = buttonText || "Open the content";
+  const safeContentTitle = contentTitle || safeButtonText;
   const media = thumbnailUrl
-    ? `<img src="${thumbnailUrl}" alt="${contentTitle}" width="520" style="display:block;width:100%;max-width:520px;height:auto;border-radius:8px;border:1px solid #eeeeee;" />`
-    : `<span style="display:block;width:100%;max-width:520px;border:1px solid #eeeeee;border-radius:8px;padding:28px 24px;background-color:#f6f8f7;color:#222222;font-size:18px;line-height:1.45;font-weight:700;">${contentTitle}</span>`;
+    ? `<img src="${thumbnailUrl}" alt="${safeContentTitle}" width="520" style="display:block;width:100%;max-width:520px;height:auto;border-radius:8px;border:1px solid #eeeeee;" />`
+    : `<span style="display:block;width:100%;max-width:520px;border:1px solid #eeeeee;border-radius:8px;padding:28px 24px;background-color:#f6f8f7;color:#222222;font-size:18px;line-height:1.45;font-weight:700;">${safeContentTitle}</span>`;
 
   return `
               <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px 0;">
@@ -841,7 +857,7 @@ function contentCardHtml(contentLink: string, thumbnailUrl: string, contentTitle
                   <td align="center">
                     <a href="${contentLink}" target="_blank" rel="noopener noreferrer" style="display:block;text-decoration:none;color:inherit;">
                       ${media}
-                      <span style="display:inline-block;margin-top:12px;background-color:${primaryColor || "#0a0a0a"};color:#ffffff;border-radius:999px;padding:12px 18px;font-size:14px;font-weight:700;">Open the content</span>
+                      <span style="display:inline-block;margin-top:12px;background-color:${primaryColor || "#0a0a0a"};color:#ffffff;border-radius:999px;padding:12px 18px;font-size:14px;font-weight:700;">${safeButtonText}</span>
                     </a>
                   </td>
                 </tr>
@@ -1102,6 +1118,7 @@ export default function Home() {
     text: "Hi {{lead_name}},\n\nI wanted to share this content with you:\n{{content_title}}\n{{content_link}}\n\nBest,\nCleiton",
     content_title: "",
     content_link: "",
+    content_button_text: "Open the content",
     logo_url: DEFAULT_TEMPLATE_LOGO,
     primary_color: "#0a0a0a",
     text_color: "#333333",
@@ -1756,6 +1773,7 @@ export default function Home() {
       text: "Hi {{lead_name}},\n\nI wanted to share this content with you:\n{{content_title}}\n{{content_link}}\n\nBest,\nCleiton",
       content_title: "",
       content_link: "",
+      content_button_text: "Open the content",
       logo_url: DEFAULT_TEMPLATE_LOGO,
       primary_color: "#0a0a0a",
       text_color: "#333333",
@@ -1779,6 +1797,7 @@ export default function Home() {
       text: template.text,
       content_title: template.content_title,
       content_link: template.content_link,
+      content_button_text: template.content_button_text || "Open the content",
       logo_url: template.logo_url,
       primary_color: template.primary_color,
       text_color: template.text_color,
@@ -5902,6 +5921,14 @@ export default function Home() {
                   placeholder="YouTube ou blog"
                   value={templateForm.content_link}
                   onChange={(event) => setTemplateForm({ ...templateForm, content_link: event.target.value })}
+                />
+              </label>
+              <label>
+                Texto do botão de conteúdo
+                <input
+                  placeholder="Ex.: Abrir conteúdo"
+                  value={templateForm.content_button_text}
+                  onChange={(event) => setTemplateForm({ ...templateForm, content_button_text: event.target.value })}
                 />
               </label>
               <label className="wide-field">
