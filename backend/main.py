@@ -18,7 +18,10 @@ from backend.auth import clear_session_cookie, create_session_token, get_current
 from backend.config import get_settings
 from backend.database import get_db, init_db
 from backend.models import (
+    CrmFunnel,
+    CrmFunnelStage,
     CrmLead,
+    CrmStageHistory,
     EmailCampaign,
     EmailCampaignTemplate,
     EmailSend,
@@ -45,6 +48,14 @@ from backend.schemas import (
     BulkDeleteRequest,
     BulkDeleteResponse,
     ContentPreviewRead,
+    CrmFunnelCreate,
+    CrmFunnelRead,
+    CrmFunnelStageCreate,
+    CrmFunnelStageRead,
+    CrmFunnelStageReorderRequest,
+    CrmFunnelStageUpdate,
+    CrmFunnelUpdate,
+    CrmLeadFunnelSummary,
     CrmLeadRead,
     CrmLeadUpdate,
     DesktopLeadIngestResponse,
@@ -103,7 +114,14 @@ from backend.schemas import (
     WhatsAppTemplateGenerateResponse,
 )
 from backend.scrapers.email_scraper import normalize_site_url
-from backend.services.crm import CRM_STAGES, get_or_create_crm_lead, move_crm_lead, update_crm_stage
+from backend.services.crm import (
+    CRM_STAGES,
+    get_default_crm_funnel,
+    get_or_create_crm_lead,
+    move_crm_lead,
+    normalize_funnel_stage_positions,
+    normalize_stage_key,
+)
 from backend.services.content_preview import fetch_content_preview
 from backend.services.email_campaigns import (
     mark_clicked,
@@ -393,14 +411,108 @@ def _existing_tag_ids(db: Session, tag_ids: list[int]) -> set[int]:
     return set(db.scalars(select(Tag.id).where(Tag.id.in_(tag_ids))).all())
 
 
+def _sorted_funnel_stages(stages: list[CrmFunnelStage] | None) -> list[CrmFunnelStage]:
+    return sorted(stages or [], key=lambda stage: (stage.position, stage.id))
+
+
+def _stage_card_counts(db: Session, funnel_id: int) -> dict[int, int]:
+    rows = db.execute(
+        select(CrmLead.stage_id, func.count(CrmLead.id))
+        .where(CrmLead.funnel_id == funnel_id)
+        .group_by(CrmLead.stage_id)
+    ).all()
+    return {int(stage_id): int(count or 0) for stage_id, count in rows if stage_id is not None}
+
+
+def _funnel_card_count(db: Session, funnel_id: int) -> int:
+    return int(db.scalar(select(func.count(CrmLead.id)).where(CrmLead.funnel_id == funnel_id)) or 0)
+
+
+def _stage_read(stage: CrmFunnelStage, card_count: int = 0) -> CrmFunnelStageRead:
+    return CrmFunnelStageRead(
+        id=stage.id,
+        funnel_id=stage.funnel_id,
+        key=stage.key,
+        label=stage.label,
+        color=stage.color,
+        position=stage.position,
+        is_won=stage.is_won,
+        is_lost=stage.is_lost,
+        card_count=card_count,
+    )
+
+
+def _funnel_read(db: Session, funnel: CrmFunnel) -> CrmFunnelRead:
+    stage_counts = _stage_card_counts(db, funnel.id)
+    return CrmFunnelRead(
+        id=funnel.id,
+        name=funnel.name,
+        description=funnel.description,
+        is_default=funnel.is_default,
+        created_at=funnel.created_at,
+        card_count=_funnel_card_count(db, funnel.id),
+        stages=[_stage_read(stage, stage_counts.get(stage.id, 0)) for stage in _sorted_funnel_stages(funnel.stages)],
+    )
+
+
+def _find_funnel_by_name(db: Session, name: str, *, exclude_id: int | None = None) -> CrmFunnel | None:
+    stmt = select(CrmFunnel).where(func.lower(CrmFunnel.name) == name.lower())
+    if exclude_id is not None:
+        stmt = stmt.where(CrmFunnel.id != exclude_id)
+    return db.scalar(stmt)
+
+
+def _find_stage_by_key(db: Session, funnel_id: int, key: str, *, exclude_id: int | None = None) -> CrmFunnelStage | None:
+    stmt = select(CrmFunnelStage).where(CrmFunnelStage.funnel_id == funnel_id, CrmFunnelStage.key == key)
+    if exclude_id is not None:
+        stmt = stmt.where(CrmFunnelStage.id != exclude_id)
+    return db.scalar(stmt)
+
+
+def _next_stage_key(db: Session, funnel_id: int, label: str) -> str:
+    base_key = normalize_stage_key(label)
+    key = base_key
+    suffix = 2
+    while _find_stage_by_key(db, funnel_id, key):
+        key = f"{base_key[:54]}_{suffix}"
+        suffix += 1
+    return key
+
+
+def _crm_other_funnels(db: Session, crm_lead: CrmLead) -> list[CrmLeadFunnelSummary]:
+    rows = db.scalars(
+        select(CrmLead)
+        .options(selectinload(CrmLead.funnel), selectinload(CrmLead.stage_ref))
+        .where(CrmLead.lead_id == crm_lead.lead_id, CrmLead.id != crm_lead.id)
+        .order_by(desc(CrmLead.updated_at), desc(CrmLead.id))
+    ).all()
+    return [
+        CrmLeadFunnelSummary(
+            id=row.funnel_id,
+            name=row.funnel.name if row.funnel else "",
+            stage=row.stage,
+            stage_label=row.stage_ref.label if row.stage_ref else row.stage,
+        )
+        for row in rows
+        if row.funnel_id
+    ]
+
+
 def _crm_lead_read(db: Session, crm_lead: CrmLead) -> CrmLeadRead:
     lead = crm_lead.lead
     conversation, latest_message = _latest_whatsapp_context_for_lead(db, crm_lead.lead_id)
+    stage_ref = crm_lead.stage_ref
+    funnel = crm_lead.funnel
 
     return CrmLeadRead(
         id=crm_lead.id,
         lead_id=crm_lead.lead_id,
+        funnel_id=crm_lead.funnel_id,
+        funnel_name=funnel.name if funnel else "",
+        stage_id=crm_lead.stage_id,
         stage=crm_lead.stage,
+        stage_label=stage_ref.label if stage_ref else crm_lead.stage,
+        stage_color=stage_ref.color if stage_ref else "#f3f4f6",
         qualification_notes=crm_lead.qualification_notes,
         score=crm_lead.score,
         position=crm_lead.position,
@@ -416,6 +528,7 @@ def _crm_lead_read(db: Session, crm_lead: CrmLead) -> CrmLeadRead:
         last_message=latest_message.content if latest_message else None,
         last_message_at=conversation.last_message_at if conversation else None,
         conversation_id=conversation.id if conversation else None,
+        other_funnels=_crm_other_funnels(db, crm_lead),
     )
 
 
@@ -1626,18 +1739,377 @@ def delete_whatsapp_portfolio_item(
     return {"status": "ok"}
 
 
+@app.get("/api/crm/funnels", response_model=list[CrmFunnelRead])
+def list_crm_funnels(
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> list[CrmFunnelRead]:
+    _ = username
+    get_default_crm_funnel(db)
+    db.commit()
+    funnels = list(
+        db.scalars(
+            select(CrmFunnel)
+            .options(selectinload(CrmFunnel.stages))
+            .order_by(desc(CrmFunnel.is_default), func.lower(CrmFunnel.name), CrmFunnel.id)
+        ).all()
+    )
+    return [_funnel_read(db, funnel) for funnel in funnels]
+
+
+@app.post("/api/crm/funnels", response_model=CrmFunnelRead)
+def create_crm_funnel(
+    payload: CrmFunnelCreate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> CrmFunnelRead:
+    _ = username
+    get_default_crm_funnel(db)
+    if _find_funnel_by_name(db, payload.name):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um funil com esse nome.")
+
+    funnel = CrmFunnel(name=payload.name, description=payload.description, is_default=False)
+    db.add(funnel)
+    db.flush()
+    db.add(
+        CrmFunnelStage(
+            funnel_id=funnel.id,
+            key="new",
+            label="Novo",
+            color="#f3f4f6",
+            position=0,
+            is_won=False,
+            is_lost=False,
+        )
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um funil com esse nome.") from None
+    db.refresh(funnel)
+    return _funnel_read(db, funnel)
+
+
+@app.patch("/api/crm/funnels/{funnel_id}", response_model=CrmFunnelRead)
+def update_crm_funnel(
+    funnel_id: int,
+    payload: CrmFunnelUpdate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> CrmFunnelRead:
+    _ = username
+    funnel = db.scalar(select(CrmFunnel).options(selectinload(CrmFunnel.stages)).where(CrmFunnel.id == funnel_id))
+    if not funnel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funil não encontrado")
+
+    payload_data = payload.model_dump(exclude_unset=True)
+    if "name" in payload_data and payload_data["name"] is not None:
+        if _find_funnel_by_name(db, payload_data["name"], exclude_id=funnel.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um funil com esse nome.")
+        funnel.name = payload_data["name"]
+    if "description" in payload_data:
+        funnel.description = payload_data["description"]
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um funil com esse nome.") from None
+    db.refresh(funnel)
+    return _funnel_read(db, funnel)
+
+
+@app.delete("/api/crm/funnels/{funnel_id}")
+def delete_crm_funnel(
+    funnel_id: int,
+    move_to_funnel_id: int | None = None,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> dict[str, int | str]:
+    _ = username
+    funnel = db.scalar(select(CrmFunnel).options(selectinload(CrmFunnel.stages)).where(CrmFunnel.id == funnel_id))
+    if not funnel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funil não encontrado")
+    if funnel.is_default:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="O funil padrão não pode ser excluído.")
+
+    affected_cards = _funnel_card_count(db, funnel.id)
+    if affected_cards and not move_to_funnel_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Este funil contém {affected_cards} cards. Informe um funil de destino para movê-los antes de excluir.",
+        )
+
+    moved_cards = 0
+    if affected_cards:
+        if move_to_funnel_id == funnel.id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escolha um funil de destino diferente.")
+        destination = db.scalar(
+            select(CrmFunnel).options(selectinload(CrmFunnel.stages)).where(CrmFunnel.id == move_to_funnel_id)
+        )
+        if not destination:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funil de destino não encontrado")
+        destination_stages = _sorted_funnel_stages(destination.stages)
+        if not destination_stages:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Funil de destino sem estágios.")
+
+        source_cards = list(db.scalars(select(CrmLead).where(CrmLead.funnel_id == funnel.id)).all())
+        existing_destination_leads = set(
+            db.scalars(select(CrmLead.lead_id).where(CrmLead.funnel_id == destination.id)).all()
+        )
+        conflicting_leads = [card.lead_id for card in source_cards if card.lead_id in existing_destination_leads]
+        if conflicting_leads:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{len(conflicting_leads)} leads já têm card no funil de destino. Resolva esses cards antes de mover.",
+            )
+
+        for card in source_cards:
+            matching_stage = _find_stage_by_key(db, destination.id, card.stage)
+            next_stage = matching_stage or destination_stages[0]
+            previous_stage = card.stage
+            previous_stage_id = card.stage_id
+            card.funnel_id = destination.id
+            card.stage_id = next_stage.id
+            card.stage = next_stage.key
+            db.add(
+                CrmStageHistory(
+                    crm_lead_id=card.id,
+                    from_stage=previous_stage,
+                    to_stage=next_stage.key,
+                    from_stage_id=previous_stage_id,
+                    to_stage_id=next_stage.id,
+                    changed_by="manual",
+                )
+            )
+            moved_cards += 1
+        for stage in destination_stages:
+            matching_cards = list(
+                db.scalars(select(CrmLead).where(CrmLead.funnel_id == destination.id, CrmLead.stage_id == stage.id)).all()
+            )
+            for index, card in enumerate(sorted(matching_cards, key=lambda item: (item.position is None, item.position or 0, item.id))):
+                card.position = index
+
+    db.delete(funnel)
+    db.commit()
+    return {"status": "ok", "moved_cards": moved_cards}
+
+
+@app.get("/api/crm/funnels/{funnel_id}/stages", response_model=list[CrmFunnelStageRead])
+def list_crm_funnel_stages(
+    funnel_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> list[CrmFunnelStageRead]:
+    _ = username
+    funnel = db.scalar(select(CrmFunnel).options(selectinload(CrmFunnel.stages)).where(CrmFunnel.id == funnel_id))
+    if not funnel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funil não encontrado")
+    stage_counts = _stage_card_counts(db, funnel.id)
+    return [_stage_read(stage, stage_counts.get(stage.id, 0)) for stage in _sorted_funnel_stages(funnel.stages)]
+
+
+@app.post("/api/crm/funnels/{funnel_id}/stages", response_model=CrmFunnelStageRead)
+def create_crm_funnel_stage(
+    funnel_id: int,
+    payload: CrmFunnelStageCreate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> CrmFunnelStageRead:
+    _ = username
+    funnel = db.scalar(select(CrmFunnel).options(selectinload(CrmFunnel.stages)).where(CrmFunnel.id == funnel_id))
+    if not funnel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funil não encontrado")
+    if payload.is_won and payload.is_lost:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Um estágio não pode ser ganho e perdido ao mesmo tempo.")
+
+    key = payload.key or _next_stage_key(db, funnel.id, payload.label)
+    if _find_stage_by_key(db, funnel.id, key):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um estágio com essa chave neste funil.")
+
+    position = len(funnel.stages)
+    stage = CrmFunnelStage(
+        funnel_id=funnel.id,
+        key=key,
+        label=payload.label,
+        color=payload.color,
+        position=position,
+        is_won=payload.is_won,
+        is_lost=payload.is_lost,
+    )
+    db.add(stage)
+    db.flush()
+    if stage.is_won:
+        db.execute(
+            CrmFunnelStage.__table__.update()
+            .where(CrmFunnelStage.funnel_id == funnel.id, CrmFunnelStage.id != stage.id)
+            .values(is_won=False)
+        )
+    if stage.is_lost:
+        db.execute(
+            CrmFunnelStage.__table__.update()
+            .where(CrmFunnelStage.funnel_id == funnel.id, CrmFunnelStage.id != stage.id)
+            .values(is_lost=False)
+        )
+    db.commit()
+    db.refresh(stage)
+    return _stage_read(stage, 0)
+
+
+@app.patch("/api/crm/funnels/{funnel_id}/stages", response_model=list[CrmFunnelStageRead])
+def reorder_crm_funnel_stages(
+    funnel_id: int,
+    payload: CrmFunnelStageReorderRequest,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> list[CrmFunnelStageRead]:
+    _ = username
+    funnel = db.scalar(select(CrmFunnel).options(selectinload(CrmFunnel.stages)).where(CrmFunnel.id == funnel_id))
+    if not funnel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funil não encontrado")
+    current_stage_ids = {stage.id for stage in funnel.stages}
+    next_stage_ids = list(dict.fromkeys(payload.stage_ids))
+    if set(next_stage_ids) != current_stage_ids:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Envie todos os estágios do funil na nova ordem.")
+
+    normalize_funnel_stage_positions(db, funnel.id, next_stage_ids)
+    db.commit()
+    db.refresh(funnel)
+    stage_counts = _stage_card_counts(db, funnel.id)
+    return [_stage_read(stage, stage_counts.get(stage.id, 0)) for stage in _sorted_funnel_stages(funnel.stages)]
+
+
+@app.patch("/api/crm/funnels/{funnel_id}/stages/{stage_id}", response_model=CrmFunnelStageRead)
+def update_crm_funnel_stage(
+    funnel_id: int,
+    stage_id: int,
+    payload: CrmFunnelStageUpdate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> CrmFunnelStageRead:
+    _ = username
+    funnel = db.scalar(select(CrmFunnel).options(selectinload(CrmFunnel.stages)).where(CrmFunnel.id == funnel_id))
+    stage = db.get(CrmFunnelStage, stage_id)
+    if not funnel or not stage or stage.funnel_id != funnel.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Estágio não encontrado")
+
+    payload_data = payload.model_dump(exclude_unset=True)
+    next_key = payload_data.get("key")
+    if next_key and next_key != stage.key:
+        if funnel.is_default and stage.key in CRM_STAGES:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="As chaves do funil padrão não podem ser alteradas.")
+        if _find_stage_by_key(db, funnel.id, next_key, exclude_id=stage.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe um estágio com essa chave neste funil.")
+        stage.key = next_key
+    if "label" in payload_data and payload_data["label"] is not None:
+        stage.label = payload_data["label"]
+    if "color" in payload_data and payload_data["color"] is not None:
+        stage.color = payload_data["color"]
+    if "position" in payload_data and payload_data["position"] is not None:
+        stage.position = payload_data["position"]
+    if "is_won" in payload_data and payload_data["is_won"] is not None:
+        stage.is_won = payload_data["is_won"]
+    if "is_lost" in payload_data and payload_data["is_lost"] is not None:
+        stage.is_lost = payload_data["is_lost"]
+    if stage.is_won and stage.is_lost:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Um estágio não pode ser ganho e perdido ao mesmo tempo.")
+
+    db.flush()
+    if stage.is_won:
+        db.execute(
+            CrmFunnelStage.__table__.update()
+            .where(CrmFunnelStage.funnel_id == funnel.id, CrmFunnelStage.id != stage.id)
+            .values(is_won=False)
+        )
+    if stage.is_lost:
+        db.execute(
+            CrmFunnelStage.__table__.update()
+            .where(CrmFunnelStage.funnel_id == funnel.id, CrmFunnelStage.id != stage.id)
+            .values(is_lost=False)
+        )
+    db.execute(CrmLead.__table__.update().where(CrmLead.stage_id == stage.id).values(stage=stage.key))
+    db.commit()
+    db.refresh(stage)
+    return _stage_read(stage, _stage_card_counts(db, funnel.id).get(stage.id, 0))
+
+
+@app.delete("/api/crm/funnels/{funnel_id}/stages/{stage_id}")
+def delete_crm_funnel_stage(
+    funnel_id: int,
+    stage_id: int,
+    move_to_stage_id: int | None = None,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> dict[str, int | str]:
+    _ = username
+    funnel = db.scalar(select(CrmFunnel).options(selectinload(CrmFunnel.stages)).where(CrmFunnel.id == funnel_id))
+    stage = db.get(CrmFunnelStage, stage_id)
+    if not funnel or not stage or stage.funnel_id != funnel.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Estágio não encontrado")
+    if len(funnel.stages) <= 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Todo funil precisa ter pelo menos um estágio.")
+
+    affected_cards = int(db.scalar(select(func.count(CrmLead.id)).where(CrmLead.stage_id == stage.id)) or 0)
+    if affected_cards and not move_to_stage_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Este estágio contém {affected_cards} cards. Informe um estágio de destino para movê-los antes de excluir.",
+        )
+
+    moved_cards = 0
+    destination = None
+    if affected_cards:
+        if move_to_stage_id == stage.id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Escolha um estágio de destino diferente.")
+        destination = db.get(CrmFunnelStage, move_to_stage_id)
+        if not destination or destination.funnel_id != funnel.id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Estágio de destino não encontrado")
+        cards = list(db.scalars(select(CrmLead).where(CrmLead.stage_id == stage.id)).all())
+        for card in cards:
+            card.stage_id = destination.id
+            card.stage = destination.key
+            db.add(
+                CrmStageHistory(
+                    crm_lead_id=card.id,
+                    from_stage=stage.key,
+                    to_stage=destination.key,
+                    from_stage_id=stage.id,
+                    to_stage_id=destination.id,
+                    changed_by="manual",
+                )
+            )
+            moved_cards += 1
+
+    db.delete(stage)
+    db.flush()
+    remaining_stage_ids = [item.id for item in _sorted_funnel_stages([item for item in funnel.stages if item.id != stage.id])]
+    normalize_funnel_stage_positions(db, funnel.id, remaining_stage_ids)
+    if destination:
+        matching_cards = list(db.scalars(select(CrmLead).where(CrmLead.funnel_id == funnel.id, CrmLead.stage_id == destination.id)).all())
+        for index, card in enumerate(sorted(matching_cards, key=lambda item: (item.position is None, item.position or 0, item.id))):
+            card.position = index
+    db.commit()
+    return {"status": "ok", "moved_cards": moved_cards}
+
+
 @app.get("/api/crm/leads", response_model=list[CrmLeadRead])
 def list_crm_leads(
     stage: str | None = None,
+    funnel_id: int | None = None,
     tag_ids: list[int] | None = Query(default=None),
     tag_filter_mode: str = "any",
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
 ) -> list[CrmLeadRead]:
     _ = username
+    funnel = get_default_crm_funnel(db) if funnel_id is None else db.get(CrmFunnel, funnel_id)
+    if not funnel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funil não encontrado")
     normalized_stage = (stage or "").strip()
-    if normalized_stage and normalized_stage not in CRM_STAGES:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Estágio de CRM inválido")
+    stage_ref = _find_stage_by_key(db, funnel.id, normalized_stage) if normalized_stage else None
+    if normalized_stage and not stage_ref:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Estágio de CRM inválido para este funil")
     normalized_tag_filter_mode = (tag_filter_mode or "any").strip().lower()
     if normalized_tag_filter_mode not in {"any", "all"}:
         raise HTTPException(
@@ -1648,16 +2120,23 @@ def list_crm_leads(
 
     stmt = (
         select(CrmLead)
-        .options(selectinload(CrmLead.lead).selectinload(Lead.search_run), selectinload(CrmLead.lead).selectinload(Lead.tags))
+        .options(
+            selectinload(CrmLead.funnel),
+            selectinload(CrmLead.stage_ref),
+            selectinload(CrmLead.lead).selectinload(Lead.search_run),
+            selectinload(CrmLead.lead).selectinload(Lead.tags),
+        )
+        .where(CrmLead.funnel_id == funnel.id)
         .order_by(
+            CrmLead.stage_id.asc(),
             CrmLead.position.is_(None),
             CrmLead.position.asc(),
             desc(CrmLead.updated_at),
             desc(CrmLead.id),
         )
     )
-    if normalized_stage:
-        stmt = stmt.where(CrmLead.stage == normalized_stage)
+    if stage_ref:
+        stmt = stmt.where(CrmLead.stage_id == stage_ref.id)
     if normalized_tag_ids:
         if normalized_tag_filter_mode == "all":
             matching_leads = (
@@ -1686,23 +2165,29 @@ def update_crm_lead(
     if not lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
 
-    crm_lead = get_or_create_crm_lead(db, lead_id)
     payload_data = payload.model_dump(exclude_unset=True)
+    funnel_id = payload_data.get("funnel_id")
+    try:
+        crm_lead = get_or_create_crm_lead(db, lead_id, funnel_id=funnel_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     should_move = ("stage" in payload_data and payload_data["stage"] is not None) or (
         "position" in payload_data and payload_data["position"] is not None
     )
     if should_move:
         next_stage = payload_data.get("stage")
-        if next_stage is not None and next_stage not in CRM_STAGES:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Estágio de CRM inválido")
-        crm_lead = move_crm_lead(
-            db,
-            lead_id,
-            stage=next_stage,
-            position=payload_data.get("position"),
-            changed_by="manual",
-        )
+        try:
+            crm_lead = move_crm_lead(
+                db,
+                lead_id,
+                stage=next_stage,
+                position=payload_data.get("position"),
+                changed_by="manual",
+                funnel_id=crm_lead.funnel_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     if "qualification_notes" in payload_data:
         notes = payload_data["qualification_notes"]
@@ -1711,7 +2196,12 @@ def update_crm_lead(
     db.commit()
     crm_lead = db.scalar(
         select(CrmLead)
-        .options(selectinload(CrmLead.lead).selectinload(Lead.search_run), selectinload(CrmLead.lead).selectinload(Lead.tags))
+        .options(
+            selectinload(CrmLead.funnel),
+            selectinload(CrmLead.stage_ref),
+            selectinload(CrmLead.lead).selectinload(Lead.search_run),
+            selectinload(CrmLead.lead).selectinload(Lead.tags),
+        )
         .where(CrmLead.id == crm_lead.id)
     )
     if not crm_lead:
@@ -1814,7 +2304,11 @@ def list_whatsapp_campaigns(
     _ = username
     stmt = (
         select(WhatsAppCampaign)
-        .options(selectinload(WhatsAppCampaign.lead_list), selectinload(WhatsAppCampaign.instance))
+        .options(
+            selectinload(WhatsAppCampaign.lead_list),
+            selectinload(WhatsAppCampaign.instance),
+            selectinload(WhatsAppCampaign.funnel),
+        )
         .order_by(desc(WhatsAppCampaign.created_at))
     )
     return list(db.scalars(stmt).all())
@@ -1833,6 +2327,8 @@ def create_whatsapp_campaign(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lista não encontrada")
     if not db.get(WhatsAppInstance, payload.instance_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instância de WhatsApp não encontrada")
+    if payload.funnel_id is not None and not db.get(CrmFunnel, payload.funnel_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funil não encontrado")
 
     if payload.message_mode == "ai_per_lead" and not (payload.objective or "").strip():
         raise HTTPException(
@@ -1885,6 +2381,8 @@ def update_whatsapp_campaign(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lista não encontrada")
     if not db.get(WhatsAppInstance, payload.instance_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Instância de WhatsApp não encontrada")
+    if payload.funnel_id is not None and not db.get(CrmFunnel, payload.funnel_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funil não encontrado")
 
     objective = (payload.objective or "").strip()
     if payload.message_mode == "ai_per_lead" and not objective:
@@ -1909,12 +2407,13 @@ def update_whatsapp_campaign(
     next_template_ids = set(template_ids)
     if existing_sends and (
         campaign.list_id != payload.list_id
+        or campaign.funnel_id != payload.funnel_id
         or current_template_ids != next_template_ids
         or campaign.message_mode != payload.message_mode
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Campanha com fila criada não pode trocar lista, templates ou modo de mensagem. Crie uma nova campanha para alterar a audiência.",
+            detail="Campanha com fila criada não pode trocar lista, funil, templates ou modo de mensagem. Crie uma nova campanha para alterar a audiência.",
         )
 
     data = payload.model_dump(exclude={"templates"})

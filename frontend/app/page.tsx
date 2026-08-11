@@ -327,6 +327,8 @@ type WhatsAppCampaign = {
   language: AiMessageLanguage;
   list_id: number;
   list_name: string;
+  funnel_id: number | null;
+  funnel_name: string;
   instance_id: number;
   instance_name: string;
   status: "draft" | "running" | "paused" | "completed" | "failed";
@@ -351,13 +353,46 @@ type WhatsAppCampaign = {
   finished_at: string | null;
 };
 
-type CrmStage = "new" | "responded" | "qualified" | "not_interested" | "converted";
-type CrmStageOption = { value: CrmStage; label: string };
+type CrmStage = string;
+
+type CrmFunnelStage = {
+  id: number;
+  funnel_id: number;
+  key: string;
+  label: string;
+  color: string;
+  position: number;
+  is_won: boolean;
+  is_lost: boolean;
+  card_count: number;
+};
+
+type CrmFunnel = {
+  id: number;
+  name: string;
+  description: string | null;
+  is_default: boolean;
+  created_at: string;
+  card_count: number;
+  stages: CrmFunnelStage[];
+};
+
+type CrmLeadFunnelSummary = {
+  id: number;
+  name: string;
+  stage: string;
+  stage_label: string;
+};
 
 type CrmLead = {
   id: number;
   lead_id: number;
   stage: CrmStage;
+  funnel_id: number;
+  funnel_name: string;
+  stage_id: number;
+  stage_label: string;
+  stage_color: string;
   qualification_notes: string | null;
   score: number | null;
   position: number | null;
@@ -373,6 +408,7 @@ type CrmLead = {
   last_message_at: string | null;
   conversation_id: number | null;
   tags: LeadTagSummary[];
+  other_funnels: CrmLeadFunnelSummary[];
 };
 
 type WhatsAppAiSettings = {
@@ -455,6 +491,7 @@ type WhatsAppCampaignFormErrors = {
   name?: string;
   objective?: string;
   list_id?: string;
+  funnel_id?: string;
   instance_id?: string;
   template_id?: string;
   min_delay_seconds?: string;
@@ -615,6 +652,7 @@ const defaultWhatsappCampaignForm = {
   message_mode: "template" as WhatsAppMessageMode,
   language: "pt" as AiMessageLanguage,
   list_id: "",
+  funnel_id: "",
   instance_id: "",
   template_id: "",
   min_delay_seconds: 120,
@@ -634,14 +672,6 @@ const defaultWhatsappTemplateForm = {
 
 const WHATSAPP_VARIABLES = ["{nome_empresa}", "{website}", "{phone}", "{niche}", "{location}"];
 
-const CRM_STAGES: CrmStageOption[] = [
-  { value: "new", label: "Novo" },
-  { value: "responded", label: "Respondeu" },
-  { value: "qualified", label: "Qualificado" },
-  { value: "not_interested", label: "Sem interesse" },
-  { value: "converted", label: "Convertido" }
-];
-
 const TAG_COLOR_OPTIONS = [
   "#e0f2fe",
   "#dcfce7",
@@ -657,6 +687,32 @@ const defaultTagForm: LeadTagForm = {
   name: "",
   color: TAG_COLOR_OPTIONS[0],
   description: ""
+};
+
+const STAGE_COLOR_OPTIONS = TAG_COLOR_OPTIONS;
+
+type CrmFunnelForm = {
+  name: string;
+  description: string;
+};
+
+type CrmStageForm = {
+  label: string;
+  color: string;
+  is_won: boolean;
+  is_lost: boolean;
+};
+
+const defaultFunnelForm: CrmFunnelForm = {
+  name: "",
+  description: ""
+};
+
+const defaultStageForm: CrmStageForm = {
+  label: "",
+  color: STAGE_COLOR_OPTIONS[0],
+  is_won: false,
+  is_lost: false
 };
 
 const defaultWhatsappAiForm = {
@@ -863,8 +919,16 @@ function whatsappInstanceStatusLabel(status: WhatsAppInstanceStatus) {
   return labels[status] || status;
 }
 
-function crmStageLabel(stage: CrmStage) {
-  return CRM_STAGES.find((item) => item.value === stage)?.label || stage;
+const DEFAULT_CRM_STAGE_LABELS: Record<string, string> = {
+  new: "Novo",
+  responded: "Respondeu",
+  qualified: "Qualificado",
+  not_interested: "Sem interesse",
+  converted: "Convertido"
+};
+
+function crmStageLabel(stage: CrmStage, stages: CrmFunnelStage[] = []) {
+  return stages.find((item) => item.key === stage)?.label || DEFAULT_CRM_STAGE_LABELS[stage] || stage;
 }
 
 function formatOptionalText(value: string | null | undefined) {
@@ -967,6 +1031,11 @@ function normalizeTagColor(value: string) {
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color : TAG_COLOR_OPTIONS[0];
 }
 
+function normalizeStageColor(value: string) {
+  const color = value.trim();
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : STAGE_COLOR_OPTIONS[0];
+}
+
 function tagPayload(form: LeadTagForm) {
   return {
     name: form.name.trim(),
@@ -977,6 +1046,19 @@ function tagPayload(form: LeadTagForm) {
 
 function tagStyle(tag: Pick<LeadTagSummary, "color">): CSSProperties {
   return { "--tag-color": normalizeTagColor(tag.color) } as CSSProperties;
+}
+
+function stageStyle(stage: Pick<CrmFunnelStage, "color">): CSSProperties {
+  return { "--stage-color": normalizeStageColor(stage.color) } as CSSProperties;
+}
+
+function crmStagePayload(form: CrmStageForm) {
+  return {
+    label: form.label.trim(),
+    color: normalizeStageColor(form.color),
+    is_won: form.is_won,
+    is_lost: form.is_lost
+  };
 }
 
 function toggleNumberSelection(selected: number[], id: number) {
@@ -1131,13 +1213,18 @@ function TagCheckboxGrid({
 
 const CRM_LEAD_DND_PREFIX = "crm-lead-";
 const CRM_STAGE_DND_PREFIX = "crm-stage-";
+const FUNNEL_STAGE_DND_PREFIX = "funnel-stage-";
 
 function crmLeadDragId(leadId: number) {
   return `${CRM_LEAD_DND_PREFIX}${leadId}`;
 }
 
-function crmStageDropId(stage: CrmStage) {
+function crmStageDropId(stage: string) {
   return `${CRM_STAGE_DND_PREFIX}${stage}`;
+}
+
+function funnelStageDragId(stageId: number) {
+  return `${FUNNEL_STAGE_DND_PREFIX}${stageId}`;
 }
 
 function parseCrmLeadDragId(id: UniqueIdentifier | null | undefined) {
@@ -1147,11 +1234,18 @@ function parseCrmLeadDragId(id: UniqueIdentifier | null | undefined) {
   return Number.isFinite(leadId) ? leadId : null;
 }
 
-function parseCrmStageDropId(id: UniqueIdentifier | null | undefined): CrmStage | null {
+function parseCrmStageDropId(id: UniqueIdentifier | null | undefined, stages: CrmFunnelStage[]): CrmStage | null {
   const value = String(id || "");
   if (!value.startsWith(CRM_STAGE_DND_PREFIX)) return null;
-  const stage = value.slice(CRM_STAGE_DND_PREFIX.length) as CrmStage;
-  return CRM_STAGES.some((item) => item.value === stage) ? stage : null;
+  const stage = value.slice(CRM_STAGE_DND_PREFIX.length);
+  return stages.some((item) => item.key === stage) ? stage : null;
+}
+
+function parseFunnelStageDragId(id: UniqueIdentifier | null | undefined) {
+  const value = String(id || "");
+  if (!value.startsWith(FUNNEL_STAGE_DND_PREFIX)) return null;
+  const stageId = Number(value.slice(FUNNEL_STAGE_DND_PREFIX.length));
+  return Number.isFinite(stageId) ? stageId : null;
 }
 
 function compareCrmLeadsForBoard(first: CrmLead, second: CrmLead) {
@@ -1166,44 +1260,49 @@ function compareCrmLeadsForBoard(first: CrmLead, second: CrmLead) {
   return second.id - first.id;
 }
 
-function emptyCrmLeadGroups(): Record<CrmStage, CrmLead[]> {
-  return CRM_STAGES.reduce(
-    (accumulator, stage) => ({ ...accumulator, [stage.value]: [] }),
-    {} as Record<CrmStage, CrmLead[]>
+function emptyCrmLeadGroups(stages: CrmFunnelStage[]): Record<string, CrmLead[]> {
+  return stages.reduce(
+    (accumulator, stage) => ({ ...accumulator, [stage.key]: [] }),
+    {} as Record<string, CrmLead[]>
   );
 }
 
-function groupCrmLeadsByStage(leads: CrmLead[]) {
-  const grouped = emptyCrmLeadGroups();
+function groupCrmLeadsByStage(leads: CrmLead[], stages: CrmFunnelStage[]) {
+  const grouped = emptyCrmLeadGroups(stages);
   leads.forEach((lead) => {
+    if (!grouped[lead.stage]) grouped[lead.stage] = [];
     grouped[lead.stage] = [...grouped[lead.stage], lead];
   });
-  CRM_STAGES.forEach((stage) => {
-    grouped[stage.value] = [...grouped[stage.value]].sort(compareCrmLeadsForBoard);
+  Object.keys(grouped).forEach((stage) => {
+    grouped[stage] = [...grouped[stage]].sort(compareCrmLeadsForBoard);
   });
   return grouped;
 }
 
-function crmStageFromDndData(data: unknown): CrmStage | null {
+function crmStageFromDndData(data: unknown, stages: CrmFunnelStage[]): CrmStage | null {
   if (!data || typeof data !== "object" || !("stage" in data)) return null;
-  const stage = String((data as { stage?: unknown }).stage || "") as CrmStage;
-  return CRM_STAGES.some((item) => item.value === stage) ? stage : null;
+  const stage = String((data as { stage?: unknown }).stage || "");
+  return stages.some((item) => item.key === stage) ? stage : null;
 }
 
-function crmDropTargetStage(over: { id: UniqueIdentifier; data: { current?: unknown } } | null | undefined) {
-  return crmStageFromDndData(over?.data.current) || parseCrmStageDropId(over?.id);
+function crmDropTargetStage(
+  over: { id: UniqueIdentifier; data: { current?: unknown } } | null | undefined,
+  stages: CrmFunnelStage[]
+) {
+  return crmStageFromDndData(over?.data.current, stages) || parseCrmStageDropId(over?.id, stages);
 }
 
 function crmTargetIndex(
   overId: UniqueIdentifier | null | undefined,
   targetStage: CrmStage,
-  grouped: Record<CrmStage, CrmLead[]>
+  grouped: Record<string, CrmLead[]>
 ) {
   const overLeadId = parseCrmLeadDragId(overId);
-  if (!overLeadId) return grouped[targetStage].length;
+  const targetLeads = grouped[targetStage] || [];
+  if (!overLeadId) return targetLeads.length;
 
-  const overIndex = grouped[targetStage].findIndex((lead) => lead.lead_id === overLeadId);
-  return overIndex >= 0 ? overIndex : grouped[targetStage].length;
+  const overIndex = targetLeads.findIndex((lead) => lead.lead_id === overLeadId);
+  return overIndex >= 0 ? overIndex : targetLeads.length;
 }
 
 function clampCrmTargetIndex(index: number, length: number) {
@@ -1214,17 +1313,18 @@ function moveCrmLeadForBoard(
   leads: CrmLead[],
   leadId: number,
   targetStage: CrmStage,
-  targetIndex: number
+  targetIndex: number,
+  stages: CrmFunnelStage[]
 ): { changed: boolean; leads: CrmLead[]; position: number } {
   const movingLead = leads.find((lead) => lead.lead_id === leadId);
   if (!movingLead) return { changed: false, leads, position: 0 };
 
-  const grouped = groupCrmLeadsByStage(leads);
+  const grouped = groupCrmLeadsByStage(leads, stages);
   const sourceStage = movingLead.stage;
-  const sourceIndex = grouped[sourceStage].findIndex((lead) => lead.lead_id === leadId);
-  const sourceLeads = grouped[sourceStage].filter((lead) => lead.lead_id !== leadId);
+  const sourceIndex = (grouped[sourceStage] || []).findIndex((lead) => lead.lead_id === leadId);
+  const sourceLeads = (grouped[sourceStage] || []).filter((lead) => lead.lead_id !== leadId);
   const targetLeads =
-    sourceStage === targetStage ? sourceLeads : grouped[targetStage].filter((lead) => lead.lead_id !== leadId);
+    sourceStage === targetStage ? sourceLeads : (grouped[targetStage] || []).filter((lead) => lead.lead_id !== leadId);
   const boundedIndex = clampCrmTargetIndex(targetIndex, targetLeads.length);
 
   if (sourceStage === targetStage && sourceIndex === boundedIndex) {
@@ -1247,6 +1347,17 @@ function moveCrmLeadForBoard(
     leads: leads.map((lead) => updates.get(lead.lead_id) || lead),
     position: boundedIndex
   };
+}
+
+function moveFunnelStageIds(stages: CrmFunnelStage[], activeStageId: number, overStageId: number) {
+  const ordered = [...stages].sort((first, second) => first.position - second.position || first.id - second.id);
+  const fromIndex = ordered.findIndex((stage) => stage.id === activeStageId);
+  const toIndex = ordered.findIndex((stage) => stage.id === overStageId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return null;
+
+  const [movingStage] = ordered.splice(fromIndex, 1);
+  ordered.splice(toIndex, 0, movingStage);
+  return ordered.map((stage) => stage.id);
 }
 
 function CrmLeadCardContent({ lead }: { lead: CrmLead }) {
@@ -1316,14 +1427,14 @@ function CrmStageColumn({
   isDragOver,
   children
 }: {
-  stage: CrmStageOption;
+  stage: CrmFunnelStage;
   leads: CrmLead[];
   isDragOver: boolean;
   children: ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({
-    id: crmStageDropId(stage.value),
-    data: { type: "stage", stage: stage.value }
+    id: crmStageDropId(stage.key),
+    data: { type: "stage", stage: stage.key }
   });
 
   return (
@@ -1333,7 +1444,9 @@ function CrmStageColumn({
           <h2>{stage.label}</h2>
           <small>{leads.length} leads</small>
         </div>
-        <span className={`status-pill ${stage.value}`}>{leads.length}</span>
+        <span className="stage-count-pill" style={stageStyle(stage)}>
+          {leads.length}
+        </span>
       </div>
 
       <SortableContext items={leads.map((lead) => crmLeadDragId(lead.lead_id))} strategy={verticalListSortingStrategy}>
@@ -1343,6 +1456,66 @@ function CrmStageColumn({
         </div>
       </SortableContext>
     </section>
+  );
+}
+
+function SortableFunnelStageRow({
+  stage,
+  disabled,
+  onEdit,
+  onDelete
+}: {
+  stage: CrmFunnelStage;
+  disabled: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: funnelStageDragId(stage.id),
+    data: { type: "funnel-stage", stageId: stage.id },
+    disabled
+  });
+  const style: CSSProperties = {
+    transform: transform
+      ? `translate3d(${Math.round(transform.x)}px, ${Math.round(transform.y)}px, 0) scaleX(${transform.scaleX ?? 1}) scaleY(${transform.scaleY ?? 1})`
+      : undefined,
+    transition
+  };
+
+  return (
+    <article className={`stage-manager-row ${isDragging ? "is-dragging" : ""}`} ref={setNodeRef} style={style}>
+      <button
+        className="stage-drag-handle"
+        disabled={disabled}
+        title="Reordenar estágio"
+        type="button"
+        {...attributes}
+        {...listeners}
+      >
+        <MousePointerClick size={15} />
+      </button>
+      <div className="stage-manager-main">
+        <div>
+          <span className="stage-color-dot" style={stageStyle(stage)} />
+          <strong>{stage.label}</strong>
+        </div>
+        <small>
+          {stage.card_count} cards · chave {stage.key}
+        </small>
+        <div className="stage-terminal-flags">
+          {stage.is_won ? <span>Ganho</span> : null}
+          {stage.is_lost ? <span>Perda</span> : null}
+        </div>
+      </div>
+      <div className="row-actions">
+        <button className="icon-button" disabled={disabled} onClick={onEdit} title="Editar estágio" type="button">
+          <Edit3 size={16} />
+        </button>
+        <button className="icon-button danger" disabled={disabled} onClick={onDelete} title="Excluir estágio" type="button">
+          <Trash2 size={16} />
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -1809,6 +1982,8 @@ export default function Home() {
   const [whatsappInstances, setWhatsappInstances] = useState<WhatsAppInstance[]>([]);
   const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsAppMessageTemplate[]>([]);
   const [whatsappCampaigns, setWhatsappCampaigns] = useState<WhatsAppCampaign[]>([]);
+  const [crmFunnels, setCrmFunnels] = useState<CrmFunnel[]>([]);
+  const [selectedCrmFunnelId, setSelectedCrmFunnelId] = useState<number | null>(null);
   const [crmLeads, setCrmLeads] = useState<CrmLead[]>([]);
   const [crmNoteDrafts, setCrmNoteDrafts] = useState<Record<number, string>>({});
   const [crmDetailLeadId, setCrmDetailLeadId] = useState<number | null>(null);
@@ -1816,6 +1991,19 @@ export default function Home() {
   const [crmTagFilterMode, setCrmTagFilterMode] = useState<TagFilterMode>("any");
   const [activeCrmDragLeadId, setActiveCrmDragLeadId] = useState<number | null>(null);
   const [overCrmStage, setOverCrmStage] = useState<CrmStage | null>(null);
+  const [funnelManagerOpen, setFunnelManagerOpen] = useState(false);
+  const [funnelForm, setFunnelForm] = useState<CrmFunnelForm>(defaultFunnelForm);
+  const [editingFunnelId, setEditingFunnelId] = useState<number | null>(null);
+  const [stageForm, setStageForm] = useState<CrmStageForm>(defaultStageForm);
+  const [editingStageId, setEditingStageId] = useState<number | null>(null);
+  const [funnelDeleteDialog, setFunnelDeleteDialog] = useState<CrmFunnel | null>(null);
+  const [funnelDeleteMoveToId, setFunnelDeleteMoveToId] = useState("");
+  const [stageDeleteDialog, setStageDeleteDialog] = useState<CrmFunnelStage | null>(null);
+  const [stageDeleteMoveToId, setStageDeleteMoveToId] = useState("");
+  const [funnelError, setFunnelError] = useState("");
+  const [funnelMessage, setFunnelMessage] = useState("");
+  const [funnelBusyAction, setFunnelBusyAction] = useState("");
+  const [activeFunnelStageDragId, setActiveFunnelStageDragId] = useState<number | null>(null);
   const [whatsappAiSettings, setWhatsappAiSettings] = useState<WhatsAppAiSettings | null>(null);
   const [whatsappAiForm, setWhatsappAiForm] = useState(defaultWhatsappAiForm);
   const [whatsappPortfolioItems, setWhatsappPortfolioItems] = useState<WhatsAppPortfolioItem[]>([]);
@@ -1896,6 +2084,23 @@ export default function Home() {
     () => leadLists.filter((list) => list.channel === "whatsapp" || list.channel === "both"),
     [leadLists]
   );
+  const defaultCrmFunnel = useMemo(
+    () => crmFunnels.find((funnel) => funnel.is_default) || crmFunnels[0] || null,
+    [crmFunnels]
+  );
+  const selectedCrmFunnel = useMemo(
+    () => crmFunnels.find((funnel) => funnel.id === selectedCrmFunnelId) || defaultCrmFunnel,
+    [crmFunnels, defaultCrmFunnel, selectedCrmFunnelId]
+  );
+  const selectedCrmStages = useMemo(
+    () => [...(selectedCrmFunnel?.stages || [])].sort((first, second) => first.position - second.position || first.id - second.id),
+    [selectedCrmFunnel]
+  );
+  const selectedCrmFunnelIdValue = selectedCrmFunnel?.id ?? null;
+  const activeFunnelStage = useMemo(
+    () => selectedCrmStages.find((stage) => stage.id === activeFunnelStageDragId) || null,
+    [activeFunnelStageDragId, selectedCrmStages]
+  );
 
   const leadNicheOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.niche)), [leads]);
   const leadLocationOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.location)), [leads]);
@@ -1923,11 +2128,12 @@ export default function Home() {
   ]);
   const crmApiPath = useMemo(() => {
     const params = new URLSearchParams();
+    if (selectedCrmFunnelIdValue) params.set("funnel_id", String(selectedCrmFunnelIdValue));
     selectedCrmTagIds.forEach((tagId) => params.append("tag_ids", String(tagId)));
     if (selectedCrmTagIds.length > 0) params.set("tag_filter_mode", crmTagFilterMode);
     const query = params.toString();
     return `/api/crm/leads${query ? `?${query}` : ""}`;
-  }, [crmTagFilterMode, selectedCrmTagIds]);
+  }, [crmTagFilterMode, selectedCrmFunnelIdValue, selectedCrmTagIds]);
   const filteredLeads = useMemo(() => {
     const normalizedLeadNameQuery = leadNameQuery.trim().toLowerCase();
     return leads.filter((lead) => {
@@ -2015,7 +2221,7 @@ export default function Home() {
 
     return { connected, running, sent, total };
   }, [whatsappCampaigns, whatsappInstances]);
-  const crmLeadsByStage = useMemo(() => groupCrmLeadsByStage(crmLeads), [crmLeads]);
+  const crmLeadsByStage = useMemo(() => groupCrmLeadsByStage(crmLeads, selectedCrmStages), [crmLeads, selectedCrmStages]);
   const selectedCrmLead = useMemo(
     () => (crmDetailLeadId ? crmLeads.find((lead) => lead.lead_id === crmDetailLeadId) || null : null),
     [crmDetailLeadId, crmLeads]
@@ -2213,10 +2419,11 @@ export default function Home() {
   }
 
   async function refreshWhatsappData() {
-    const [nextInstances, nextTemplates, nextCampaigns, nextCrmLeads, nextAiSettings, nextPortfolioItems, nextTags] = await Promise.all([
+    const [nextInstances, nextTemplates, nextCampaigns, nextFunnels, nextCrmLeads, nextAiSettings, nextPortfolioItems, nextTags] = await Promise.all([
       apiFetch<WhatsAppInstance[]>("/api/whatsapp/instances"),
       apiFetch<WhatsAppMessageTemplate[]>("/api/whatsapp/templates"),
       apiFetch<WhatsAppCampaign[]>("/api/whatsapp/campaigns"),
+      apiFetch<CrmFunnel[]>("/api/crm/funnels"),
       apiFetch<CrmLead[]>(crmApiPath),
       apiFetch<WhatsAppAiSettings>("/api/whatsapp/ai-settings"),
       apiFetch<WhatsAppPortfolioItem[]>("/api/whatsapp/portfolio"),
@@ -2226,6 +2433,7 @@ export default function Home() {
     setWhatsappInstances(nextInstances);
     setWhatsappTemplates(nextTemplates);
     setWhatsappCampaigns(nextCampaigns);
+    setCrmFunnels(nextFunnels);
     setWhatsappAiSettings(nextAiSettings);
     setWhatsappAiForm({
       system_prompt: nextAiSettings.system_prompt,
@@ -2237,7 +2445,7 @@ export default function Home() {
     setTags(nextTags);
     setCrmNoteDrafts((current) =>
       Object.fromEntries(
-        nextCrmLeads.map((lead) => [lead.lead_id, current[lead.lead_id] ?? lead.qualification_notes ?? ""])
+        nextCrmLeads.map((lead) => [lead.id, current[lead.id] ?? lead.qualification_notes ?? ""])
       )
     );
   }
@@ -2472,11 +2680,22 @@ export default function Home() {
             : whatsappTemplates[0]?.id
               ? String(whatsappTemplates[0].id)
               : "";
+      const funnelId =
+        current.funnel_id && crmFunnels.some((funnel) => String(funnel.id) === current.funnel_id)
+          ? current.funnel_id
+          : "";
 
-      if (listId === current.list_id && instanceId === current.instance_id && templateId === current.template_id) return current;
-      return { ...current, list_id: listId, instance_id: instanceId, template_id: templateId };
+      if (
+        listId === current.list_id &&
+        instanceId === current.instance_id &&
+        templateId === current.template_id &&
+        funnelId === current.funnel_id
+      ) {
+        return current;
+      }
+      return { ...current, list_id: listId, instance_id: instanceId, template_id: templateId, funnel_id: funnelId };
     });
-  }, [connectedWhatsappInstances, whatsappLeadLists, whatsappTemplates]);
+  }, [connectedWhatsappInstances, crmFunnels, whatsappLeadLists, whatsappTemplates]);
 
   useEffect(() => {
     if (templates.length === 0) {
@@ -2531,6 +2750,18 @@ export default function Home() {
     refreshWhatsappData().catch(() => undefined);
     refreshEmailData().catch(() => undefined);
   }, [user, activeView, crmApiPath]);
+
+  useEffect(() => {
+    if (crmFunnels.length === 0) {
+      setSelectedCrmFunnelId(null);
+      return;
+    }
+
+    setSelectedCrmFunnelId((current) => {
+      if (current && crmFunnels.some((funnel) => funnel.id === current)) return current;
+      return crmFunnels.find((funnel) => funnel.is_default)?.id || crmFunnels[0].id;
+    });
+  }, [crmFunnels]);
 
   useEffect(() => {
     if (!user || !whatsappViews.includes(activeView)) return;
@@ -3384,6 +3615,28 @@ export default function Home() {
     setWhatsappMessage("");
     setEditingWhatsappCampaignId(null);
     setWhatsappCampaignFormErrors({});
+    setWhatsappCampaignForm((current) => ({
+      ...defaultWhatsappCampaignForm,
+      list_id:
+        current.list_id && whatsappLeadLists.some((list) => String(list.id) === current.list_id)
+          ? current.list_id
+          : whatsappLeadLists[0]?.id
+            ? String(whatsappLeadLists[0].id)
+            : "",
+      funnel_id: "",
+      instance_id:
+        current.instance_id && connectedWhatsappInstances.some((instance) => String(instance.id) === current.instance_id)
+          ? current.instance_id
+          : connectedWhatsappInstances[0]?.id
+            ? String(connectedWhatsappInstances[0].id)
+            : "",
+      template_id:
+        current.template_id && whatsappTemplates.some((template) => String(template.id) === current.template_id)
+          ? current.template_id
+          : whatsappTemplates[0]?.id
+            ? String(whatsappTemplates[0].id)
+            : ""
+    }));
     setWhatsappCampaignModalOpen(true);
   }
 
@@ -3398,6 +3651,7 @@ export default function Home() {
       message_mode: campaign.message_mode || "template",
       language: campaign.language || "pt",
       list_id: String(campaign.list_id),
+      funnel_id: campaign.funnel_id ? String(campaign.funnel_id) : "",
       instance_id: String(campaign.instance_id),
       template_id: campaign.template_ids[0] ? String(campaign.template_ids[0]) : "",
       min_delay_seconds: campaign.min_delay_seconds,
@@ -3431,6 +3685,9 @@ export default function Home() {
     }
     if (!whatsappCampaignForm.list_id) {
       errors.list_id = "Escolha uma lista de leads.";
+    }
+    if (whatsappCampaignForm.funnel_id && !crmFunnels.some((funnel) => String(funnel.id) === whatsappCampaignForm.funnel_id)) {
+      errors.funnel_id = "Escolha um funil válido.";
     }
     if (!whatsappCampaignForm.instance_id) {
       errors.instance_id = "Escolha uma instância conectada.";
@@ -3467,6 +3724,7 @@ export default function Home() {
     const { template_id, ...campaignPayload } = whatsappCampaignForm;
     const templates =
       whatsappCampaignForm.message_mode === "template" ? [{ template_id: Number(template_id), weight: 1 }] : [];
+    const funnelId = whatsappCampaignForm.funnel_id ? Number(whatsappCampaignForm.funnel_id) : null;
     setWhatsappBusyAction("create-campaign");
 
     try {
@@ -3477,6 +3735,7 @@ export default function Home() {
           body: JSON.stringify({
             ...campaignPayload,
             list_id: Number(whatsappCampaignForm.list_id),
+            funnel_id: funnelId,
             instance_id: Number(whatsappCampaignForm.instance_id),
             templates
           })
@@ -3485,6 +3744,7 @@ export default function Home() {
       setWhatsappCampaignForm({
         ...defaultWhatsappCampaignForm,
         list_id: whatsappLeadLists[0]?.id ? String(whatsappLeadLists[0].id) : "",
+        funnel_id: "",
         instance_id: connectedWhatsappInstances[0]?.id ? String(connectedWhatsappInstances[0].id) : "",
         template_id: whatsappTemplates[0]?.id ? String(whatsappTemplates[0].id) : ""
       });
@@ -3569,7 +3829,7 @@ export default function Home() {
 
   function crmNotesChanged(lead: CrmLead | null) {
     if (!lead) return false;
-    const noteDraft = crmNoteDrafts[lead.lead_id] ?? lead.qualification_notes ?? "";
+    const noteDraft = crmNoteDrafts[lead.id] ?? lead.qualification_notes ?? "";
     return noteDraft !== (lead.qualification_notes || "");
   }
 
@@ -3586,7 +3846,7 @@ export default function Home() {
       if (selectedCrmLead) {
         setCrmNoteDrafts((current) => ({
           ...current,
-          [selectedCrmLead.lead_id]: selectedCrmLead.qualification_notes || ""
+          [selectedCrmLead.id]: selectedCrmLead.qualification_notes || ""
         }));
       }
     }
@@ -3608,7 +3868,7 @@ export default function Home() {
   }
 
   function handleCrmDragOver(event: DragOverEvent) {
-    setOverCrmStage(crmDropTargetStage(event.over));
+    setOverCrmStage(crmDropTargetStage(event.over, selectedCrmStages));
   }
 
   function handleCrmDragCancel() {
@@ -3618,16 +3878,16 @@ export default function Home() {
 
   async function handleCrmDragEnd(event: DragEndEvent) {
     const leadId = parseCrmLeadDragId(event.active.id);
-    const targetStage = crmDropTargetStage(event.over);
+    const targetStage = crmDropTargetStage(event.over, selectedCrmStages);
     setActiveCrmDragLeadId(null);
     setOverCrmStage(null);
 
-    if (!leadId || !targetStage) return;
+    if (!leadId || !targetStage || !selectedCrmFunnelIdValue) return;
 
     const previousLeads = crmLeads;
-    const grouped = groupCrmLeadsByStage(previousLeads);
+    const grouped = groupCrmLeadsByStage(previousLeads, selectedCrmStages);
     const targetIndex = crmTargetIndex(event.over?.id, targetStage, grouped);
-    const moveResult = moveCrmLeadForBoard(previousLeads, leadId, targetStage, targetIndex);
+    const moveResult = moveCrmLeadForBoard(previousLeads, leadId, targetStage, targetIndex, selectedCrmStages);
     if (!moveResult.changed) return;
 
     setWhatsappError("");
@@ -3638,10 +3898,10 @@ export default function Home() {
     try {
       const updatedLead = await apiFetch<CrmLead>(`/api/crm/leads/${leadId}`, {
         method: "PATCH",
-        body: JSON.stringify({ stage: targetStage, position: moveResult.position })
+        body: JSON.stringify({ stage: targetStage, position: moveResult.position, funnel_id: selectedCrmFunnelIdValue })
       });
-      setCrmLeads((current) => current.map((lead) => (lead.lead_id === leadId ? { ...lead, ...updatedLead } : lead)));
-      setCrmNoteDrafts((current) => ({ ...current, [leadId]: updatedLead.qualification_notes || "" }));
+      setCrmLeads((current) => current.map((lead) => (lead.id === updatedLead.id ? { ...lead, ...updatedLead } : lead)));
+      setCrmNoteDrafts((current) => ({ ...current, [updatedLead.id]: updatedLead.qualification_notes || "" }));
       setWhatsappMessage("CRM atualizado.");
     } catch (error) {
       setCrmLeads(previousLeads);
@@ -3653,20 +3913,25 @@ export default function Home() {
 
   async function patchCrmLead(
     leadId: number,
-    payload: { stage?: CrmStage; position?: number; qualification_notes?: string | null }
+    payload: { stage?: CrmStage; position?: number; qualification_notes?: string | null; funnel_id?: number }
   ) {
     setWhatsappError("");
     setWhatsappMessage("");
     setWhatsappBusyAction(`crm-${leadId}`);
     const shouldRefreshBoardOrder = payload.stage !== undefined || payload.position !== undefined;
+    const currentLead = crmLeads.find((lead) => lead.lead_id === leadId);
+    const requestPayload = {
+      ...payload,
+      funnel_id: payload.funnel_id ?? currentLead?.funnel_id ?? selectedCrmFunnelIdValue ?? undefined
+    };
 
     try {
       const updatedLead = await apiFetch<CrmLead>(`/api/crm/leads/${leadId}`, {
         method: "PATCH",
-        body: JSON.stringify(payload)
+        body: JSON.stringify(requestPayload)
       });
-      setCrmLeads((current) => current.map((lead) => (lead.lead_id === leadId ? updatedLead : lead)));
-      setCrmNoteDrafts((current) => ({ ...current, [leadId]: updatedLead.qualification_notes || "" }));
+      setCrmLeads((current) => current.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead)));
+      setCrmNoteDrafts((current) => ({ ...current, [updatedLead.id]: updatedLead.qualification_notes || "" }));
       setWhatsappMessage("CRM atualizado.");
       if (shouldRefreshBoardOrder) {
         await refreshWhatsappData();
@@ -3680,15 +3945,15 @@ export default function Home() {
 
   function handleCrmStageChange(lead: CrmLead, stage: CrmStage) {
     if (stage === lead.stage) return;
-    patchCrmLead(lead.lead_id, { stage });
+    patchCrmLead(lead.lead_id, { stage, funnel_id: lead.funnel_id });
   }
 
-  function handleCrmNoteChange(leadId: number, notes: string) {
-    setCrmNoteDrafts((current) => ({ ...current, [leadId]: notes }));
+  function handleCrmNoteChange(cardId: number, notes: string) {
+    setCrmNoteDrafts((current) => ({ ...current, [cardId]: notes }));
   }
 
   function saveCrmNotes(lead: CrmLead) {
-    patchCrmLead(lead.lead_id, { qualification_notes: crmNoteDrafts[lead.lead_id] || null });
+    patchCrmLead(lead.lead_id, { funnel_id: lead.funnel_id, qualification_notes: crmNoteDrafts[lead.id] || null });
   }
 
   function applyLeadTagSnapshot(updatedLead: Lead) {
@@ -3710,6 +3975,253 @@ export default function Home() {
       )
     );
     setEditingLead((current) => (current?.id === updatedLead.id ? updatedLead : current));
+  }
+
+  async function refreshCrmFunnels() {
+    const nextFunnels = await apiFetch<CrmFunnel[]>("/api/crm/funnels");
+    setCrmFunnels(nextFunnels);
+    return nextFunnels;
+  }
+
+  function openFunnelManager() {
+    setFunnelError("");
+    setFunnelMessage("");
+    setFunnelForm(defaultFunnelForm);
+    setStageForm(defaultStageForm);
+    setEditingFunnelId(null);
+    setEditingStageId(null);
+    setFunnelDeleteDialog(null);
+    setStageDeleteDialog(null);
+    setFunnelManagerOpen(true);
+    refreshCrmFunnels().catch((error) =>
+      setFunnelError(error instanceof Error ? error.message : "Não foi possível carregar os funis.")
+    );
+  }
+
+  function closeFunnelManager() {
+    if (funnelBusyAction) return;
+    setFunnelManagerOpen(false);
+    setFunnelError("");
+    setFunnelMessage("");
+    setFunnelForm(defaultFunnelForm);
+    setStageForm(defaultStageForm);
+    setEditingFunnelId(null);
+    setEditingStageId(null);
+    setFunnelDeleteDialog(null);
+    setStageDeleteDialog(null);
+  }
+
+  function startEditFunnel(funnel: CrmFunnel) {
+    setFunnelError("");
+    setFunnelMessage("");
+    setSelectedCrmFunnelId(funnel.id);
+    setEditingFunnelId(funnel.id);
+    setFunnelForm({
+      name: funnel.name,
+      description: funnel.description || ""
+    });
+  }
+
+  function cancelEditFunnel() {
+    setEditingFunnelId(null);
+    setFunnelForm(defaultFunnelForm);
+    setFunnelError("");
+  }
+
+  async function handleSaveFunnel(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFunnelError("");
+    setFunnelMessage("");
+
+    if (!funnelForm.name.trim()) {
+      setFunnelError("Informe o nome do funil.");
+      return;
+    }
+
+    setFunnelBusyAction(editingFunnelId ? `save-funnel-${editingFunnelId}` : "create-funnel");
+    try {
+      const savedFunnel = await apiFetch<CrmFunnel>(editingFunnelId ? `/api/crm/funnels/${editingFunnelId}` : "/api/crm/funnels", {
+        method: editingFunnelId ? "PATCH" : "POST",
+        body: JSON.stringify({
+          name: funnelForm.name.trim(),
+          description: funnelForm.description.trim() || null
+        })
+      });
+      setSelectedCrmFunnelId(savedFunnel.id);
+      setFunnelForm(defaultFunnelForm);
+      setEditingFunnelId(null);
+      setFunnelMessage(editingFunnelId ? "Funil atualizado." : "Funil criado.");
+      await refreshWhatsappData();
+    } catch (error) {
+      setFunnelError(error instanceof Error ? error.message : "Não foi possível salvar o funil.");
+    } finally {
+      setFunnelBusyAction("");
+    }
+  }
+
+  function requestDeleteFunnel(funnel: CrmFunnel) {
+    setFunnelError("");
+    setFunnelMessage("");
+    if (funnel.is_default) {
+      setFunnelError("Não é possível excluir o funil padrão.");
+      return;
+    }
+    setFunnelDeleteDialog(funnel);
+    setFunnelDeleteMoveToId("");
+  }
+
+  async function confirmDeleteFunnel() {
+    if (!funnelDeleteDialog) return;
+
+    const moveToFunnelId = funnelDeleteMoveToId ? Number(funnelDeleteMoveToId) : null;
+    if (funnelDeleteDialog.card_count > 0 && !moveToFunnelId) {
+      setFunnelError("Escolha um funil de destino para mover os cards antes de excluir.");
+      return;
+    }
+
+    setFunnelError("");
+    setFunnelMessage("");
+    setFunnelBusyAction(`delete-funnel-${funnelDeleteDialog.id}`);
+    try {
+      const query = moveToFunnelId ? `?move_to_funnel_id=${moveToFunnelId}` : "";
+      await apiFetch<{ deleted: boolean }>(`/api/crm/funnels/${funnelDeleteDialog.id}${query}`, { method: "DELETE" });
+      setSelectedCrmFunnelId(moveToFunnelId || defaultCrmFunnel?.id || null);
+      setFunnelDeleteDialog(null);
+      setFunnelDeleteMoveToId("");
+      setFunnelMessage("Funil excluído.");
+      await refreshWhatsappData();
+    } catch (error) {
+      setFunnelError(error instanceof Error ? error.message : "Não foi possível excluir o funil.");
+    } finally {
+      setFunnelBusyAction("");
+    }
+  }
+
+  function startEditStage(stage: CrmFunnelStage) {
+    setFunnelError("");
+    setFunnelMessage("");
+    setEditingStageId(stage.id);
+    setStageForm({
+      label: stage.label,
+      color: normalizeStageColor(stage.color),
+      is_won: stage.is_won,
+      is_lost: stage.is_lost
+    });
+  }
+
+  function cancelEditStage() {
+    setEditingStageId(null);
+    setStageForm(defaultStageForm);
+    setFunnelError("");
+  }
+
+  async function handleSaveStage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedCrmFunnel) return;
+
+    setFunnelError("");
+    setFunnelMessage("");
+    if (!stageForm.label.trim()) {
+      setFunnelError("Informe o nome do estágio.");
+      return;
+    }
+
+    setFunnelBusyAction(editingStageId ? `save-stage-${editingStageId}` : "create-stage");
+    try {
+      await apiFetch<CrmFunnelStage>(
+        editingStageId
+          ? `/api/crm/funnels/${selectedCrmFunnel.id}/stages/${editingStageId}`
+          : `/api/crm/funnels/${selectedCrmFunnel.id}/stages`,
+        {
+          method: editingStageId ? "PATCH" : "POST",
+          body: JSON.stringify(crmStagePayload(stageForm))
+        }
+      );
+      setEditingStageId(null);
+      setStageForm(defaultStageForm);
+      setFunnelMessage(editingStageId ? "Estágio atualizado." : "Estágio criado.");
+      await refreshWhatsappData();
+    } catch (error) {
+      setFunnelError(error instanceof Error ? error.message : "Não foi possível salvar o estágio.");
+    } finally {
+      setFunnelBusyAction("");
+    }
+  }
+
+  function requestDeleteStage(stage: CrmFunnelStage) {
+    setFunnelError("");
+    setFunnelMessage("");
+    if (selectedCrmStages.length <= 1) {
+      setFunnelError("Todo funil precisa ter pelo menos um estágio.");
+      return;
+    }
+    setStageDeleteDialog(stage);
+    setStageDeleteMoveToId("");
+  }
+
+  async function confirmDeleteStage() {
+    if (!stageDeleteDialog || !selectedCrmFunnel) return;
+
+    const moveToStageId = stageDeleteMoveToId ? Number(stageDeleteMoveToId) : null;
+    if (stageDeleteDialog.card_count > 0 && !moveToStageId) {
+      setFunnelError("Escolha um estágio de destino para mover os cards antes de excluir.");
+      return;
+    }
+
+    setFunnelError("");
+    setFunnelMessage("");
+    setFunnelBusyAction(`delete-stage-${stageDeleteDialog.id}`);
+    try {
+      const query = moveToStageId ? `?move_to_stage_id=${moveToStageId}` : "";
+      await apiFetch<{ deleted: boolean }>(
+        `/api/crm/funnels/${selectedCrmFunnel.id}/stages/${stageDeleteDialog.id}${query}`,
+        { method: "DELETE" }
+      );
+      setStageDeleteDialog(null);
+      setStageDeleteMoveToId("");
+      setStageForm((current) => (editingStageId === stageDeleteDialog.id ? defaultStageForm : current));
+      setEditingStageId((current) => (current === stageDeleteDialog.id ? null : current));
+      setFunnelMessage("Estágio excluído.");
+      await refreshWhatsappData();
+    } catch (error) {
+      setFunnelError(error instanceof Error ? error.message : "Não foi possível excluir o estágio.");
+    } finally {
+      setFunnelBusyAction("");
+    }
+  }
+
+  function handleFunnelStageDragStart(event: DragStartEvent) {
+    setActiveFunnelStageDragId(parseFunnelStageDragId(event.active.id));
+  }
+
+  function handleFunnelStageDragCancel() {
+    setActiveFunnelStageDragId(null);
+  }
+
+  async function handleFunnelStageDragEnd(event: DragEndEvent) {
+    const activeStageId = parseFunnelStageDragId(event.active.id);
+    const overStageId = parseFunnelStageDragId(event.over?.id);
+    setActiveFunnelStageDragId(null);
+
+    if (!selectedCrmFunnel || !activeStageId || !overStageId) return;
+    const stageIds = moveFunnelStageIds(selectedCrmStages, activeStageId, overStageId);
+    if (!stageIds) return;
+
+    setFunnelError("");
+    setFunnelMessage("");
+    setFunnelBusyAction("reorder-stages");
+    try {
+      await apiFetch<CrmFunnelStage[]>(`/api/crm/funnels/${selectedCrmFunnel.id}/stages`, {
+        method: "PATCH",
+        body: JSON.stringify({ stage_ids: stageIds })
+      });
+      setFunnelMessage("Ordem dos estágios atualizada.");
+      await refreshWhatsappData();
+    } catch (error) {
+      setFunnelError(error instanceof Error ? error.message : "Não foi possível reordenar os estágios.");
+    } finally {
+      setFunnelBusyAction("");
+    }
   }
 
   function openTagManager() {
@@ -5541,6 +6053,8 @@ export default function Home() {
                         <tr key={campaign.id}>
                           <td>
                             <strong>{campaign.name}</strong>
+                            <span>{campaign.list_name}</span>
+                            <span>Funil: {campaign.funnel_name || defaultCrmFunnel?.name || "Funil padrão"}</span>
                             {campaign.objective ? <span>{campaign.objective}</span> : null}
                             <span>{campaign.message || campaign.error}</span>
                           </td>
@@ -5626,6 +6140,25 @@ export default function Home() {
                 </div>
                 <div className="lead-actions">
                   <span className="muted-count">{crmLeads.length} cards</span>
+                  <label className="crm-funnel-selector">
+                    Funil
+                    <select
+                      disabled={crmFunnels.length === 0}
+                      value={selectedCrmFunnelIdValue || ""}
+                      onChange={(event) => setSelectedCrmFunnelId(event.target.value ? Number(event.target.value) : null)}
+                    >
+                      {crmFunnels.map((funnel) => (
+                        <option key={funnel.id} value={funnel.id}>
+                          {funnel.name}
+                          {funnel.is_default ? " · padrão" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="secondary-button compact-button" onClick={openFunnelManager} type="button">
+                    <Settings size={16} />
+                    Gerenciar funis
+                  </button>
                   <button className="secondary-button compact-button" onClick={openTagManager} type="button">
                     <Tags size={16} />
                     Gerenciar tags
@@ -5665,19 +6198,20 @@ export default function Home() {
               sensors={crmDndSensors}
             >
               <section className="crm-board" aria-label="Pipeline de CRM">
-                {CRM_STAGES.map((stage) => {
-                  const stageLeads = crmLeadsByStage[stage.value] || [];
+                {selectedCrmStages.length === 0 ? <p className="empty-state">Nenhum estágio neste funil.</p> : null}
+                {selectedCrmStages.map((stage) => {
+                  const stageLeads = crmLeadsByStage[stage.key] || [];
                   return (
                     <CrmStageColumn
-                      isDragOver={overCrmStage === stage.value}
-                      key={stage.value}
+                      isDragOver={overCrmStage === stage.key}
+                      key={stage.id}
                       leads={stageLeads}
                       stage={stage}
                     >
                       {stageLeads.map((lead) => (
                         <SortableCrmLeadCard
                           disabled={whatsappBusyAction === `crm-${lead.lead_id}`}
-                          key={lead.lead_id}
+                          key={lead.id}
                           lead={lead}
                           onOpen={() => openCrmDetailModal(lead)}
                         />
@@ -7040,6 +7574,26 @@ export default function Home() {
                 {whatsappCampaignFormErrors.list_id ? <small className="field-error">{whatsappCampaignFormErrors.list_id}</small> : null}
               </label>
               <label>
+                Funil do CRM
+                <select
+                  value={whatsappCampaignForm.funnel_id}
+                  onChange={(event) => {
+                    setWhatsappCampaignForm({ ...whatsappCampaignForm, funnel_id: event.target.value });
+                    setWhatsappCampaignFormErrors((current) => ({ ...current, funnel_id: "" }));
+                  }}
+                >
+                  <option value="">Funil padrão{defaultCrmFunnel ? ` · ${defaultCrmFunnel.name}` : ""}</option>
+                  {crmFunnels
+                    .filter((funnel) => !funnel.is_default)
+                    .map((funnel) => (
+                      <option key={funnel.id} value={funnel.id}>
+                        {funnel.name}
+                      </option>
+                    ))}
+                </select>
+                {whatsappCampaignFormErrors.funnel_id ? <small className="field-error">{whatsappCampaignFormErrors.funnel_id}</small> : null}
+              </label>
+              <label>
                 Instância conectada
                 <select
                   value={whatsappCampaignForm.instance_id}
@@ -7481,12 +8035,28 @@ export default function Home() {
         ? (() => {
             const website = safeText(selectedCrmLead.website).trim();
             const websiteHref = website && !/^https?:\/\//i.test(website) ? `https://${website}` : website;
-            const noteDraft = crmNoteDrafts[selectedCrmLead.lead_id] ?? selectedCrmLead.qualification_notes ?? "";
+            const noteDraft = crmNoteDrafts[selectedCrmLead.id] ?? selectedCrmLead.qualification_notes ?? "";
             const crmBusy = whatsappBusyAction === `crm-${selectedCrmLead.lead_id}`;
             const crmTagBusy =
               tagBusyAction === "crm-create-tag" || tagBusyAction.startsWith(`lead-tag-${selectedCrmLead.lead_id}-`);
             const notesChanged = crmNotesChanged(selectedCrmLead);
             const selectedCrmLeadTagIds = selectedCrmLead.tags.map((tag) => tag.id);
+            const currentStageOptions = selectedCrmStages.some((stage) => stage.key === selectedCrmLead.stage)
+              ? selectedCrmStages
+              : [
+                  ...selectedCrmStages,
+                  {
+                    id: selectedCrmLead.stage_id,
+                    funnel_id: selectedCrmLead.funnel_id,
+                    key: selectedCrmLead.stage,
+                    label: selectedCrmLead.stage_label || crmStageLabel(selectedCrmLead.stage, selectedCrmStages),
+                    color: selectedCrmLead.stage_color || STAGE_COLOR_OPTIONS[0],
+                    position: selectedCrmStages.length,
+                    is_won: false,
+                    is_lost: false,
+                    card_count: 0
+                  }
+                ];
 
             return (
               <div className="modal-backdrop" onMouseDown={handleCrmDetailBackdropMouseDown}>
@@ -7502,9 +8072,28 @@ export default function Home() {
                   </div>
 
                   <div className="crm-detail-meta">
+                    <span>{selectedCrmLead.funnel_name}</span>
                     <span>{formatOptionalText(selectedCrmLead.niche)}</span>
                     <span>{formatOptionalText(selectedCrmLead.location)}</span>
                   </div>
+                  {selectedCrmLead.other_funnels.length > 0 ? (
+                    <div className="crm-other-funnels">
+                      <span>Também está em:</span>
+                      {selectedCrmLead.other_funnels.map((funnel) => (
+                        <button
+                          className="filter-tag all-tag"
+                          key={funnel.id}
+                          onClick={() => {
+                            setSelectedCrmFunnelId(funnel.id);
+                            setCrmDetailLeadId(null);
+                          }}
+                          type="button"
+                        >
+                          {funnel.name} · {funnel.stage_label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
 
                   <dl className="crm-detail-list">
                     <div>
@@ -7581,10 +8170,10 @@ export default function Home() {
                     <select
                       disabled={crmBusy}
                       value={selectedCrmLead.stage}
-                      onChange={(event) => handleCrmStageChange(selectedCrmLead, event.target.value as CrmStage)}
+                      onChange={(event) => handleCrmStageChange(selectedCrmLead, event.target.value)}
                     >
-                      {CRM_STAGES.map((stageOption) => (
-                        <option key={stageOption.value} value={stageOption.value}>
+                      {currentStageOptions.map((stageOption) => (
+                        <option key={stageOption.key} value={stageOption.key}>
                           {stageOption.label}
                         </option>
                       ))}
@@ -7596,7 +8185,7 @@ export default function Home() {
                     <textarea
                       rows={5}
                       value={noteDraft}
-                      onChange={(event) => handleCrmNoteChange(selectedCrmLead.lead_id, event.target.value)}
+                      onChange={(event) => handleCrmNoteChange(selectedCrmLead.id, event.target.value)}
                     />
                   </label>
 
@@ -7619,6 +8208,372 @@ export default function Home() {
             );
           })()
         : null}
+
+      {funnelManagerOpen ? (
+        <div className="modal-backdrop">
+          <section className="edit-modal funnel-manager-modal" role="dialog" aria-modal="true">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Funis do CRM</p>
+                <h2>Gerenciar funis</h2>
+              </div>
+              <button className="icon-button" onClick={closeFunnelManager} title="Fechar" type="button">
+                <X size={18} />
+              </button>
+            </div>
+
+            {funnelError ? <div className="notice danger modal-helper">{funnelError}</div> : null}
+            {funnelMessage ? <div className="notice success modal-helper">{funnelMessage}</div> : null}
+
+            <div className="funnel-manager-layout">
+              <form className="tag-manager-form" onSubmit={handleSaveFunnel}>
+                <div className="panel-heading compact-heading">
+                  <div>
+                    <p className="eyebrow">{editingFunnelId ? "Editar" : "Novo funil"}</p>
+                    <h3>{editingFunnelId ? "Atualizar funil" : "Criar funil"}</h3>
+                  </div>
+                </div>
+                <label>
+                  Nome
+                  <input
+                    value={funnelForm.name}
+                    onChange={(event) => setFunnelForm({ ...funnelForm, name: event.target.value })}
+                    placeholder="Ex: Vendas inbound"
+                  />
+                </label>
+                <label>
+                  Descrição
+                  <textarea
+                    rows={3}
+                    value={funnelForm.description}
+                    onChange={(event) => setFunnelForm({ ...funnelForm, description: event.target.value })}
+                    placeholder="Opcional"
+                  />
+                </label>
+                <div className="modal-actions tag-form-actions">
+                  {editingFunnelId ? (
+                    <button className="secondary-button" disabled={Boolean(funnelBusyAction)} onClick={cancelEditFunnel} type="button">
+                      Cancelar edição
+                    </button>
+                  ) : null}
+                  <button className="primary-button" disabled={Boolean(funnelBusyAction)} type="submit">
+                    {funnelBusyAction === "create-funnel" || funnelBusyAction.startsWith("save-funnel-") ? (
+                      <Loader2 className="spin" size={18} />
+                    ) : (
+                      <Save size={18} />
+                    )}
+                    {editingFunnelId ? "Salvar funil" : "Criar funil"}
+                  </button>
+                </div>
+              </form>
+
+              <div className="funnel-manager-list">
+                {crmFunnels.length === 0 ? <p className="empty-state">Nenhum funil carregado.</p> : null}
+                {crmFunnels.map((funnel) => (
+                  <article
+                    className={`funnel-manager-row ${selectedCrmFunnel?.id === funnel.id ? "active" : ""}`}
+                    key={funnel.id}
+                  >
+                    <button
+                      className="funnel-pick-button"
+                      disabled={Boolean(funnelBusyAction)}
+                      onClick={() => {
+                        setSelectedCrmFunnelId(funnel.id);
+                        setEditingStageId(null);
+                        setStageForm(defaultStageForm);
+                      }}
+                      type="button"
+                    >
+                      <strong>{funnel.name}</strong>
+                      <span>
+                        {funnel.card_count} cards · {funnel.stages.length} estágios
+                      </span>
+                      {funnel.is_default ? <small>Funil padrão</small> : null}
+                    </button>
+                    <div className="row-actions">
+                      <button
+                        className="icon-button"
+                        disabled={Boolean(funnelBusyAction)}
+                        onClick={() => startEditFunnel(funnel)}
+                        title="Editar funil"
+                        type="button"
+                      >
+                        <Edit3 size={16} />
+                      </button>
+                      <button
+                        className="icon-button danger"
+                        disabled={Boolean(funnelBusyAction) || funnel.is_default}
+                        onClick={() => requestDeleteFunnel(funnel)}
+                        title={funnel.is_default ? "O funil padrão não pode ser excluído" : "Excluir funil"}
+                        type="button"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              <section className="stage-manager-panel">
+                <div className="panel-heading compact-heading">
+                  <div>
+                    <p className="eyebrow">Estágios</p>
+                    <h3>{selectedCrmFunnel ? selectedCrmFunnel.name : "Selecione um funil"}</h3>
+                  </div>
+                </div>
+
+                <div className="stage-manager-grid">
+                  <form className="tag-manager-form" onSubmit={handleSaveStage}>
+                    <div className="panel-heading compact-heading">
+                      <div>
+                        <p className="eyebrow">{editingStageId ? "Editar" : "Novo estágio"}</p>
+                        <h3>{editingStageId ? "Atualizar estágio" : "Criar estágio"}</h3>
+                      </div>
+                    </div>
+                    <label>
+                      Nome
+                      <input
+                        disabled={!selectedCrmFunnel}
+                        value={stageForm.label}
+                        onChange={(event) => setStageForm({ ...stageForm, label: event.target.value })}
+                        placeholder="Ex: Proposta enviada"
+                      />
+                    </label>
+                    <div className="tag-color-field">
+                      <span>Cor</span>
+                      <div className="tag-color-options">
+                        {STAGE_COLOR_OPTIONS.map((color) => (
+                          <button
+                            aria-label={`Usar cor ${color}`}
+                            className={`tag-color-option ${normalizeStageColor(stageForm.color) === color ? "active" : ""}`}
+                            disabled={!selectedCrmFunnel}
+                            key={color}
+                            onClick={() => setStageForm({ ...stageForm, color })}
+                            style={{ background: color }}
+                            type="button"
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="stage-terminal-controls">
+                      <label className="checkbox-label">
+                        <input
+                          checked={stageForm.is_won}
+                          disabled={!selectedCrmFunnel}
+                          onChange={(event) =>
+                            setStageForm({
+                              ...stageForm,
+                              is_won: event.target.checked,
+                              is_lost: event.target.checked ? false : stageForm.is_lost
+                            })
+                          }
+                          type="checkbox"
+                        />
+                        Ganho
+                      </label>
+                      <label className="checkbox-label">
+                        <input
+                          checked={stageForm.is_lost}
+                          disabled={!selectedCrmFunnel}
+                          onChange={(event) =>
+                            setStageForm({
+                              ...stageForm,
+                              is_lost: event.target.checked,
+                              is_won: event.target.checked ? false : stageForm.is_won
+                            })
+                          }
+                          type="checkbox"
+                        />
+                        Perda
+                      </label>
+                    </div>
+                    <div className="modal-actions tag-form-actions">
+                      {editingStageId ? (
+                        <button className="secondary-button" disabled={Boolean(funnelBusyAction)} onClick={cancelEditStage} type="button">
+                          Cancelar edição
+                        </button>
+                      ) : null}
+                      <button className="primary-button" disabled={Boolean(funnelBusyAction) || !selectedCrmFunnel} type="submit">
+                        {funnelBusyAction === "create-stage" || funnelBusyAction.startsWith("save-stage-") ? (
+                          <Loader2 className="spin" size={18} />
+                        ) : (
+                          <Save size={18} />
+                        )}
+                        {editingStageId ? "Salvar estágio" : "Criar estágio"}
+                      </button>
+                    </div>
+                  </form>
+
+                  <div className="stage-manager-list">
+                    <DndContext
+                      collisionDetection={closestCorners}
+                      onDragCancel={handleFunnelStageDragCancel}
+                      onDragEnd={handleFunnelStageDragEnd}
+                      onDragStart={handleFunnelStageDragStart}
+                      sensors={crmDndSensors}
+                    >
+                      <SortableContext
+                        items={selectedCrmStages.map((stage) => funnelStageDragId(stage.id))}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {selectedCrmStages.length === 0 ? <p className="empty-state">Nenhum estágio criado.</p> : null}
+                        {selectedCrmStages.map((stage) => (
+                          <SortableFunnelStageRow
+                            disabled={Boolean(funnelBusyAction)}
+                            key={stage.id}
+                            onDelete={() => requestDeleteStage(stage)}
+                            onEdit={() => startEditStage(stage)}
+                            stage={stage}
+                          />
+                        ))}
+                      </SortableContext>
+                      <DragOverlay>
+                        {activeFunnelStage ? (
+                          <article className="stage-manager-row stage-drag-overlay">
+                            <div className="stage-manager-main">
+                              <div>
+                                <span className="stage-color-dot" style={stageStyle(activeFunnelStage)} />
+                                <strong>{activeFunnelStage.label}</strong>
+                              </div>
+                              <small>{activeFunnelStage.card_count} cards</small>
+                            </div>
+                          </article>
+                        ) : null}
+                      </DragOverlay>
+                    </DndContext>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {funnelDeleteDialog ? (
+        <div className="modal-backdrop">
+          <section className="confirm-modal">
+            <div className="confirm-icon">
+              <Trash2 size={22} />
+            </div>
+            <div>
+              <p className="eyebrow">Confirmar exclusão</p>
+              <h2>Excluir funil?</h2>
+              <p className="confirm-copy">
+                O funil "{funnelDeleteDialog.name}" será excluído.
+                {funnelDeleteDialog.card_count > 0 ? ` ${funnelDeleteDialog.card_count} cards precisam ser movidos.` : ""}
+              </p>
+            </div>
+
+            {funnelDeleteDialog.card_count > 0 ? (
+              <label className="modal-helper">
+                Mover cards para
+                <select value={funnelDeleteMoveToId} onChange={(event) => setFunnelDeleteMoveToId(event.target.value)}>
+                  <option value="">Escolha um funil</option>
+                  {crmFunnels
+                    .filter((funnel) => funnel.id !== funnelDeleteDialog.id)
+                    .map((funnel) => (
+                      <option key={funnel.id} value={funnel.id}>
+                        {funnel.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : null}
+
+            {funnelError ? <p className="error-text">{funnelError}</p> : null}
+
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                disabled={funnelBusyAction === `delete-funnel-${funnelDeleteDialog.id}`}
+                onClick={() => {
+                  setFunnelError("");
+                  setFunnelDeleteDialog(null);
+                }}
+                type="button"
+              >
+                Cancelar
+              </button>
+              <button
+                className="danger-button"
+                disabled={funnelBusyAction === `delete-funnel-${funnelDeleteDialog.id}`}
+                onClick={confirmDeleteFunnel}
+                type="button"
+              >
+                {funnelBusyAction === `delete-funnel-${funnelDeleteDialog.id}` ? (
+                  <Loader2 className="spin" size={18} />
+                ) : (
+                  <Trash2 size={18} />
+                )}
+                Excluir
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {stageDeleteDialog ? (
+        <div className="modal-backdrop">
+          <section className="confirm-modal">
+            <div className="confirm-icon">
+              <Trash2 size={22} />
+            </div>
+            <div>
+              <p className="eyebrow">Confirmar exclusão</p>
+              <h2>Excluir estágio?</h2>
+              <p className="confirm-copy">
+                O estágio "{stageDeleteDialog.label}" será excluído.
+                {stageDeleteDialog.card_count > 0 ? ` ${stageDeleteDialog.card_count} cards precisam ser movidos.` : ""}
+              </p>
+            </div>
+
+            {stageDeleteDialog.card_count > 0 ? (
+              <label className="modal-helper">
+                Mover cards para
+                <select value={stageDeleteMoveToId} onChange={(event) => setStageDeleteMoveToId(event.target.value)}>
+                  <option value="">Escolha um estágio</option>
+                  {selectedCrmStages
+                    .filter((stage) => stage.id !== stageDeleteDialog.id)
+                    .map((stage) => (
+                      <option key={stage.id} value={stage.id}>
+                        {stage.label}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : null}
+
+            {funnelError ? <p className="error-text">{funnelError}</p> : null}
+
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                disabled={funnelBusyAction === `delete-stage-${stageDeleteDialog.id}`}
+                onClick={() => {
+                  setFunnelError("");
+                  setStageDeleteDialog(null);
+                }}
+                type="button"
+              >
+                Cancelar
+              </button>
+              <button
+                className="danger-button"
+                disabled={funnelBusyAction === `delete-stage-${stageDeleteDialog.id}`}
+                onClick={confirmDeleteStage}
+                type="button"
+              >
+                {funnelBusyAction === `delete-stage-${stageDeleteDialog.id}` ? (
+                  <Loader2 className="spin" size={18} />
+                ) : (
+                  <Trash2 size={18} />
+                )}
+                Excluir
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {tagManagerOpen ? (
         <div className="modal-backdrop">

@@ -13,6 +13,7 @@ from backend import main
 from backend.database import Base
 from backend.models import CrmLead, CrmStageHistory, Lead, SearchRun, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage
 from backend.schemas import CrmLeadUpdate
+from backend.services.crm import get_default_crm_funnel
 
 
 @pytest.fixture()
@@ -58,6 +59,29 @@ def seed_lead(db: Session, *, name: str = "Lead Alpha", phone: str = "+551199999
     return lead
 
 
+def seed_crm_lead(
+    db: Session,
+    lead: Lead,
+    *,
+    stage: str = "new",
+    position: int | None = None,
+    qualification_notes: str | None = None,
+) -> CrmLead:
+    funnel = get_default_crm_funnel(db)
+    stage_ref = next(item for item in funnel.stages if item.key == stage)
+    crm_lead = CrmLead(
+        lead_id=lead.id,
+        funnel_id=funnel.id,
+        stage_id=stage_ref.id,
+        stage=stage_ref.key,
+        position=position,
+        qualification_notes=qualification_notes,
+    )
+    db.add(crm_lead)
+    db.flush()
+    return crm_lead
+
+
 def test_list_crm_leads_filters_by_stage_and_includes_latest_message(db_session: Session) -> None:
     qualified_lead = seed_lead(db_session, name="Qualified Lead")
     new_lead = seed_lead(db_session, name="New Lead", phone="+5511888880000")
@@ -70,12 +94,8 @@ def test_list_crm_leads_filters_by_stage_and_includes_latest_message(db_session:
     db_session.add(instance)
     db_session.flush()
 
-    db_session.add_all(
-        [
-            CrmLead(lead_id=qualified_lead.id, stage="qualified", qualification_notes="Ready"),
-            CrmLead(lead_id=new_lead.id, stage="new"),
-        ]
-    )
+    seed_crm_lead(db_session, qualified_lead, stage="qualified", qualification_notes="Ready")
+    seed_crm_lead(db_session, new_lead, stage="new")
     db_session.flush()
     conversation = WhatsAppConversation(
         lead_id=qualified_lead.id,
@@ -113,13 +133,9 @@ def test_list_crm_leads_orders_by_position(db_session: Session) -> None:
     first_lead = seed_lead(db_session, name="First Lead")
     second_lead = seed_lead(db_session, name="Second Lead", phone="+5511888880000")
     third_lead = seed_lead(db_session, name="Third Lead", phone="+5511777770000")
-    db_session.add_all(
-        [
-            CrmLead(lead_id=first_lead.id, stage="new", position=2),
-            CrmLead(lead_id=second_lead.id, stage="new", position=0),
-            CrmLead(lead_id=third_lead.id, stage="new", position=1),
-        ]
-    )
+    seed_crm_lead(db_session, first_lead, stage="new", position=2)
+    seed_crm_lead(db_session, second_lead, stage="new", position=0)
+    seed_crm_lead(db_session, third_lead, stage="new", position=1)
     db_session.commit()
 
     result = main.list_crm_leads(stage="new", db=db_session, username="test-user")
@@ -130,8 +146,7 @@ def test_list_crm_leads_orders_by_position(db_session: Session) -> None:
 
 def test_update_crm_lead_stage_creates_manual_history(db_session: Session) -> None:
     lead = seed_lead(db_session)
-    crm_lead = CrmLead(lead_id=lead.id, stage="new")
-    db_session.add(crm_lead)
+    crm_lead = seed_crm_lead(db_session, lead, stage="new")
     db_session.commit()
 
     result = main.update_crm_lead(
@@ -158,14 +173,10 @@ def test_update_crm_lead_accepts_stage_and_position_together(db_session: Session
     moving_lead = seed_lead(db_session, name="Moving Lead", phone="+5511888880000")
     target_first = seed_lead(db_session, name="Target First", phone="+5511777770000")
     target_second = seed_lead(db_session, name="Target Second", phone="+5511666660000")
-    db_session.add_all(
-        [
-            CrmLead(lead_id=source_first.id, stage="new", position=0),
-            CrmLead(lead_id=moving_lead.id, stage="new", position=1),
-            CrmLead(lead_id=target_first.id, stage="qualified", position=0),
-            CrmLead(lead_id=target_second.id, stage="qualified", position=1),
-        ]
-    )
+    seed_crm_lead(db_session, source_first, stage="new", position=0)
+    seed_crm_lead(db_session, moving_lead, stage="new", position=1)
+    seed_crm_lead(db_session, target_first, stage="qualified", position=0)
+    seed_crm_lead(db_session, target_second, stage="qualified", position=1)
     db_session.commit()
 
     result = main.update_crm_lead(

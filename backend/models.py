@@ -346,6 +346,42 @@ class WhatsAppMessageTemplate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class CrmFunnel(Base):
+    __tablename__ = "crm_funnels"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (Index("uq_crm_funnels_lower_name", func.lower(name), unique=True),)
+
+    stages: Mapped[list["CrmFunnelStage"]] = relationship(
+        back_populates="funnel",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="CrmFunnelStage.position",
+    )
+    crm_leads: Mapped[list["CrmLead"]] = relationship(back_populates="funnel", lazy="selectin")
+
+
+class CrmFunnelStage(Base):
+    __tablename__ = "crm_funnel_stages"
+    __table_args__ = (UniqueConstraint("funnel_id", "key", name="uq_crm_funnel_stages_funnel_key"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    funnel_id: Mapped[int] = mapped_column(ForeignKey("crm_funnels.id", ondelete="CASCADE"), nullable=False, index=True)
+    key: Mapped[str] = mapped_column(String(60), nullable=False)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    color: Mapped[str] = mapped_column(String(7), default="#f3f4f6", nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_won: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_lost: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    funnel: Mapped[CrmFunnel] = relationship(back_populates="stages")
+    crm_leads: Mapped[list["CrmLead"]] = relationship(back_populates="stage_ref", lazy="selectin")
+
+
 class WhatsAppCampaign(Base):
     __tablename__ = "whatsapp_campaigns"
     __table_args__ = (
@@ -367,6 +403,7 @@ class WhatsAppCampaign(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     list_id: Mapped[int] = mapped_column(ForeignKey("lead_lists.id", ondelete="RESTRICT"), nullable=False)
     instance_id: Mapped[int] = mapped_column(ForeignKey("whatsapp_instances.id", ondelete="RESTRICT"), nullable=False)
+    funnel_id: Mapped[int | None] = mapped_column(ForeignKey("crm_funnels.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
     message_mode: Mapped[str] = mapped_column(String(30), default="template", nullable=False)
     language: Mapped[str] = mapped_column(String(5), default="pt", nullable=False)
@@ -392,6 +429,7 @@ class WhatsAppCampaign(Base):
 
     lead_list: Mapped[LeadList] = relationship(lazy="selectin")
     instance: Mapped[WhatsAppInstance] = relationship(lazy="selectin")
+    funnel: Mapped[CrmFunnel | None] = relationship(lazy="selectin")
     templates: Mapped[list["WhatsAppCampaignTemplate"]] = relationship(
         back_populates="campaign",
         cascade="all, delete-orphan",
@@ -405,6 +443,10 @@ class WhatsAppCampaign(Base):
     @property
     def instance_name(self) -> str:
         return self.instance.name if self.instance else ""
+
+    @property
+    def funnel_name(self) -> str:
+        return self.funnel.name if self.funnel else ""
 
     @property
     def template_ids(self) -> list[int]:
@@ -552,22 +594,21 @@ class WhatsAppWebhookSettings(Base):
 
 class CrmLead(Base):
     __tablename__ = "crm_leads"
-    __table_args__ = (
-        CheckConstraint(
-            "stage IN ('new', 'responded', 'qualified', 'not_interested', 'converted')",
-            name="ck_crm_leads_stage",
-        ),
-    )
+    __table_args__ = (UniqueConstraint("lead_id", "funnel_id", name="uq_crm_leads_lead_funnel"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, unique=True)
-    stage: Mapped[str] = mapped_column(String(30), default="new", nullable=False)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), nullable=False)
+    funnel_id: Mapped[int] = mapped_column(ForeignKey("crm_funnels.id", ondelete="RESTRICT"), nullable=False, index=True)
+    stage_id: Mapped[int] = mapped_column(ForeignKey("crm_funnel_stages.id", ondelete="RESTRICT"), nullable=False, index=True)
+    stage: Mapped[str] = mapped_column(String(60), default="new", nullable=False)
     qualification_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     lead: Mapped[Lead] = relationship(lazy="selectin")
+    funnel: Mapped[CrmFunnel] = relationship(back_populates="crm_leads", lazy="selectin")
+    stage_ref: Mapped[CrmFunnelStage] = relationship(back_populates="crm_leads", lazy="selectin")
     stage_history: Mapped[list["CrmStageHistory"]] = relationship(
         back_populates="crm_lead",
         cascade="all, delete-orphan",
@@ -578,21 +619,15 @@ class CrmLead(Base):
 class CrmStageHistory(Base):
     __tablename__ = "crm_stage_history"
     __table_args__ = (
-        CheckConstraint(
-            "from_stage IN ('new', 'responded', 'qualified', 'not_interested', 'converted')",
-            name="ck_crm_stage_history_from_stage",
-        ),
-        CheckConstraint(
-            "to_stage IN ('new', 'responded', 'qualified', 'not_interested', 'converted')",
-            name="ck_crm_stage_history_to_stage",
-        ),
         CheckConstraint("changed_by IN ('ai', 'manual')", name="ck_crm_stage_history_changed_by"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     crm_lead_id: Mapped[int] = mapped_column(ForeignKey("crm_leads.id", ondelete="CASCADE"), nullable=False)
-    from_stage: Mapped[str] = mapped_column(String(30), nullable=False)
-    to_stage: Mapped[str] = mapped_column(String(30), nullable=False)
+    from_stage: Mapped[str] = mapped_column(String(60), nullable=False)
+    to_stage: Mapped[str] = mapped_column(String(60), nullable=False)
+    from_stage_id: Mapped[int | None] = mapped_column(ForeignKey("crm_funnel_stages.id", ondelete="SET NULL"), nullable=True)
+    to_stage_id: Mapped[int | None] = mapped_column(ForeignKey("crm_funnel_stages.id", ondelete="SET NULL"), nullable=True)
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     changed_by: Mapped[str] = mapped_column(String(20), nullable=False)
 

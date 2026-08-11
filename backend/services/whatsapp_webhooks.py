@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy import or_, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from backend.models import Lead, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage
+from backend.models import Lead, WhatsAppCampaign, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage, WhatsAppSend
 from backend.services.whatsapp_ai_agent import handle_inbound_message
 from backend.services.crm import get_or_create_crm_lead
 from backend.services.openai_audio import transcribe_audio_bytes
@@ -22,6 +23,8 @@ MEDIA_PLACEHOLDERS = {
     "image": "[image]",
     "other": "[message]",
 }
+
+logger = logging.getLogger(__name__)
 
 
 def is_evolution_messages_upsert_event(event: str) -> bool:
@@ -64,7 +67,8 @@ def ingest_evolution_messages_upsert(
         lead = _find_lead_by_phone(db, sender_phone)
         conversation = _get_or_create_conversation(db, instance, lead)
         if lead:
-            get_or_create_crm_lead(db, lead.id)
+            campaign = _latest_whatsapp_campaign_for_lead(db, lead.id)
+            get_or_create_crm_lead(db, lead.id, funnel_id=campaign.funnel_id if campaign else None)
         message_type = _message_type(data)
         message_created_at = _message_datetime(payload, data)
         audio_transcript = None
@@ -162,6 +166,34 @@ def _find_lead_by_phone(db: Session, sender_phone_digits: str) -> Lead | None:
         if lead_digits == sender_phone_digits:
             return lead
     return None
+
+
+def _latest_whatsapp_campaign_for_lead(db: Session, lead_id: int) -> WhatsAppCampaign | None:
+    sends = list(
+        db.scalars(
+            select(WhatsAppSend)
+            .options(selectinload(WhatsAppSend.campaign))
+            .where(WhatsAppSend.lead_id == lead_id)
+            .order_by(
+                WhatsAppSend.sent_at.is_(None),
+                desc(WhatsAppSend.sent_at),
+                desc(WhatsAppSend.created_at),
+                desc(WhatsAppSend.id),
+            )
+            .limit(5)
+        ).all()
+    )
+    if not sends:
+        return None
+
+    campaign_ids = [send.campaign_id for send in sends if send.campaign_id]
+    distinct_campaign_ids = list(dict.fromkeys(campaign_ids))
+    if len(distinct_campaign_ids) > 1:
+        logger.info(
+            "Lead respondeu após envios de múltiplas campanhas WhatsApp; usando a campanha mais recente",
+            extra={"lead_id": lead_id, "campaign_ids": distinct_campaign_ids},
+        )
+    return sends[0].campaign
 
 
 def _get_or_create_instance(db: Session, instance_name: str) -> WhatsAppInstance:

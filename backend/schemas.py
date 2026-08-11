@@ -425,11 +425,128 @@ class LeadWhatsAppValidationPreview(BaseModel):
     eligible_now: int
 
 
-CrmStage = Literal["new", "responded", "qualified", "not_interested", "converted"]
+CrmStage = str
+
+
+class CrmFunnelStageCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=120)
+    key: str | None = Field(default=None, min_length=1, max_length=60, pattern=r"^[a-z0-9_]+$")
+    color: str = Field(default="#f3f4f6", pattern=r"^#[0-9A-Fa-f]{6}$")
+    is_won: bool = False
+    is_lost: bool = False
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: str) -> str:
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("Informe o nome do estágio.")
+        return normalized
+
+
+class CrmFunnelStageUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=120)
+    key: str | None = Field(default=None, min_length=1, max_length=60, pattern=r"^[a-z0-9_]+$")
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    position: int | None = Field(default=None, ge=0)
+    is_won: bool | None = None
+    is_lost: bool | None = None
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("Informe o nome do estágio.")
+        return normalized
+
+
+class CrmFunnelStageReorderRequest(BaseModel):
+    stage_ids: list[int] = Field(min_length=1)
+
+
+class CrmFunnelStageRead(BaseModel):
+    id: int
+    funnel_id: int
+    key: str
+    label: str
+    color: str
+    position: int
+    is_won: bool
+    is_lost: bool
+    card_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CrmFunnelCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=255)
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("Informe o nome do funil.")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class CrmFunnelUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=255)
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("Informe o nome do funil.")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class CrmFunnelRead(BaseModel):
+    id: int
+    name: str
+    description: str | None = None
+    is_default: bool
+    created_at: datetime
+    card_count: int = 0
+    stages: list[CrmFunnelStageRead] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CrmLeadFunnelSummary(BaseModel):
+    id: int
+    name: str
+    stage: str
+    stage_label: str
 
 
 class CrmLeadUpdate(BaseModel):
     stage: CrmStage | None = None
+    funnel_id: int | None = None
     position: int | None = Field(default=None, ge=0)
     qualification_notes: str | None = Field(default=None, max_length=5000)
 
@@ -437,7 +554,12 @@ class CrmLeadUpdate(BaseModel):
 class CrmLeadRead(BaseModel):
     id: int
     lead_id: int
+    funnel_id: int
+    funnel_name: str
+    stage_id: int
     stage: CrmStage
+    stage_label: str
+    stage_color: str
     qualification_notes: str | None = None
     score: int | None = None
     position: int | None = None
@@ -453,6 +575,7 @@ class CrmLeadRead(BaseModel):
     last_message: str | None = None
     last_message_at: datetime | None = None
     conversation_id: int | None = None
+    other_funnels: list[CrmLeadFunnelSummary] = Field(default_factory=list)
 
 
 class WhatsAppAiSettingsUpdate(BaseModel):
@@ -728,6 +851,7 @@ class WhatsAppCampaignCreate(BaseModel):
     message_mode: WhatsAppMessageMode = "template"
     language: AiMessageLanguage = "pt"
     list_id: int
+    funnel_id: int | None = None
     instance_id: int
     templates: list[CampaignTemplateInput] = Field(default_factory=list)
     min_delay_seconds: int = Field(default=120, ge=1, le=86400)
@@ -778,6 +902,8 @@ class WhatsAppCampaignRead(BaseModel):
     language: AiMessageLanguage
     list_id: int
     list_name: str
+    funnel_id: int | None = None
+    funnel_name: str = ""
     instance_id: int
     instance_name: str
     status: str

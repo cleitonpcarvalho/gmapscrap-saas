@@ -48,6 +48,7 @@ def init_db() -> None:
     _wait_for_database()
     Base.metadata.create_all(bind=engine)
     _ensure_tag_tables()
+    _ensure_crm_funnel_tables()
     _ensure_whatsapp_crm_tables()
     _ensure_crm_lead_columns()
     _ensure_whatsapp_ai_settings_columns()
@@ -65,6 +66,8 @@ def init_db() -> None:
 def _ensure_whatsapp_crm_tables() -> None:
     from backend.models import (
         CrmLead,
+        CrmFunnel,
+        CrmFunnelStage,
         CrmStageHistory,
         WhatsAppAiSettings,
         WhatsAppCampaign,
@@ -91,6 +94,8 @@ def _ensure_whatsapp_crm_tables() -> None:
             WhatsAppAiSettings.__table__,
             WhatsAppPortfolioItem.__table__,
             WhatsAppWebhookSettings.__table__,
+            CrmFunnel.__table__,
+            CrmFunnelStage.__table__,
             CrmLead.__table__,
             CrmStageHistory.__table__,
         ],
@@ -112,52 +117,482 @@ def _ensure_tag_tables() -> None:
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_lower_name ON tags (lower(name))"))
 
 
-def _ensure_crm_lead_columns() -> None:
-    inspector = inspect(engine)
-    if "crm_leads" not in inspector.get_table_names():
-        return
+DEFAULT_CRM_FUNNEL_NAME = "Funil padrão"
+DEFAULT_CRM_STAGES = [
+    {"key": "new", "label": "Novo", "color": "#f3f4f6", "position": 0, "is_won": False, "is_lost": False},
+    {"key": "responded", "label": "Respondeu", "color": "#dff7f1", "position": 1, "is_won": False, "is_lost": False},
+    {"key": "qualified", "label": "Qualificado", "color": "#dcf6e8", "position": 2, "is_won": False, "is_lost": False},
+    {"key": "not_interested", "label": "Sem interesse", "color": "#ffe4e6", "position": 3, "is_won": False, "is_lost": True},
+    {"key": "converted", "label": "Convertido", "color": "#fff4ce", "position": 4, "is_won": True, "is_lost": False},
+]
 
-    existing_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
-    position_missing = "position" not in existing_columns
+
+def _ensure_crm_funnel_tables() -> None:
+    from backend.models import CrmFunnel, CrmFunnelStage
+
+    Base.metadata.create_all(bind=engine, tables=[CrmFunnel.__table__, CrmFunnelStage.__table__])
+
+    inspector = inspect(engine)
+    if "crm_funnels" not in inspector.get_table_names() or "crm_funnel_stages" not in inspector.get_table_names():
+        return
 
     with engine.begin() as connection:
         if engine.dialect.name == "postgresql":
             connection.execute(text("SET lock_timeout = '10s'"))
-        if position_missing:
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_funnels_lower_name ON crm_funnels (lower(name))"))
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_funnel_stages_funnel_key "
+                "ON crm_funnel_stages (funnel_id, key)"
+            )
+        )
+        default_funnel_id = _ensure_default_crm_funnel(connection)
+        _ensure_default_crm_funnel_stages(connection, default_funnel_id)
+        if engine.dialect.name == "postgresql":
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_funnels_single_default "
+                    "ON crm_funnels (is_default) WHERE is_default = true"
+                )
+            )
+
+
+def _ensure_default_crm_funnel(connection) -> int:
+    rows = list(connection.execute(text("SELECT id FROM crm_funnels WHERE is_default = :is_default ORDER BY id"), {"is_default": True}))
+    if rows:
+        default_id = int(rows[0][0])
+        for row in rows[1:]:
+            connection.execute(text("UPDATE crm_funnels SET is_default = :is_default WHERE id = :id"), {"is_default": False, "id": row[0]})
+        return default_id
+
+    existing = connection.execute(
+        text("SELECT id FROM crm_funnels WHERE lower(name) = lower(:name) ORDER BY id LIMIT 1"),
+        {"name": DEFAULT_CRM_FUNNEL_NAME},
+    ).first()
+    if existing:
+        default_id = int(existing[0])
+        connection.execute(text("UPDATE crm_funnels SET is_default = :is_default WHERE id = :id"), {"is_default": True, "id": default_id})
+        return default_id
+
+    result = connection.execute(
+        text("INSERT INTO crm_funnels (name, description, is_default) VALUES (:name, :description, :is_default)"),
+        {"name": DEFAULT_CRM_FUNNEL_NAME, "description": "Funil padrão migrado dos estágios originais.", "is_default": True},
+    )
+    inserted_id = result.lastrowid
+    if inserted_id is not None:
+        return int(inserted_id)
+
+    row = connection.execute(
+        text("SELECT id FROM crm_funnels WHERE lower(name) = lower(:name) ORDER BY id LIMIT 1"),
+        {"name": DEFAULT_CRM_FUNNEL_NAME},
+    ).first()
+    if not row:
+        raise RuntimeError("Não foi possível criar o funil padrão do CRM.")
+    return int(row[0])
+
+
+def _ensure_default_crm_funnel_stages(connection, funnel_id: int) -> None:
+    for stage in DEFAULT_CRM_STAGES:
+        existing = connection.execute(
+            text("SELECT id FROM crm_funnel_stages WHERE funnel_id = :funnel_id AND key = :key"),
+            {"funnel_id": funnel_id, "key": stage["key"]},
+        ).first()
+        params = {**stage, "funnel_id": funnel_id}
+        if existing:
+            connection.execute(
+                text(
+                    "UPDATE crm_funnel_stages "
+                    "SET label = :label, color = :color, position = :position, is_won = :is_won, is_lost = :is_lost "
+                    "WHERE id = :id"
+                ),
+                {**params, "id": existing[0]},
+            )
+            continue
+        connection.execute(
+            text(
+                "INSERT INTO crm_funnel_stages "
+                "(funnel_id, key, label, color, position, is_won, is_lost) "
+                "VALUES (:funnel_id, :key, :label, :color, :position, :is_won, :is_lost)"
+            ),
+            params,
+        )
+
+
+def _ensure_crm_lead_columns() -> None:
+    _ensure_crm_funnel_tables()
+
+    inspector = inspect(engine)
+    if "crm_leads" not in inspector.get_table_names():
+        return
+
+    original_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
+    original_position_missing = "position" not in original_columns
+    if engine.dialect.name == "sqlite" and _sqlite_crm_leads_needs_rebuild(inspector):
+        _rebuild_sqlite_crm_tables()
+        inspector = inspect(engine)
+
+    existing_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
+    position_column_missing = "position" not in existing_columns
+    should_reset_positions = original_position_missing or position_column_missing
+    funnel_id_missing = "funnel_id" not in existing_columns
+    stage_id_missing = "stage_id" not in existing_columns
+
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("SET lock_timeout = '10s'"))
+            connection.execute(text("ALTER TABLE crm_leads DROP CONSTRAINT IF EXISTS ck_crm_leads_stage"))
+            connection.execute(text("ALTER TABLE crm_stage_history DROP CONSTRAINT IF EXISTS ck_crm_stage_history_from_stage"))
+            connection.execute(text("ALTER TABLE crm_stage_history DROP CONSTRAINT IF EXISTS ck_crm_stage_history_to_stage"))
+            connection.execute(text("ALTER TABLE crm_leads ALTER COLUMN stage TYPE VARCHAR(60)"))
+            connection.execute(text("ALTER TABLE crm_stage_history ALTER COLUMN from_stage TYPE VARCHAR(60)"))
+            connection.execute(text("ALTER TABLE crm_stage_history ALTER COLUMN to_stage TYPE VARCHAR(60)"))
+            connection.execute(
+                text(
+                    """
+                    DO $$
+                    DECLARE existing_constraint text;
+                    BEGIN
+                        SELECT con.conname INTO existing_constraint
+                        FROM pg_constraint con
+                        JOIN pg_class rel ON rel.oid = con.conrelid
+                        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+                        WHERE rel.relname = 'crm_leads'
+                          AND con.contype = 'u'
+                          AND (
+                            SELECT array_agg(att.attname ORDER BY att.attnum)
+                            FROM unnest(con.conkey) AS cols(attnum)
+                            JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = cols.attnum
+                          ) = ARRAY['lead_id'];
+
+                        IF existing_constraint IS NOT NULL THEN
+                            EXECUTE format('ALTER TABLE crm_leads DROP CONSTRAINT %I', existing_constraint);
+                        END IF;
+                    END $$;
+                    """
+                )
+            )
+        if position_column_missing:
             connection.execute(text("ALTER TABLE crm_leads ADD COLUMN position INTEGER"))
-        _backfill_crm_lead_positions(connection, reset=position_missing)
+        if funnel_id_missing:
+            connection.execute(text("ALTER TABLE crm_leads ADD COLUMN funnel_id INTEGER"))
+        if stage_id_missing:
+            connection.execute(text("ALTER TABLE crm_leads ADD COLUMN stage_id INTEGER"))
+        if "crm_stage_history" in inspector.get_table_names():
+            history_columns = {column["name"] for column in inspector.get_columns("crm_stage_history")}
+            if "from_stage_id" not in history_columns:
+                connection.execute(text("ALTER TABLE crm_stage_history ADD COLUMN from_stage_id INTEGER"))
+            if "to_stage_id" not in history_columns:
+                connection.execute(text("ALTER TABLE crm_stage_history ADD COLUMN to_stage_id INTEGER"))
+        if engine.dialect.name == "postgresql":
+            _ensure_pg_constraint(
+                connection,
+                "crm_leads",
+                "fk_crm_leads_funnel_id",
+                "FOREIGN KEY (funnel_id) REFERENCES crm_funnels(id) ON DELETE RESTRICT",
+            )
+            _ensure_pg_constraint(
+                connection,
+                "crm_leads",
+                "fk_crm_leads_stage_id",
+                "FOREIGN KEY (stage_id) REFERENCES crm_funnel_stages(id) ON DELETE RESTRICT",
+            )
+            _ensure_pg_constraint(
+                connection,
+                "crm_stage_history",
+                "fk_crm_stage_history_from_stage_id",
+                "FOREIGN KEY (from_stage_id) REFERENCES crm_funnel_stages(id) ON DELETE SET NULL",
+            )
+            _ensure_pg_constraint(
+                connection,
+                "crm_stage_history",
+                "fk_crm_stage_history_to_stage_id",
+                "FOREIGN KEY (to_stage_id) REFERENCES crm_funnel_stages(id) ON DELETE SET NULL",
+            )
+        _backfill_crm_lead_funnels(connection)
+        _backfill_crm_lead_positions(connection, reset=should_reset_positions)
+        _backfill_crm_stage_history_stage_ids(connection)
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_leads_lead_funnel "
+                "ON crm_leads (lead_id, funnel_id)"
+            )
+        )
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("ALTER TABLE crm_leads ALTER COLUMN funnel_id SET NOT NULL"))
+            connection.execute(text("ALTER TABLE crm_leads ALTER COLUMN stage_id SET NOT NULL"))
+
+
+def _ensure_pg_constraint(connection, table_name: str, constraint_name: str, definition: str) -> None:
+    connection.execute(
+        text(
+            f"""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = '{constraint_name}'
+                      AND conrelid = '{table_name}'::regclass
+                ) THEN
+                    ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} {definition};
+                END IF;
+            END $$;
+            """
+        )
+    )
+
+
+def _backfill_crm_lead_funnels(connection) -> None:
+    default_funnel_id = _ensure_default_crm_funnel(connection)
+    _ensure_default_crm_funnel_stages(connection, default_funnel_id)
+    default_stage_id = connection.execute(
+        text(
+            "SELECT id FROM crm_funnel_stages "
+            "WHERE funnel_id = :funnel_id AND key = 'new' "
+            "ORDER BY position LIMIT 1"
+        ),
+        {"funnel_id": default_funnel_id},
+    ).scalar()
+
+    connection.execute(
+        text("UPDATE crm_leads SET funnel_id = :funnel_id WHERE funnel_id IS NULL"),
+        {"funnel_id": default_funnel_id},
+    )
+    connection.execute(
+        text(
+            """
+            UPDATE crm_leads
+            SET stage_id = (
+                SELECT crm_funnel_stages.id
+                FROM crm_funnel_stages
+                WHERE crm_funnel_stages.funnel_id = crm_leads.funnel_id
+                  AND crm_funnel_stages.key = crm_leads.stage
+                LIMIT 1
+            )
+            WHERE stage_id IS NULL
+            """
+        )
+    )
+    if default_stage_id is not None:
+        connection.execute(
+            text("UPDATE crm_leads SET stage_id = :stage_id WHERE stage_id IS NULL"),
+            {"stage_id": default_stage_id},
+        )
+    connection.execute(
+        text(
+            """
+            UPDATE crm_leads
+            SET stage = (
+                SELECT crm_funnel_stages.key
+                FROM crm_funnel_stages
+                WHERE crm_funnel_stages.id = crm_leads.stage_id
+                LIMIT 1
+            )
+            WHERE stage_id IS NOT NULL
+              AND stage != (
+                SELECT crm_funnel_stages.key
+                FROM crm_funnel_stages
+                WHERE crm_funnel_stages.id = crm_leads.stage_id
+                LIMIT 1
+              )
+            """
+        )
+    )
+
+
+def _backfill_crm_stage_history_stage_ids(connection) -> None:
+    table_names = inspect(connection).get_table_names()
+    if "crm_stage_history" not in table_names:
+        return
+
+    default_funnel_id = _ensure_default_crm_funnel(connection)
+    connection.execute(
+        text(
+            """
+            UPDATE crm_stage_history
+            SET from_stage_id = (
+                SELECT crm_funnel_stages.id
+                FROM crm_funnel_stages
+                WHERE crm_funnel_stages.funnel_id = :funnel_id
+                  AND crm_funnel_stages.key = crm_stage_history.from_stage
+                LIMIT 1
+            )
+            WHERE from_stage_id IS NULL
+            """
+        ),
+        {"funnel_id": default_funnel_id},
+    )
+    connection.execute(
+        text(
+            """
+            UPDATE crm_stage_history
+            SET to_stage_id = (
+                SELECT crm_funnel_stages.id
+                FROM crm_funnel_stages
+                WHERE crm_funnel_stages.funnel_id = :funnel_id
+                  AND crm_funnel_stages.key = crm_stage_history.to_stage
+                LIMIT 1
+            )
+            WHERE to_stage_id IS NULL
+            """
+        ),
+        {"funnel_id": default_funnel_id},
+    )
+
+
+def _sqlite_crm_leads_needs_rebuild(inspector) -> bool:
+    columns = {column["name"] for column in inspector.get_columns("crm_leads")}
+    if not {"funnel_id", "stage_id", "position"}.issubset(columns):
+        return True
+
+    for constraint in inspector.get_unique_constraints("crm_leads"):
+        if constraint.get("column_names") == ["lead_id"]:
+            return True
+    for constraint in inspector.get_check_constraints("crm_leads"):
+        if constraint.get("name") == "ck_crm_leads_stage":
+            return True
+    return False
+
+
+def _rebuild_sqlite_crm_tables() -> None:
+    with engine.begin() as connection:
+        _ensure_default_crm_funnel(connection)
+        connection.execute(text("PRAGMA foreign_keys=OFF"))
+        crm_columns = {column["name"] for column in inspect(connection).get_columns("crm_leads")}
+        selected_columns = [
+            "id",
+            "lead_id",
+            "stage",
+            "qualification_notes",
+            "score",
+            "position" if "position" in crm_columns else "NULL AS position",
+            "updated_at",
+            "funnel_id" if "funnel_id" in crm_columns else "NULL AS funnel_id",
+            "stage_id" if "stage_id" in crm_columns else "NULL AS stage_id",
+        ]
+        connection.execute(
+            text(
+                """
+                CREATE TABLE crm_leads_new (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    lead_id INTEGER NOT NULL,
+                    funnel_id INTEGER,
+                    stage_id INTEGER,
+                    stage VARCHAR(60) NOT NULL,
+                    qualification_notes TEXT,
+                    score INTEGER,
+                    position INTEGER,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO crm_leads_new "
+                "(id, lead_id, stage, qualification_notes, score, position, updated_at, funnel_id, stage_id) "
+                f"SELECT {', '.join(selected_columns)} FROM crm_leads"
+            )
+        )
+        connection.execute(text("DROP TABLE crm_leads"))
+        connection.execute(text("ALTER TABLE crm_leads_new RENAME TO crm_leads"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_id ON crm_leads (id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_funnel_id ON crm_leads (funnel_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_leads_stage_id ON crm_leads (stage_id)"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_leads_lead_funnel ON crm_leads (lead_id, funnel_id)"))
+        _rebuild_sqlite_crm_stage_history(connection)
+        connection.execute(text("PRAGMA foreign_keys=ON"))
+
+
+def _rebuild_sqlite_crm_stage_history(connection) -> None:
+    if "crm_stage_history" not in inspect(connection).get_table_names():
+        return
+    columns = {column["name"] for column in inspect(connection).get_columns("crm_stage_history")}
+    selected_columns = [
+        "id",
+        "crm_lead_id",
+        "from_stage",
+        "to_stage",
+        "changed_at",
+        "changed_by",
+        "from_stage_id" if "from_stage_id" in columns else "NULL AS from_stage_id",
+        "to_stage_id" if "to_stage_id" in columns else "NULL AS to_stage_id",
+    ]
+    connection.execute(
+        text(
+            """
+            CREATE TABLE crm_stage_history_new (
+                id INTEGER NOT NULL PRIMARY KEY,
+                crm_lead_id INTEGER NOT NULL,
+                from_stage VARCHAR(60) NOT NULL,
+                to_stage VARCHAR(60) NOT NULL,
+                changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                changed_by VARCHAR(20) NOT NULL,
+                from_stage_id INTEGER,
+                to_stage_id INTEGER,
+                CONSTRAINT ck_crm_stage_history_changed_by CHECK (changed_by IN ('ai', 'manual'))
+            )
+            """
+        )
+    )
+    connection.execute(
+        text(
+            "INSERT INTO crm_stage_history_new "
+            "(id, crm_lead_id, from_stage, to_stage, changed_at, changed_by, from_stage_id, to_stage_id) "
+            f"SELECT {', '.join(selected_columns)} FROM crm_stage_history"
+        )
+    )
+    connection.execute(text("DROP TABLE crm_stage_history"))
+    connection.execute(text("ALTER TABLE crm_stage_history_new RENAME TO crm_stage_history"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_crm_stage_history_id ON crm_stage_history (id)"))
 
 
 def _backfill_crm_lead_positions(connection, *, reset: bool = False) -> None:
     if reset:
         rows = connection.execute(
-            text("SELECT id, stage FROM crm_leads ORDER BY stage ASC, updated_at DESC, id DESC")
+            text(
+                "SELECT id, funnel_id, stage_id, stage FROM crm_leads "
+                "ORDER BY funnel_id ASC, stage_id ASC, stage ASC, updated_at DESC, id DESC"
+            )
         ).mappings()
-        positions_by_stage: dict[str, int] = {}
+        positions_by_stage: dict[tuple[int | None, int | None, str], int] = {}
         for row in rows:
-            stage = str(row["stage"])
-            position = positions_by_stage.get(stage, 0)
+            stage_key = (row["funnel_id"], row["stage_id"], str(row["stage"]))
+            position = positions_by_stage.get(stage_key, 0)
             connection.execute(
                 text("UPDATE crm_leads SET position = :position WHERE id = :id"),
                 {"position": position, "id": row["id"]},
             )
-            positions_by_stage[stage] = position + 1
+            positions_by_stage[stage_key] = position + 1
         return
 
-    stages = connection.execute(text("SELECT DISTINCT stage FROM crm_leads WHERE position IS NULL")).scalars()
-    for stage in stages:
+    stages = connection.execute(
+        text("SELECT DISTINCT funnel_id, stage_id, stage FROM crm_leads WHERE position IS NULL")
+    ).mappings()
+    for stage_row in stages:
         max_position = connection.execute(
-            text("SELECT MAX(position) FROM crm_leads WHERE stage = :stage AND position IS NOT NULL"),
-            {"stage": stage},
+            text(
+                "SELECT MAX(position) FROM crm_leads "
+                "WHERE funnel_id = :funnel_id AND stage_id = :stage_id AND stage = :stage AND position IS NOT NULL"
+            ),
+            {
+                "funnel_id": stage_row["funnel_id"],
+                "stage_id": stage_row["stage_id"],
+                "stage": stage_row["stage"],
+            },
         ).scalar()
         next_position = int(max_position) + 1 if max_position is not None else 0
         rows = connection.execute(
             text(
                 "SELECT id FROM crm_leads "
-                "WHERE stage = :stage AND position IS NULL "
+                "WHERE funnel_id = :funnel_id AND stage_id = :stage_id AND stage = :stage AND position IS NULL "
                 "ORDER BY updated_at DESC, id DESC"
             ),
-            {"stage": stage},
+            {
+                "funnel_id": stage_row["funnel_id"],
+                "stage_id": stage_row["stage_id"],
+                "stage": stage_row["stage"],
+            },
         ).mappings()
         for row in rows:
             connection.execute(
@@ -204,14 +639,18 @@ def _ensure_whatsapp_ai_settings_columns() -> None:
         for column_name, statement in migrations.items()
         if column_name not in existing_columns
     }
-    if not missing_migrations:
-        return
-
     with engine.begin() as connection:
         if engine.dialect.name == "postgresql":
             connection.execute(text("SET lock_timeout = '10s'"))
         for statement in missing_migrations.values():
             connection.execute(text(statement))
+        if engine.dialect.name == "postgresql":
+            _ensure_pg_constraint(
+                connection,
+                "whatsapp_campaigns",
+                "fk_whatsapp_campaigns_funnel_id",
+                "FOREIGN KEY (funnel_id) REFERENCES crm_funnels(id) ON DELETE SET NULL",
+            )
 
 
 def _ensure_whatsapp_campaign_columns() -> None:
@@ -224,6 +663,7 @@ def _ensure_whatsapp_campaign_columns() -> None:
         "objective": "ALTER TABLE whatsapp_campaigns ADD COLUMN objective TEXT NOT NULL DEFAULT ''",
         "message_mode": "ALTER TABLE whatsapp_campaigns ADD COLUMN message_mode VARCHAR(30) NOT NULL DEFAULT 'template'",
         "language": "ALTER TABLE whatsapp_campaigns ADD COLUMN language VARCHAR(5) NOT NULL DEFAULT 'pt'",
+        "funnel_id": "ALTER TABLE whatsapp_campaigns ADD COLUMN funnel_id INTEGER",
     }
     missing_migrations = {
         column_name: statement

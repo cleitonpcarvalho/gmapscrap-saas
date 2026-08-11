@@ -22,6 +22,8 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
         "whatsapp_ai_settings",
         "whatsapp_portfolio_items",
         "whatsapp_webhook_settings",
+        "crm_funnels",
+        "crm_funnel_stages",
         "crm_leads",
         "crm_stage_history",
         "tags",
@@ -34,10 +36,19 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     email_campaign_columns = {column["name"] for column in inspector.get_columns("email_campaigns")}
     email_send_columns = {column["name"] for column in inspector.get_columns("email_sends")}
     whatsapp_campaign_columns = {column["name"] for column in inspector.get_columns("whatsapp_campaigns")}
+    crm_funnel_columns = {column["name"] for column in inspector.get_columns("crm_funnels")}
+    crm_funnel_stage_columns = {column["name"] for column in inspector.get_columns("crm_funnel_stages")}
     crm_lead_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
+    crm_stage_history_columns = {column["name"] for column in inspector.get_columns("crm_stage_history")}
     tag_columns = {column["name"] for column in inspector.get_columns("tags")}
     lead_tag_columns = {column["name"] for column in inspector.get_columns("lead_tags")}
 
+    assert {"id", "name", "description", "is_default", "created_at"}.issubset(crm_funnel_columns)
+    assert {"id", "funnel_id", "key", "label", "color", "position", "is_won", "is_lost"}.issubset(
+        crm_funnel_stage_columns
+    )
+    assert {"funnel_id", "stage_id", "position"}.issubset(crm_lead_columns)
+    assert {"from_stage_id", "to_stage_id"}.issubset(crm_stage_history_columns)
     assert "position" in crm_lead_columns
     assert {"id", "name", "color", "description", "created_at"}.issubset(tag_columns)
     assert {"lead_id", "tag_id", "created_at"}.issubset(lead_tag_columns)
@@ -57,6 +68,7 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     assert "objective" in email_campaign_columns
     assert "language" in email_campaign_columns
     assert "language" in whatsapp_campaign_columns
+    assert "funnel_id" in whatsapp_campaign_columns
     assert "generated_content" in email_send_columns
 
 
