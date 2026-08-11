@@ -286,6 +286,21 @@ def _ensure_lead_columns() -> None:
                         "AND leads.whatsapp_validated IS NULL"
                     )
                 )
+            if "whatsapp_validated_at" not in existing_columns:
+                connection.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_validated_at TIMESTAMP WITH TIME ZONE"))
+            if "whatsapp_validation_status" not in existing_columns:
+                connection.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_validation_status VARCHAR(30)"))
+            if "whatsapp_validation_reason" not in existing_columns:
+                connection.execute(text("ALTER TABLE leads ADD COLUMN IF NOT EXISTS whatsapp_validation_reason VARCHAR(80)"))
+            connection.execute(
+                text(
+                    "UPDATE leads "
+                    "SET whatsapp_validation_status = 'valid', "
+                    "whatsapp_validated_at = COALESCE(whatsapp_validated_at, created_at) "
+                    "WHERE whatsapp_validated = TRUE "
+                    "AND (whatsapp_validation_status IS NULL OR whatsapp_validated_at IS NULL)"
+                )
+            )
             if "site_insights" not in existing_columns:
                 connection.execute(text("ALTER TABLE leads ADD COLUMN site_insights TEXT"))
 

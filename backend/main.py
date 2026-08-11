@@ -1,3 +1,4 @@
+import logging
 import base64
 import csv
 import secrets
@@ -57,6 +58,10 @@ from backend.schemas import (
     LeadCreate,
     LeadSiteInsightsEnrichmentRequest,
     LeadSiteInsightsEnrichmentResponse,
+    LeadWhatsAppValidationPreview,
+    LeadWhatsAppValidationProgress,
+    LeadWhatsAppValidationRequest,
+    LeadWhatsAppValidationResponse,
     LeadListCreate,
     LeadListRead,
     LeadListUpdate,
@@ -113,6 +118,15 @@ from backend.services.jobs import (
     save_scraped_lead,
     submit_search_job,
 )
+from backend.services.lead_whatsapp_validation import (
+    cancel_validation_job,
+    connected_validation_instance_name,
+    get_validation_progress,
+    prepare_lead_whatsapp_validation_selection,
+    preview_lead_whatsapp_validation,
+    start_lead_whatsapp_validation_job,
+    validation_job_is_running,
+)
 from backend.services.whatsapp_validation import is_whatsapp_validation_configured
 from backend.services.whatsapp_ai_agent import DEFAULT_SYSTEM_PROMPT, get_or_create_ai_settings
 from backend.services.whatsapp_campaigns import (
@@ -128,6 +142,7 @@ from backend.scrapers.maps_scraper import MapLead
 
 settings = get_settings()
 app = FastAPI(title="GmapScrap Web", version="0.1.0")
+logger = logging.getLogger(__name__)
 
 app.add_middleware(
     CORSMiddleware,
@@ -135,6 +150,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count", "X-Result-Limit"],
 )
 
 
@@ -614,64 +630,87 @@ def list_leads(
     run_id: int | None = None,
     niche: str | None = None,
     location: str | None = None,
+    whatsapp_status: str | None = None,
     email_campaign_id: int | None = None,
     email_opened: bool = False,
     email_clicked: bool = False,
     whatsapp_campaign_id: int | None = None,
     whatsapp_replied: bool = False,
+    response: Response = None,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
 ) -> list[Lead]:
     _ = username
-    stmt = select(Lead).options(selectinload(Lead.search_run)).join(SearchRun).order_by(desc(Lead.created_at)).limit(500)
+    allowed_whatsapp_statuses = {"valid", "invalid", "unknown", "never"}
+    if whatsapp_status is not None and whatsapp_status not in allowed_whatsapp_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Status de validação de WhatsApp inválido.",
+        )
 
-    if run_id is not None:
-        stmt = stmt.where(Lead.run_id == run_id)
+    def apply_filters(query):
+        if run_id is not None:
+            query = query.where(Lead.run_id == run_id)
 
-    if niche:
-        stmt = stmt.where(SearchRun.niche.ilike(f"%{niche.strip()}%"))
+        if niche:
+            query = query.where(SearchRun.niche.ilike(f"%{niche.strip()}%"))
 
-    if location:
-        stmt = stmt.where(SearchRun.location.ilike(f"%{location.strip()}%"))
+        if location:
+            query = query.where(SearchRun.location.ilike(f"%{location.strip()}%"))
 
-    if email_campaign_id is not None:
-        stmt = stmt.where(Lead.id.in_(select(EmailSend.lead_id).where(EmailSend.campaign_id == email_campaign_id)))
+        if whatsapp_status == "never":
+            query = query.where(Lead.whatsapp_validated_at.is_(None))
+        elif whatsapp_status:
+            query = query.where(Lead.whatsapp_validation_status == whatsapp_status)
 
-    if email_opened or email_clicked:
-        email_engagement_conditions = []
-        if email_opened:
-            email_engagement_conditions.append(or_(EmailSend.open_count > 0, EmailSend.opened_at.is_not(None)))
-        if email_clicked:
-            email_engagement_conditions.append(or_(EmailSend.click_count > 0, EmailSend.clicked_at.is_not(None)))
-
-        engaged_email_leads_stmt = select(EmailSend.lead_id).where(or_(*email_engagement_conditions))
         if email_campaign_id is not None:
-            engaged_email_leads_stmt = engaged_email_leads_stmt.where(EmailSend.campaign_id == email_campaign_id)
-        stmt = stmt.where(Lead.id.in_(engaged_email_leads_stmt))
+            query = query.where(Lead.id.in_(select(EmailSend.lead_id).where(EmailSend.campaign_id == email_campaign_id)))
 
-    if whatsapp_campaign_id is not None:
-        stmt = stmt.where(
-            Lead.id.in_(select(WhatsAppSend.lead_id).where(WhatsAppSend.campaign_id == whatsapp_campaign_id))
-        )
+        if email_opened or email_clicked:
+            email_engagement_conditions = []
+            if email_opened:
+                email_engagement_conditions.append(or_(EmailSend.open_count > 0, EmailSend.opened_at.is_not(None)))
+            if email_clicked:
+                email_engagement_conditions.append(or_(EmailSend.click_count > 0, EmailSend.clicked_at.is_not(None)))
 
-    if whatsapp_replied:
-        sent_whatsapp_leads_stmt = select(WhatsAppSend.lead_id)
+            engaged_email_leads_stmt = select(EmailSend.lead_id).where(or_(*email_engagement_conditions))
+            if email_campaign_id is not None:
+                engaged_email_leads_stmt = engaged_email_leads_stmt.where(EmailSend.campaign_id == email_campaign_id)
+            query = query.where(Lead.id.in_(engaged_email_leads_stmt))
+
         if whatsapp_campaign_id is not None:
-            sent_whatsapp_leads_stmt = sent_whatsapp_leads_stmt.where(
-                WhatsAppSend.campaign_id == whatsapp_campaign_id
+            query = query.where(
+                Lead.id.in_(select(WhatsAppSend.lead_id).where(WhatsAppSend.campaign_id == whatsapp_campaign_id))
             )
-        replied_leads_stmt = (
-            select(WhatsAppConversation.lead_id)
-            .join(WhatsAppMessage, WhatsAppMessage.conversation_id == WhatsAppConversation.id)
-            .where(
-                WhatsAppConversation.lead_id.is_not(None),
-                WhatsAppConversation.lead_id.in_(sent_whatsapp_leads_stmt),
-                WhatsAppMessage.direction == "inbound",
-            )
-        )
-        stmt = stmt.where(Lead.id.in_(replied_leads_stmt))
 
-    return list(db.scalars(stmt).all())
+        if whatsapp_replied:
+            sent_whatsapp_leads_stmt = select(WhatsAppSend.lead_id)
+            if whatsapp_campaign_id is not None:
+                sent_whatsapp_leads_stmt = sent_whatsapp_leads_stmt.where(
+                    WhatsAppSend.campaign_id == whatsapp_campaign_id
+                )
+            replied_leads_stmt = (
+                select(WhatsAppConversation.lead_id)
+                .join(WhatsAppMessage, WhatsAppMessage.conversation_id == WhatsAppConversation.id)
+                .where(
+                    WhatsAppConversation.lead_id.is_not(None),
+                    WhatsAppConversation.lead_id.in_(sent_whatsapp_leads_stmt),
+                    WhatsAppMessage.direction == "inbound",
+                )
+            )
+            query = query.where(Lead.id.in_(replied_leads_stmt))
+
+        return query
+
+    stmt = apply_filters(
+        select(Lead).options(selectinload(Lead.search_run)).join(SearchRun).order_by(desc(Lead.created_at))
+    )
+    total_count = db.scalar(select(func.count()).select_from(apply_filters(select(Lead.id).join(SearchRun)).subquery())) or 0
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total_count)
+        response.headers["X-Result-Limit"] = "500"
+
+    return list(db.scalars(stmt.limit(500)).all())
 
 
 @app.post("/api/leads/enrich-site-insights", response_model=LeadSiteInsightsEnrichmentResponse)
@@ -704,6 +743,143 @@ def enrich_existing_leads_site_insights(
         eligible_count=len(eligible_ids),
         queued_count=queued_count,
         location_inference=BRAZIL_LOCATION_INFERENCE,
+    )
+
+
+def _lead_whatsapp_validation_kwargs(payload: LeadWhatsAppValidationRequest) -> dict[str, Any]:
+    return {
+        "lead_ids": payload.lead_ids if payload.lead_ids else None,
+        "niche": payload.niche,
+        "location": payload.location,
+        "search": payload.search,
+        "only_pending": payload.only_pending,
+        "revalidate": payload.revalidate,
+        "limit": payload.limit,
+    }
+
+
+def _ensure_lead_whatsapp_validation_can_start(db: Session) -> None:
+    if not is_whatsapp_validation_configured(db):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Validação de WhatsApp não configurada. Configure EVOLUTION_API_BASE_URL, "
+                "EVOLUTION_API_KEY e uma instância Evolution conectada."
+            ),
+        )
+
+    try:
+        connected_validation_instance_name(db)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A instância do WhatsApp não está conectada. Conecte-a em Instâncias antes de validar.",
+        ) from exc
+
+
+def _running_validation_conflict() -> HTTPException:
+    progress = get_validation_progress()
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": "Já existe uma validação de WhatsApp em andamento.",
+            "job_id": progress.get("job_id") or "",
+        },
+    )
+
+
+def _lead_whatsapp_validation_message(queued_count: int, eligible_count: int) -> str:
+    if queued_count:
+        return f"Validação de WhatsApp iniciada: {queued_count} de {eligible_count} leads entrarão na fila."
+    if eligible_count:
+        return "Nenhum lead elegível para validar agora com os critérios informados."
+    return "Nenhum lead encontrado para os critérios informados."
+
+
+@app.post(
+    "/api/leads/validate-whatsapp",
+    response_model=LeadWhatsAppValidationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_existing_leads_whatsapp_validation(
+    payload: LeadWhatsAppValidationRequest,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> LeadWhatsAppValidationResponse:
+    _ = username
+    _ensure_lead_whatsapp_validation_can_start(db)
+    if validation_job_is_running():
+        raise _running_validation_conflict()
+
+    kwargs = _lead_whatsapp_validation_kwargs(payload)
+    selection = prepare_lead_whatsapp_validation_selection(db, **kwargs)
+    try:
+        progress = start_lead_whatsapp_validation_job(**kwargs)
+    except RuntimeError as exc:
+        if validation_job_is_running():
+            raise _running_validation_conflict() from exc
+        logger.exception("Falha ao iniciar validação de WhatsApp dos leads existentes")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Falha ao iniciar validação de WhatsApp dos leads existentes")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Não foi possível iniciar a validação de WhatsApp.",
+        ) from exc
+
+    return LeadWhatsAppValidationResponse(
+        job_id=str(progress.get("job_id") or ""),
+        status=str(progress.get("status") or "running"),
+        eligible_count=selection.eligible_count,
+        queued_count=selection.queued_count,
+        skipped_count=selection.skipped_count,
+        message=_lead_whatsapp_validation_message(selection.queued_count, selection.eligible_count),
+    )
+
+
+@app.get("/api/leads/validate-whatsapp/progress", response_model=LeadWhatsAppValidationProgress)
+def get_existing_leads_whatsapp_validation_progress(
+    username: str = Depends(require_user),
+) -> dict[str, Any]:
+    _ = username
+    return get_validation_progress()
+
+
+@app.post("/api/leads/validate-whatsapp/cancel", response_model=LeadWhatsAppValidationProgress)
+def cancel_existing_leads_whatsapp_validation(
+    username: str = Depends(require_user),
+) -> dict[str, Any]:
+    _ = username
+    try:
+        return cancel_validation_job()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@app.post("/api/leads/validate-whatsapp/preview", response_model=LeadWhatsAppValidationPreview)
+def preview_existing_leads_whatsapp_validation(
+    payload: LeadWhatsAppValidationRequest,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> LeadWhatsAppValidationPreview:
+    _ = username
+    try:
+        preview = preview_lead_whatsapp_validation(db, **_lead_whatsapp_validation_kwargs(payload))
+    except Exception as exc:
+        logger.exception("Falha ao pré-visualizar validação de WhatsApp dos leads existentes")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Não foi possível pré-visualizar a validação de WhatsApp.",
+        ) from exc
+
+    return LeadWhatsAppValidationPreview(
+        total_leads=preview.total_leads,
+        never_validated=preview.never_validated,
+        valid=preview.valid,
+        invalid=preview.invalid,
+        unknown=preview.unknown,
+        without_phone=preview.without_phone,
+        eligible_now=preview.eligible_now,
     )
 
 

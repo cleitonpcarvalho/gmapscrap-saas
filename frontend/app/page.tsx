@@ -85,6 +85,8 @@ type Lead = {
   email: string;
   site_insights: string | null;
   whatsapp_validated: boolean | null;
+  whatsapp_validated_at: string | null;
+  whatsapp_validation_status: string | null;
   validate_whatsapp: boolean;
   whatsapp_url: string;
   created_at: string;
@@ -343,6 +345,52 @@ type LeadSiteInsightsEnrichmentRequest = {
   lead_ids?: number[];
 };
 
+type LeadWhatsAppValidationRequest = {
+  lead_ids?: number[];
+  niche?: string;
+  location?: string;
+  search?: string;
+  only_pending: boolean;
+  revalidate: boolean;
+};
+
+type LeadWhatsAppValidationResponse = {
+  job_id: string;
+  status: string;
+  eligible_count: number;
+  queued_count: number;
+  skipped_count: number;
+  message: string;
+};
+
+type LeadWhatsAppValidationPreview = {
+  total_leads: number;
+  never_validated: number;
+  valid: number;
+  invalid: number;
+  unknown: number;
+  without_phone: number;
+  eligible_now: number;
+};
+
+type LeadWhatsAppValidationProgress = {
+  job_id: string;
+  status: "idle" | "running" | "completed" | "cancelled" | "aborted" | string;
+  total: number;
+  processed: number;
+  valid: number;
+  invalid: number;
+  unknown: number;
+  skipped: number;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+};
+
+type LeadWhatsappStatusFilter = "" | "valid" | "invalid" | "unknown" | "never";
+
+type LeadWhatsAppValidationScope = "selected" | "filters";
+
 type WhatsAppPortfolioItem = {
   id: number;
   description: string;
@@ -419,6 +467,29 @@ const LEADS_PAGE_SIZE = 30;
 const HISTORY_PAGE_SIZE = 30;
 const SEARCH_RUNS_PAGE_SIZE = 4;
 const LIST_FILTER_SEPARATOR = "||";
+const WHATSAPP_VALIDATION_DELAY_SECONDS = 1.5;
+
+const idleLeadWhatsAppValidationProgress: LeadWhatsAppValidationProgress = {
+  job_id: "",
+  status: "idle",
+  total: 0,
+  processed: 0,
+  valid: 0,
+  invalid: 0,
+  unknown: 0,
+  skipped: 0,
+  started_at: null,
+  finished_at: null,
+  error: null
+};
+
+const LEAD_WHATSAPP_STATUS_OPTIONS: { value: LeadWhatsappStatusFilter; label: string }[] = [
+  { value: "", label: "Todos" },
+  { value: "valid", label: "Tem WhatsApp" },
+  { value: "invalid", label: "Sem WhatsApp" },
+  { value: "unknown", label: "Indeterminado" },
+  { value: "never", label: "Não validado" }
+];
 
 const CAMPAIGN_TIMEZONES = [
   { value: "America/Sao_Paulo", label: "América do Sul - Brasil/Argentina/Uruguai" },
@@ -543,7 +614,30 @@ const defaultManualLeadForm: ManualLeadForm = {
   email: ""
 };
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+class ApiRequestError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(status: number, message: string, detail: unknown) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+function apiErrorMessage(payload: unknown) {
+  if (!payload || typeof payload !== "object") return "Não foi possível completar a ação.";
+  const detail = "detail" in payload ? (payload as { detail?: unknown }).detail : undefined;
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return "Não foi possível completar a ação.";
+}
+
+async function apiFetchWithResponse<T>(path: string, init?: RequestInit): Promise<{ data: T; response: Response }> {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
     headers: {
@@ -553,12 +647,29 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init
   });
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.detail || "Não foi possível completar a ação.");
+  const rawBody = await response.text();
+  let payload: unknown = undefined;
+  if (rawBody) {
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      payload = rawBody;
+    }
   }
 
-  return response.json() as Promise<T>;
+  if (!response.ok) {
+    const detail = payload && typeof payload === "object" && "detail" in payload
+      ? (payload as { detail?: unknown }).detail
+      : payload;
+    throw new ApiRequestError(response.status, apiErrorMessage(payload), detail);
+  }
+
+  return { data: payload as T, response };
+}
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const { data } = await apiFetchWithResponse<T>(path, init);
+  return data;
 }
 
 function formatDate(value: string | null) {
@@ -569,6 +680,59 @@ function formatDate(value: string | null) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function formatFullDateTime(value: string | null) {
+  if (!value) return "";
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function formatHumanDuration(totalSeconds: number) {
+  if (totalSeconds <= 0) return "menos de 1 minuto";
+
+  const minutes = Math.ceil(totalSeconds / 60);
+  if (minutes < 1) return "menos de 1 minuto";
+  if (minutes === 1) return "cerca de 1 minuto";
+  if (minutes < 60) return `cerca de ${minutes} minutos`;
+
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (remainingMinutes === 0) return hours === 1 ? "cerca de 1 hora" : `cerca de ${hours} horas`;
+  return hours === 1
+    ? `cerca de 1 hora e ${remainingMinutes} minutos`
+    : `cerca de ${hours} horas e ${remainingMinutes} minutos`;
+}
+
+function leadWhatsAppStatus(lead: Lead): { label: string; className: string; title: string } {
+  if (!lead.whatsapp_validated_at) {
+    return { label: "Não validado", className: "status-pill draft", title: "Ainda não validado" };
+  }
+
+  const validatedAt = formatFullDateTime(lead.whatsapp_validated_at);
+  if (lead.whatsapp_validation_status === "valid") {
+    return { label: "Tem WhatsApp", className: "status-pill connected", title: `Validado em ${validatedAt}` };
+  }
+  if (lead.whatsapp_validation_status === "invalid") {
+    return { label: "Sem WhatsApp", className: "status-pill disconnected", title: `Validado em ${validatedAt}` };
+  }
+  return { label: "Indeterminado", className: "status-pill connecting", title: `Validado em ${validatedAt}` };
+}
+
+function whatsappValidationFinalMessage(progress: LeadWhatsAppValidationProgress) {
+  if (progress.status === "cancelled") {
+    return `Validação cancelada. ${progress.processed} de ${progress.total} leads já haviam sido processados.`;
+  }
+  if (progress.status === "aborted") {
+    const cause = progress.error || "Validação interrompida por falhas seguidas de conexão com a Evolution.";
+    return `${cause} Os leads restantes NÃO foram alterados. Verifique a instância em Instâncias.`;
+  }
+  return `Validação concluída: ${progress.valid} válidos, ${progress.invalid} inválidos, ${progress.unknown} indeterminados e ${progress.skipped} pulados.`;
 }
 
 function statusLabel(status: SearchRun["status"]) {
@@ -1096,10 +1260,13 @@ export default function Home() {
   const [stats, setStats] = useState<Stats>(emptyStats);
   const [searches, setSearches] = useState<SearchRun[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [leadTotalCount, setLeadTotalCount] = useState(0);
+  const [leadResultLimit, setLeadResultLimit] = useState(500);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [leadNameQuery, setLeadNameQuery] = useState("");
   const [selectedLeadNiches, setSelectedLeadNiches] = useState<string[]>([]);
   const [selectedLeadLocations, setSelectedLeadLocations] = useState<string[]>([]);
+  const [leadWhatsappStatusFilter, setLeadWhatsappStatusFilter] = useState<LeadWhatsappStatusFilter>("");
   const [selectedLeadEmailCampaignId, setSelectedLeadEmailCampaignId] = useState("");
   const [leadEmailOpenedOnly, setLeadEmailOpenedOnly] = useState(false);
   const [leadEmailClickedOnly, setLeadEmailClickedOnly] = useState(false);
@@ -1218,6 +1385,18 @@ export default function Home() {
   const [manualLeadOpen, setManualLeadOpen] = useState(false);
   const [manualLeadForm, setManualLeadForm] = useState<ManualLeadForm>(defaultManualLeadForm);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialog>(null);
+  const [leadWhatsappValidationDialogOpen, setLeadWhatsappValidationDialogOpen] = useState(false);
+  const [leadWhatsappValidationScope, setLeadWhatsappValidationScope] =
+    useState<LeadWhatsAppValidationScope>("filters");
+  const [leadWhatsappValidationRevalidate, setLeadWhatsappValidationRevalidate] = useState(false);
+  const [leadWhatsappValidationPreview, setLeadWhatsappValidationPreview] =
+    useState<LeadWhatsAppValidationPreview | null>(null);
+  const [leadWhatsappValidationPreviewLoading, setLeadWhatsappValidationPreviewLoading] = useState(false);
+  const [leadWhatsappValidationPreviewError, setLeadWhatsappValidationPreviewError] = useState("");
+  const [leadWhatsappValidationSubmitting, setLeadWhatsappValidationSubmitting] = useState(false);
+  const [leadWhatsappValidationCancelling, setLeadWhatsappValidationCancelling] = useState(false);
+  const [leadWhatsappValidationProgress, setLeadWhatsappValidationProgress] =
+    useState<LeadWhatsAppValidationProgress>(idleLeadWhatsAppValidationProgress);
   const [savingEdit, setSavingEdit] = useState(false);
   const [savingManualLead, setSavingManualLead] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -1247,6 +1426,7 @@ export default function Home() {
   const leadLocationOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.location)), [leads]);
   const leadApiPath = useMemo(() => {
     const params = new URLSearchParams();
+    if (leadWhatsappStatusFilter) params.set("whatsapp_status", leadWhatsappStatusFilter);
     if (selectedLeadEmailCampaignId) params.set("email_campaign_id", selectedLeadEmailCampaignId);
     if (leadEmailOpenedOnly) params.set("email_opened", "true");
     if (leadEmailClickedOnly) params.set("email_clicked", "true");
@@ -1257,6 +1437,7 @@ export default function Home() {
   }, [
     leadEmailClickedOnly,
     leadEmailOpenedOnly,
+    leadWhatsappStatusFilter,
     leadWhatsappRepliedOnly,
     selectedLeadEmailCampaignId,
     selectedLeadWhatsappCampaignId
@@ -1270,6 +1451,18 @@ export default function Home() {
       return matchesName && matchesNiche && matchesLocation;
     });
   }, [leadNameQuery, leads, selectedLeadNiches, selectedLeadLocations]);
+  const leadServerFilters = useMemo(
+    () => ({
+      niche: selectedLeadNiches.length === 1 ? selectedLeadNiches[0] : undefined,
+      location: selectedLeadLocations.length === 1 ? selectedLeadLocations[0] : undefined,
+      search: leadNameQuery.trim() || undefined
+    }),
+    [leadNameQuery, selectedLeadLocations, selectedLeadNiches]
+  );
+  const leadWhatsappStatusFilterLabel = useMemo(
+    () => LEAD_WHATSAPP_STATUS_OPTIONS.find((option) => option.value === leadWhatsappStatusFilter)?.label || "Todos",
+    [leadWhatsappStatusFilter]
+  );
   const leadPageCount = Math.max(1, Math.ceil(filteredLeads.length / LEADS_PAGE_SIZE));
   const currentLeadPage = Math.min(leadPage, leadPageCount);
   const leadPageStartIndex = (currentLeadPage - 1) * LEADS_PAGE_SIZE;
@@ -1277,8 +1470,36 @@ export default function Home() {
   const leadPageStart = filteredLeads.length === 0 ? 0 : leadPageStartIndex + 1;
   const leadPageEnd = Math.min(leadPageStartIndex + LEADS_PAGE_SIZE, filteredLeads.length);
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedIdsKey = selectedIds.join(",");
   const filteredLeadIds = useMemo(() => filteredLeads.map((lead) => lead.id), [filteredLeads]);
   const allVisibleSelected = filteredLeadIds.length > 0 && filteredLeadIds.every((leadId) => selectedIdSet.has(leadId));
+  const leadRowsLoadedCount = leads.length;
+  const hasMoreLeadsThanLoaded = leadTotalCount > leadRowsLoadedCount;
+  const leadWhatsappValidationRunning = leadWhatsappValidationProgress.status === "running";
+  const leadWhatsappValidationProgressPercent = leadWhatsappValidationProgress.total
+    ? Math.min(100, Math.round((leadWhatsappValidationProgress.processed / leadWhatsappValidationProgress.total) * 100))
+    : 0;
+  const leadWhatsappValidationEstimatedDuration = formatHumanDuration(
+    (leadWhatsappValidationPreview?.eligible_now || 0) * WHATSAPP_VALIDATION_DELAY_SECONDS
+  );
+  const leadWhatsappValidationFilterScopeNotice = useMemo(() => {
+    if (leadWhatsappValidationScope !== "filters") return "";
+
+    const notices = [];
+    if (selectedLeadNiches.length > 1 || selectedLeadLocations.length > 1) {
+      notices.push("A validação por filtros no banco inteiro usa um nicho e uma localidade por vez.");
+    }
+    if (leadWhatsappStatusFilter && (leadWhatsappStatusFilter !== "never" || leadWhatsappValidationRevalidate)) {
+      notices.push("Para validar exatamente o status de WhatsApp filtrado na lista, selecione os leads visíveis.");
+    }
+    return notices.join(" ");
+  }, [
+    leadWhatsappStatusFilter,
+    leadWhatsappValidationRevalidate,
+    leadWhatsappValidationScope,
+    selectedLeadLocations.length,
+    selectedLeadNiches.length
+  ]);
   const recentLeads = useMemo(() => leads.slice(0, 8), [leads]);
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === selectedTemplateId) || templates[0] || null,
@@ -1423,16 +1644,63 @@ export default function Home() {
   const historyPageStart = filteredEmailSends.length === 0 ? 0 : historyPageStartIndex + 1;
   const historyPageEnd = Math.min(historyPageStartIndex + HISTORY_PAGE_SIZE, filteredEmailSends.length);
 
+  function leadWhatsappValidationPayload(): LeadWhatsAppValidationRequest {
+    const payload: LeadWhatsAppValidationRequest = {
+      only_pending: leadWhatsappStatusFilter === "never" && !leadWhatsappValidationRevalidate,
+      revalidate: leadWhatsappValidationRevalidate
+    };
+
+    if (leadWhatsappValidationScope === "selected" && selectedIds.length > 0) {
+      payload.lead_ids = selectedIds;
+      return payload;
+    }
+
+    if (leadServerFilters.niche) payload.niche = leadServerFilters.niche;
+    if (leadServerFilters.location) payload.location = leadServerFilters.location;
+    if (leadServerFilters.search) payload.search = leadServerFilters.search;
+    return payload;
+  }
+
+  function applyLeadWhatsappValidationProgress(
+    progress: LeadWhatsAppValidationProgress,
+    options: { showFinalSummary?: boolean } = {}
+  ) {
+    setLeadWhatsappValidationProgress(progress);
+    if (!options.showFinalSummary || progress.status === "idle" || progress.status === "running") return;
+
+    if (progress.status === "aborted") {
+      setActionMessage("");
+      setActionError(whatsappValidationFinalMessage(progress));
+      return;
+    }
+
+    setActionError("");
+    setActionMessage(whatsappValidationFinalMessage(progress));
+  }
+
+  async function refreshLeadWhatsappValidationProgress(options: { showFinalSummary?: boolean } = {}) {
+    const progress = await apiFetch<LeadWhatsAppValidationProgress>("/api/leads/validate-whatsapp/progress");
+    applyLeadWhatsappValidationProgress(progress, options);
+
+    if (options.showFinalSummary && progress.status !== "idle" && progress.status !== "running") {
+      await refreshData();
+    }
+
+    return progress;
+  }
+
   async function refreshData() {
-    const [nextStats, nextSearches, nextLeads] = await Promise.all([
+    const [nextStats, nextSearches, nextLeadsResponse] = await Promise.all([
       apiFetch<Stats>("/api/stats"),
       apiFetch<SearchRun[]>("/api/searches"),
-      apiFetch<Lead[]>(leadApiPath)
+      apiFetchWithResponse<Lead[]>(leadApiPath)
     ]);
 
     setStats(nextStats);
     setSearches(nextSearches);
-    setLeads(nextLeads);
+    setLeads(nextLeadsResponse.data);
+    setLeadTotalCount(Number(nextLeadsResponse.response.headers.get("X-Total-Count")) || nextLeadsResponse.data.length);
+    setLeadResultLimit(Number(nextLeadsResponse.response.headers.get("X-Result-Limit")) || 500);
   }
 
   async function refreshEmailData() {
@@ -1555,6 +1823,81 @@ export default function Home() {
   }, [user, leadApiPath]);
 
   useEffect(() => {
+    if (!user) return;
+
+    refreshLeadWhatsappValidationProgress().catch(() => undefined);
+  }, [user]);
+
+  useEffect(() => {
+    if (leadWhatsappValidationScope === "selected" && selectedIds.length === 0) {
+      setLeadWhatsappValidationScope("filters");
+    }
+  }, [leadWhatsappValidationScope, selectedIds.length]);
+
+  useEffect(() => {
+    if (!leadWhatsappValidationDialogOpen) return;
+
+    let cancelled = false;
+    setLeadWhatsappValidationPreview(null);
+    setLeadWhatsappValidationPreviewError("");
+    setLeadWhatsappValidationPreviewLoading(true);
+
+    apiFetch<LeadWhatsAppValidationPreview>("/api/leads/validate-whatsapp/preview", {
+      method: "POST",
+      body: JSON.stringify(leadWhatsappValidationPayload())
+    })
+      .then((preview) => {
+        if (cancelled) return;
+        setLeadWhatsappValidationPreview(preview);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setLeadWhatsappValidationPreviewError(
+          error instanceof Error ? error.message : "Não foi possível carregar a prévia."
+        );
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLeadWhatsappValidationPreviewLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    leadServerFilters,
+    leadWhatsappStatusFilter,
+    leadWhatsappValidationDialogOpen,
+    leadWhatsappValidationRevalidate,
+    leadWhatsappValidationScope,
+    selectedIdsKey
+  ]);
+
+  useEffect(() => {
+    if (!user || !leadWhatsappValidationRunning) return;
+
+    let cancelled = false;
+    const interval = window.setInterval(async () => {
+      try {
+        const progress = await apiFetch<LeadWhatsAppValidationProgress>("/api/leads/validate-whatsapp/progress");
+        if (cancelled) return;
+        applyLeadWhatsappValidationProgress(progress, { showFinalSummary: true });
+        if (progress.status !== "idle" && progress.status !== "running") {
+          await refreshData();
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setActionError(error instanceof Error ? error.message : "Não foi possível consultar o progresso.");
+      }
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [leadApiPath, leadWhatsappValidationRunning, user]);
+
+  useEffect(() => {
     setSelectedIds((current) => current.filter((id) => leads.some((lead) => lead.id === id)));
   }, [leads]);
 
@@ -1565,6 +1908,7 @@ export default function Home() {
     leadEmailOpenedOnly,
     leadNameQuery,
     leadWhatsappRepliedOnly,
+    leadWhatsappStatusFilter,
     selectedLeadEmailCampaignId,
     selectedLeadNiches,
     selectedLeadLocations,
@@ -1734,6 +2078,8 @@ export default function Home() {
     setUser(null);
     setSearches([]);
     setLeads([]);
+    setLeadTotalCount(0);
+    setLeadResultLimit(500);
     setSelectedIds([]);
     setEditingLead(null);
     setManualLeadOpen(false);
@@ -1741,6 +2087,9 @@ export default function Home() {
     setDeleteDialog(null);
     setSelectedLeadNiches([]);
     setSelectedLeadLocations([]);
+    setLeadWhatsappStatusFilter("");
+    setLeadWhatsappValidationDialogOpen(false);
+    setLeadWhatsappValidationProgress(idleLeadWhatsAppValidationProgress);
     setSelectedLeadEmailCampaignId("");
     setLeadEmailOpenedOnly(false);
     setLeadEmailClickedOnly(false);
@@ -2866,6 +3215,73 @@ export default function Home() {
     }
   }
 
+  function openLeadWhatsappValidationDialog() {
+    setActionError("");
+    setActionMessage("");
+    setLeadWhatsappValidationPreview(null);
+    setLeadWhatsappValidationPreviewError("");
+    setLeadWhatsappValidationRevalidate(false);
+    setLeadWhatsappValidationScope(selectedIds.length > 0 ? "selected" : "filters");
+    setLeadWhatsappValidationDialogOpen(true);
+  }
+
+  function closeLeadWhatsappValidationDialog() {
+    if (leadWhatsappValidationSubmitting) return;
+    setLeadWhatsappValidationDialogOpen(false);
+    setLeadWhatsappValidationPreviewError("");
+  }
+
+  async function confirmLeadWhatsappValidation() {
+    if (!leadWhatsappValidationPreview || leadWhatsappValidationPreview.eligible_now <= 0) return;
+
+    setActionError("");
+    setActionMessage("");
+    setLeadWhatsappValidationPreviewError("");
+    setLeadWhatsappValidationSubmitting(true);
+
+    try {
+      const response = await apiFetch<LeadWhatsAppValidationResponse>("/api/leads/validate-whatsapp", {
+        method: "POST",
+        body: JSON.stringify(leadWhatsappValidationPayload())
+      });
+      setLeadWhatsappValidationDialogOpen(false);
+      setActionMessage(response.message);
+      await refreshLeadWhatsappValidationProgress({ showFinalSummary: true });
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 409 && typeof error.detail === "object" && error.detail && "job_id" in error.detail) {
+        setLeadWhatsappValidationDialogOpen(false);
+        setActionMessage(error.message);
+        await refreshLeadWhatsappValidationProgress();
+        return;
+      }
+
+      setLeadWhatsappValidationPreviewError(
+        error instanceof Error ? error.message : "Não foi possível iniciar a validação."
+      );
+    } finally {
+      setLeadWhatsappValidationSubmitting(false);
+    }
+  }
+
+  async function cancelLeadWhatsappValidation() {
+    setActionError("");
+    setActionMessage("");
+    setLeadWhatsappValidationCancelling(true);
+
+    try {
+      const progress = await apiFetch<LeadWhatsAppValidationProgress>("/api/leads/validate-whatsapp/cancel", {
+        method: "POST"
+      });
+      applyLeadWhatsappValidationProgress(progress);
+      setActionMessage("Cancelamento solicitado. O lead em validação termina antes de parar o lote.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Não foi possível cancelar a validação.");
+      await refreshLeadWhatsappValidationProgress().catch(() => undefined);
+    } finally {
+      setLeadWhatsappValidationCancelling(false);
+    }
+  }
+
   function openManualLeadModal() {
     setActionError("");
     setManualLeadForm({
@@ -3525,11 +3941,33 @@ export default function Home() {
                   {leadEnrichmentBusy ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
                   Enriquecer leads existentes
                 </button>
+                <button
+                  className="secondary-button compact-button"
+                  disabled={leadWhatsappValidationRunning || leadWhatsappValidationSubmitting}
+                  onClick={openLeadWhatsappValidationDialog}
+                  type="button"
+                >
+                  {leadWhatsappValidationRunning || leadWhatsappValidationSubmitting ? (
+                    <Loader2 className="spin" size={16} />
+                  ) : (
+                    <ShieldCheck size={16} />
+                  )}
+                  {leadWhatsappValidationRunning
+                    ? "Validando WhatsApp"
+                    : selectedIds.length > 0
+                      ? `Validar WhatsApp (${selectedIds.length})`
+                      : "Validar WhatsApp"}
+                </button>
                 <button className="primary-button compact-button" onClick={openManualLeadModal} type="button">
                   <Plus size={16} />
                   Adicionar lead
                 </button>
                 <span className="muted-count">{filteredLeads.length} visíveis</span>
+                {hasMoreLeadsThanLoaded ? (
+                  <span className="muted-count">
+                    {leadRowsLoadedCount} de {leadTotalCount} carregados
+                  </span>
+                ) : null}
                 <button
                   className="danger-button"
                   disabled={selectedIds.length === 0}
@@ -3542,8 +3980,44 @@ export default function Home() {
               </div>
             </div>
 
-            {actionError ? <p className="error-text">{actionError}</p> : null}
+            {actionError ? <div className="notice danger">{actionError}</div> : null}
             {actionMessage ? <div className="notice success">{actionMessage}</div> : null}
+            {leadWhatsappValidationRunning ? (
+              <div className="notice warning" style={{ display: "grid", gap: 10, position: "sticky", top: 16, zIndex: 1 }}>
+                <div className="panel-heading" style={{ gap: 12 }}>
+                  <div>
+                    <p className="eyebrow">Validação WhatsApp</p>
+                    <strong>
+                      {leadWhatsappValidationProgress.processed}/{leadWhatsappValidationProgress.total} leads processados
+                    </strong>
+                  </div>
+                  <button
+                    className="danger-button compact-button"
+                    disabled={leadWhatsappValidationCancelling}
+                    onClick={cancelLeadWhatsappValidation}
+                    type="button"
+                  >
+                    {leadWhatsappValidationCancelling ? <Loader2 className="spin" size={16} /> : <X size={16} />}
+                    Cancelar validação
+                  </button>
+                </div>
+                <div className="progress-track" aria-label="Progresso da validação de WhatsApp">
+                  <span style={{ width: `${leadWhatsappValidationProgressPercent}%` }} />
+                </div>
+                <div className="lead-actions" style={{ justifyContent: "flex-start" }}>
+                  <span className="muted-count">Válidos {leadWhatsappValidationProgress.valid}</span>
+                  <span className="muted-count">Inválidos {leadWhatsappValidationProgress.invalid}</span>
+                  <span className="muted-count">Indeterminados {leadWhatsappValidationProgress.unknown}</span>
+                  <span className="muted-count">Pulados {leadWhatsappValidationProgress.skipped}</span>
+                </div>
+              </div>
+            ) : null}
+            {hasMoreLeadsThanLoaded ? (
+              <div className="notice warning">
+                Há {leadTotalCount} leads no banco para os filtros do servidor, mas esta tela carregou {leadRowsLoadedCount}.
+                No modal, a opção "Todos os leads que correspondem aos filtros atuais" alcança os registros além do limite de {leadResultLimit}.
+              </div>
+            ) : null}
 
             <div className="lead-search-row">
               <label>
@@ -3576,12 +4050,40 @@ export default function Home() {
                 selected={selectedLeadLocations}
                 onChange={setSelectedLeadLocations}
               />
+              <label className="tag-filter">
+                Filtrar por WhatsApp
+                <select
+                  value={leadWhatsappStatusFilter}
+                  onChange={(event) => setLeadWhatsappStatusFilter(event.target.value as LeadWhatsappStatusFilter)}
+                >
+                  {LEAD_WHATSAPP_STATUS_OPTIONS.map((option) => (
+                    <option key={option.value || "all"} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="tag-list">
+                  <span className={leadWhatsappStatusFilter ? "filter-tag" : "filter-tag all-tag"}>
+                    {leadWhatsappStatusFilterLabel}
+                    {leadWhatsappStatusFilter ? (
+                      <button
+                        aria-label="Remover filtro de WhatsApp"
+                        onClick={() => setLeadWhatsappStatusFilter("")}
+                        type="button"
+                      >
+                        <X size={12} />
+                      </button>
+                    ) : null}
+                  </span>
+                </div>
+              </label>
               <button
                 className="secondary-button"
                 onClick={() => {
                   setSelectedLeadNiches([]);
                   setSelectedLeadLocations([]);
                   setLeadNameQuery("");
+                  setLeadWhatsappStatusFilter("");
                   setSelectedLeadEmailCampaignId("");
                   setLeadEmailOpenedOnly(false);
                   setLeadEmailClickedOnly(false);
@@ -3668,6 +4170,7 @@ export default function Home() {
                     <th>Localidade</th>
                     <th>Endereço</th>
                     <th>Telefone</th>
+                    <th>WhatsApp</th>
                     <th>Site</th>
                     <th>Insights site</th>
                     <th>E-mail</th>
@@ -3676,70 +4179,78 @@ export default function Home() {
                 <tbody>
                   {filteredLeads.length === 0 ? (
                     <tr>
-                      <td className="empty-cell" colSpan={10}>
+                      <td className="empty-cell" colSpan={11}>
                         <SkipForward size={18} />
                         Nenhum lead encontrado para os filtros.
                       </td>
                     </tr>
                   ) : null}
-                  {paginatedLeads.map((lead) => (
-                    <tr key={lead.id}>
-                      <td className="select-col">
-                        <input
-                          aria-label={`Selecionar ${lead.name}`}
-                          checked={selectedIdSet.has(lead.id)}
-                          onChange={() => toggleLead(lead.id)}
-                          type="checkbox"
-                        />
-                      </td>
-                      <td>
-                        <div className="row-actions">
-                          <button
-                            className="icon-button"
-                            onClick={() => {
-                              setActionError("");
-                              setEditingLead({ ...lead });
-                            }}
-                            title="Editar lead"
-                            type="button"
-                          >
-                            <Edit3 size={16} />
-                          </button>
-                          <button
-                            className="icon-button danger"
-                            onClick={() => handleDeleteLead(lead)}
-                            title="Excluir lead"
-                            type="button"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </td>
-                      <td>
-                        <strong>{lead.name}</strong>
-                      </td>
-                      <td>{lead.niche}</td>
-                      <td>{lead.location}</td>
-                      <td>{lead.address}</td>
-                      <td>
-                        <PhoneCell lead={lead} />
-                      </td>
-                      <td>
-                        <WebsiteCell website={lead.website} />
-                      </td>
-                      <td>
-                        {lead.site_insights ? (
-                          <details className="lead-insights-details">
-                            <summary>Ver insights</summary>
-                            <p>{lead.site_insights}</p>
-                          </details>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                      <td>{lead.email || "-"}</td>
-                    </tr>
-                  ))}
+                  {paginatedLeads.map((lead) => {
+                    const whatsappStatus = leadWhatsAppStatus(lead);
+                    return (
+                      <tr key={lead.id}>
+                        <td className="select-col">
+                          <input
+                            aria-label={`Selecionar ${lead.name}`}
+                            checked={selectedIdSet.has(lead.id)}
+                            onChange={() => toggleLead(lead.id)}
+                            type="checkbox"
+                          />
+                        </td>
+                        <td>
+                          <div className="row-actions">
+                            <button
+                              className="icon-button"
+                              onClick={() => {
+                                setActionError("");
+                                setEditingLead({ ...lead });
+                              }}
+                              title="Editar lead"
+                              type="button"
+                            >
+                              <Edit3 size={16} />
+                            </button>
+                            <button
+                              className="icon-button danger"
+                              onClick={() => handleDeleteLead(lead)}
+                              title="Excluir lead"
+                              type="button"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                        <td>
+                          <strong>{lead.name}</strong>
+                        </td>
+                        <td>{lead.niche}</td>
+                        <td>{lead.location}</td>
+                        <td>{lead.address}</td>
+                        <td>
+                          <PhoneCell lead={lead} />
+                        </td>
+                        <td>
+                          <span className={whatsappStatus.className} title={whatsappStatus.title}>
+                            {whatsappStatus.label}
+                          </span>
+                        </td>
+                        <td>
+                          <WebsiteCell website={lead.website} />
+                        </td>
+                        <td>
+                          {lead.site_insights ? (
+                            <details className="lead-insights-details">
+                              <summary>Ver insights</summary>
+                              <p>{lead.site_insights}</p>
+                            </details>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td>{lead.email || "-"}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -6257,6 +6768,131 @@ export default function Home() {
               </button>
             </div>
           </form>
+        </div>
+      ) : null}
+
+      {leadWhatsappValidationDialogOpen ? (
+        <div className="modal-backdrop">
+          <section className="confirm-modal" style={{ width: "min(680px, 100%)" }}>
+            <div className="confirm-icon start-confirm-icon">
+              <ShieldCheck size={22} />
+            </div>
+            <div>
+              <p className="eyebrow">Validar WhatsApp</p>
+              <h2>Confirmar validação dos leads?</h2>
+              <p className="confirm-copy">
+                Confira o escopo e a prévia antes de iniciar o lote na instância conectada.
+              </p>
+            </div>
+
+            <div className="modal-helper" style={{ display: "grid", gap: 10 }}>
+              {selectedIds.length > 0 ? (
+                <label className="checkbox-label">
+                  <input
+                    checked={leadWhatsappValidationScope === "selected"}
+                    onChange={() => setLeadWhatsappValidationScope("selected")}
+                    type="radio"
+                  />
+                  {selectedIds.length === 1
+                    ? "Apenas 1 lead selecionado"
+                    : `Apenas os ${selectedIds.length} leads selecionados`}
+                </label>
+              ) : null}
+              <label className="checkbox-label">
+                <input
+                  checked={leadWhatsappValidationScope === "filters"}
+                  onChange={() => setLeadWhatsappValidationScope("filters")}
+                  type="radio"
+                />
+                Todos os leads que correspondem aos filtros atuais
+              </label>
+              <label className="checkbox-label">
+                <input
+                  checked={leadWhatsappValidationRevalidate}
+                  onChange={(event) => setLeadWhatsappValidationRevalidate(event.target.checked)}
+                  type="checkbox"
+                />
+                Revalidar leads já validados
+              </label>
+              <p className="confirm-copy" style={{ marginTop: 0 }}>
+                Com esta opção desmarcada, apenas leads nunca validados e os que ficaram com resultado indeterminado serão processados.
+              </p>
+            </div>
+
+            {leadWhatsappValidationFilterScopeNotice ? (
+              <div className="notice warning modal-helper">{leadWhatsappValidationFilterScopeNotice}</div>
+            ) : null}
+
+            {leadWhatsappValidationPreviewLoading ? (
+              <div className="notice warning modal-helper">
+                <Loader2 className="spin" size={16} /> Carregando prévia da validação...
+              </div>
+            ) : null}
+
+            {leadWhatsappValidationPreviewError ? (
+              <p className="error-text modal-helper">{leadWhatsappValidationPreviewError}</p>
+            ) : null}
+
+            {leadWhatsappValidationPreview ? (
+              <>
+                <div className="template-stats-list modal-helper">
+                  <article className="template-stat-row">
+                    <span>Nunca validados</span>
+                    <strong>{leadWhatsappValidationPreview.never_validated}</strong>
+                  </article>
+                  <article className="template-stat-row">
+                    <span>Já válidos</span>
+                    <strong>{leadWhatsappValidationPreview.valid}</strong>
+                  </article>
+                  <article className="template-stat-row">
+                    <span>Já inválidos</span>
+                    <strong>{leadWhatsappValidationPreview.invalid}</strong>
+                  </article>
+                  <article className="template-stat-row">
+                    <span>Indeterminados</span>
+                    <strong>{leadWhatsappValidationPreview.unknown}</strong>
+                  </article>
+                  <article className="template-stat-row">
+                    <span>Sem telefone</span>
+                    <strong>{leadWhatsappValidationPreview.without_phone}</strong>
+                  </article>
+                  <article className="template-stat-row">
+                    <span>Total no escopo</span>
+                    <strong>{leadWhatsappValidationPreview.total_leads}</strong>
+                  </article>
+                </div>
+                <div className="notice warning modal-helper">
+                  <strong>{leadWhatsappValidationPreview.eligible_now} leads serão processados agora.</strong>
+                  {" "}Cada lead consome uma consulta na instância do WhatsApp, e lotes grandes podem levar tempo e gerar limitação no número. Duração estimada: {leadWhatsappValidationEstimatedDuration}.
+                </div>
+              </>
+            ) : null}
+
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                disabled={leadWhatsappValidationSubmitting}
+                onClick={closeLeadWhatsappValidationDialog}
+                type="button"
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary-button"
+                disabled={
+                  leadWhatsappValidationPreviewLoading ||
+                  leadWhatsappValidationSubmitting ||
+                  !leadWhatsappValidationPreview ||
+                  leadWhatsappValidationPreview.eligible_now <= 0
+                }
+                onClick={confirmLeadWhatsappValidation}
+                type="button"
+              >
+                {leadWhatsappValidationSubmitting ? <Loader2 className="spin" size={18} /> : <ShieldCheck size={18} />}
+                Iniciar validação
+              </button>
+            </div>
+          </section>
         </div>
       ) : null}
 

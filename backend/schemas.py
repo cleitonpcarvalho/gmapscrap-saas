@@ -57,6 +57,8 @@ class LeadRead(BaseModel):
     email: str
     site_insights: str | None = None
     whatsapp_validated: bool | None = None
+    whatsapp_validated_at: datetime | None = None
+    whatsapp_validation_status: str | None = None
     validate_whatsapp: bool = False
     whatsapp_url: str = ""
     created_at: datetime
@@ -284,6 +286,57 @@ class LeadSiteInsightsEnrichmentResponse(BaseModel):
 
 class LeadSiteInsightsEnrichmentRequest(BaseModel):
     lead_ids: list[int] = Field(default_factory=list, max_length=1000)
+
+
+class LeadWhatsAppValidationRequest(BaseModel):
+    """Request for validating WhatsApp on saved leads.
+
+    Precedence: when lead_ids is provided and non-empty, it is authoritative and
+    niche/location/search filters are ignored. When lead_ids is None or empty,
+    selection is performed entirely on the server by filters, intentionally
+    allowing validation of leads beyond the 500 rows loaded by the frontend.
+    """
+
+    lead_ids: list[int] | None = Field(default=None, max_length=1000)
+    niche: str | None = Field(default=None, max_length=255)
+    location: str | None = Field(default=None, max_length=255)
+    search: str | None = Field(default=None, max_length=255)
+    only_pending: bool = True
+    revalidate: bool = False
+    limit: int | None = Field(default=None, ge=1)
+
+
+class LeadWhatsAppValidationResponse(BaseModel):
+    job_id: str
+    status: str
+    eligible_count: int
+    queued_count: int
+    skipped_count: int
+    message: str
+
+
+class LeadWhatsAppValidationProgress(BaseModel):
+    job_id: str
+    status: str
+    total: int
+    processed: int
+    valid: int
+    invalid: int
+    unknown: int
+    skipped: int
+    started_at: str | None
+    finished_at: str | None
+    error: str | None
+
+
+class LeadWhatsAppValidationPreview(BaseModel):
+    total_leads: int
+    never_validated: int
+    valid: int
+    invalid: int
+    unknown: int
+    without_phone: int
+    eligible_now: int
 
 
 CrmStage = Literal["new", "responded", "qualified", "not_interested", "converted"]

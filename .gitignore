@@ -18,3 +18,4 @@ frontend/out/
 frontend/.env*.local
 postgres_data/
 tmp/
+cookies.txt

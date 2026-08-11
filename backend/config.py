@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     evolution_instance_name: str = ""
     evolution_webhook_secret: str = ""
     whatsapp_validation_timeout_seconds: float = 6.0
+    whatsapp_batch_validation_delay_seconds: float = 1.5
+    whatsapp_batch_validation_max_retries: int = 2
+    whatsapp_batch_validation_max_consecutive_errors: int = 5
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

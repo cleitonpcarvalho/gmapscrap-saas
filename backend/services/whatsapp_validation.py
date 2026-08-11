@@ -26,6 +26,14 @@ class WhatsAppValidationResult:
         return self.status == "valid"
 
 
+@dataclass(frozen=True, slots=True)
+class WhatsAppNumberCheckResult:
+    exists: bool | None
+    reason: str = ""
+    status_code: int | None = None
+    retryable: bool = False
+
+
 def get_whatsapp_validation_instance_name(db: Session | None = None) -> str:
     settings = get_settings()
     configured_instance = settings.evolution_instance_name.strip()
@@ -56,7 +64,13 @@ def is_whatsapp_validation_configured(db: Session | None = None) -> bool:
     return bool(_is_evolution_api_configured(settings) and get_whatsapp_validation_instance_name(db))
 
 
-def validate_whatsapp_number(phone: str, address: str = "", instance_name: str = "") -> WhatsAppValidationResult:
+def validate_whatsapp_number(
+    phone: str,
+    address: str = "",
+    instance_name: str = "",
+    *,
+    use_cache: bool = True,
+) -> WhatsAppValidationResult:
     normalized = normalize_phone_e164(phone, address)
     if not normalized:
         return WhatsAppValidationResult(phone=phone, normalized_phone="", status="invalid", reason="bad_phone")
@@ -70,13 +84,20 @@ def validate_whatsapp_number(phone: str, address: str = "", instance_name: str =
             reason="whatsapp_validation_not_configured",
         )
 
-    exists = _check_whatsapp_number(normalized, resolved_instance_name)
+    if use_cache:
+        exists = _check_whatsapp_number(normalized, resolved_instance_name)
+        failure_reason = "api_error"
+    else:
+        check_result = check_whatsapp_number_once(normalized, resolved_instance_name)
+        exists = check_result.exists
+        failure_reason = check_result.reason or "api_error"
+
     if exists is True:
         return WhatsAppValidationResult(phone=phone, normalized_phone=normalized, status="valid")
     if exists is False:
         return WhatsAppValidationResult(phone=phone, normalized_phone=normalized, status="invalid", reason="not_whatsapp")
 
-    return WhatsAppValidationResult(phone=phone, normalized_phone=normalized, status="unknown", reason="api_error")
+    return WhatsAppValidationResult(phone=phone, normalized_phone=normalized, status="unknown", reason=failure_reason)
 
 
 def normalize_phone_e164(phone: str, address: str = "") -> str:
@@ -105,8 +126,17 @@ def normalize_phone_e164(phone: str, address: str = "") -> str:
 def _is_evolution_api_configured(settings) -> bool:
     return bool(settings.evolution_api_base_url.strip() and settings.evolution_api_key.strip())
 
+
+def check_whatsapp_number_once(normalized_phone: str, instance_name: str = "") -> WhatsAppNumberCheckResult:
+    return _check_whatsapp_number_uncached(normalized_phone, instance_name)
+
+
 @lru_cache(maxsize=4096)
 def _check_whatsapp_number(normalized_phone: str, instance_name: str = "") -> bool | None:
+    return _check_whatsapp_number_uncached(normalized_phone, instance_name).exists
+
+
+def _check_whatsapp_number_uncached(normalized_phone: str, instance_name: str = "") -> WhatsAppNumberCheckResult:
     settings = get_settings()
     base_url = settings.evolution_api_base_url.rstrip("/")
     instance = (instance_name or settings.evolution_instance_name).strip().strip("/")
@@ -119,24 +149,35 @@ def _check_whatsapp_number(normalized_phone: str, instance_name: str = "") -> bo
             json={"numbers": [normalized_phone]},
             timeout=settings.whatsapp_validation_timeout_seconds,
         )
+    except requests.Timeout:
+        return WhatsAppNumberCheckResult(exists=None, reason="api_error", retryable=True)
     except requests.RequestException:
-        return None
+        return WhatsAppNumberCheckResult(exists=None, reason="api_error")
 
     if not response.ok:
-        return None
+        status_code = getattr(response, "status_code", None)
+        retryable = bool(status_code == 429 or (status_code is not None and status_code >= 500))
+        return WhatsAppNumberCheckResult(
+            exists=None,
+            reason="api_error",
+            status_code=status_code,
+            retryable=retryable,
+        )
 
     try:
         data = response.json()
     except ValueError:
-        return None
+        return WhatsAppNumberCheckResult(exists=None, reason="api_error")
 
     numbers = data.get("numbers") if isinstance(data, dict) else data
     if not isinstance(numbers, list) or not numbers:
-        return None
+        return WhatsAppNumberCheckResult(exists=None, reason="api_error")
 
     first = numbers[0]
     if not isinstance(first, dict):
-        return None
+        return WhatsAppNumberCheckResult(exists=None, reason="api_error")
 
     exists = first.get("exists")
-    return exists if isinstance(exists, bool) else None
+    if not isinstance(exists, bool):
+        return WhatsAppNumberCheckResult(exists=None, reason="api_error")
+    return WhatsAppNumberCheckResult(exists=exists)

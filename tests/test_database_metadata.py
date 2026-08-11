@@ -33,6 +33,9 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     whatsapp_campaign_columns = {column["name"] for column in inspector.get_columns("whatsapp_campaigns")}
 
     assert "whatsapp_validated" in lead_columns
+    assert "whatsapp_validated_at" in lead_columns
+    assert "whatsapp_validation_status" in lead_columns
+    assert "whatsapp_validation_reason" in lead_columns
     assert "site_insights" in lead_columns
     assert "only_without_website" in search_run_columns
     assert "enrich_site_insights" in search_run_columns

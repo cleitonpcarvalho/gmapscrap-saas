@@ -48,6 +48,9 @@ class Lead(Base):
     email: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     site_insights: Mapped[str | None] = mapped_column(Text, nullable=True)
     whatsapp_validated: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    whatsapp_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    whatsapp_validation_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    whatsapp_validation_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     search_run: Mapped[SearchRun] = relationship(back_populates="leads")
@@ -66,7 +69,9 @@ class Lead(Base):
 
     @property
     def whatsapp_url(self) -> str:
-        if not self.validate_whatsapp:
+        if self.whatsapp_validated is False:
+            return ""
+        if self.whatsapp_validated is not True and not self.validate_whatsapp:
             return ""
 
         from backend.services.whatsapp_validation import normalize_phone_e164
