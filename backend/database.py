@@ -174,21 +174,11 @@ def _ensure_default_crm_funnel(connection) -> int:
         connection.execute(text("UPDATE crm_funnels SET is_default = :is_default WHERE id = :id"), {"is_default": True, "id": default_id})
         return default_id
 
-    result = connection.execute(
-        text("INSERT INTO crm_funnels (name, description, is_default) VALUES (:name, :description, :is_default)"),
+    inserted_id = connection.execute(
+        text("INSERT INTO crm_funnels (name, description, is_default) VALUES (:name, :description, :is_default) RETURNING id"),
         {"name": DEFAULT_CRM_FUNNEL_NAME, "description": "Funil padrão migrado dos estágios originais.", "is_default": True},
-    )
-    inserted_id = result.lastrowid
-    if inserted_id is not None:
-        return int(inserted_id)
-
-    row = connection.execute(
-        text("SELECT id FROM crm_funnels WHERE lower(name) = lower(:name) ORDER BY id LIMIT 1"),
-        {"name": DEFAULT_CRM_FUNNEL_NAME},
-    ).first()
-    if not row:
-        raise RuntimeError("Não foi possível criar o funil padrão do CRM.")
-    return int(row[0])
+    ).scalar_one()
+    return int(inserted_id)
 
 
 def _ensure_default_crm_funnel_stages(connection, funnel_id: int) -> None:
@@ -240,37 +230,13 @@ def _ensure_crm_lead_columns() -> None:
     with engine.begin() as connection:
         if engine.dialect.name == "postgresql":
             connection.execute(text("SET lock_timeout = '10s'"))
-            connection.execute(text("ALTER TABLE crm_leads DROP CONSTRAINT IF EXISTS ck_crm_leads_stage"))
-            connection.execute(text("ALTER TABLE crm_stage_history DROP CONSTRAINT IF EXISTS ck_crm_stage_history_from_stage"))
-            connection.execute(text("ALTER TABLE crm_stage_history DROP CONSTRAINT IF EXISTS ck_crm_stage_history_to_stage"))
+            _drop_pg_check_constraints_for_columns(connection, "crm_leads", ["stage"])
+            _drop_pg_check_constraints_for_columns(connection, "crm_stage_history", ["from_stage", "to_stage"])
             connection.execute(text("ALTER TABLE crm_leads ALTER COLUMN stage TYPE VARCHAR(60)"))
             connection.execute(text("ALTER TABLE crm_stage_history ALTER COLUMN from_stage TYPE VARCHAR(60)"))
             connection.execute(text("ALTER TABLE crm_stage_history ALTER COLUMN to_stage TYPE VARCHAR(60)"))
-            connection.execute(
-                text(
-                    """
-                    DO $$
-                    DECLARE existing_constraint text;
-                    BEGIN
-                        SELECT con.conname INTO existing_constraint
-                        FROM pg_constraint con
-                        JOIN pg_class rel ON rel.oid = con.conrelid
-                        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
-                        WHERE rel.relname = 'crm_leads'
-                          AND con.contype = 'u'
-                          AND (
-                            SELECT array_agg(att.attname ORDER BY att.attnum)
-                            FROM unnest(con.conkey) AS cols(attnum)
-                            JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = cols.attnum
-                          ) = ARRAY['lead_id'];
-
-                        IF existing_constraint IS NOT NULL THEN
-                            EXECUTE format('ALTER TABLE crm_leads DROP CONSTRAINT %I', existing_constraint);
-                        END IF;
-                    END $$;
-                    """
-                )
-            )
+            _drop_pg_unique_lead_id_constraints(connection)
+            _drop_pg_unique_lead_id_indexes(connection)
         if position_column_missing:
             connection.execute(text("ALTER TABLE crm_leads ADD COLUMN position INTEGER"))
         if funnel_id_missing:
@@ -320,6 +286,98 @@ def _ensure_crm_lead_columns() -> None:
         if engine.dialect.name == "postgresql":
             connection.execute(text("ALTER TABLE crm_leads ALTER COLUMN funnel_id SET NOT NULL"))
             connection.execute(text("ALTER TABLE crm_leads ALTER COLUMN stage_id SET NOT NULL"))
+
+
+def _quote_pg_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+def _drop_pg_check_constraints_for_columns(connection, table_name: str, column_names: list[str]) -> None:
+    patterns = {f"pattern_{index}": f"%{column_name}%" for index, column_name in enumerate(column_names)}
+    clauses = " OR ".join(f"pg_get_constraintdef(con.oid) ILIKE :pattern_{index}" for index in range(len(column_names)))
+    rows = connection.execute(
+        text(
+            f"""
+            SELECT con.conname
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            WHERE nsp.nspname = current_schema()
+              AND rel.relname = :table_name
+              AND con.contype = 'c'
+              AND ({clauses})
+            """
+        ),
+        {"table_name": table_name, **patterns},
+    )
+    for row in rows:
+        connection.execute(
+            text(
+                f"ALTER TABLE {_quote_pg_identifier(table_name)} "
+                f"DROP CONSTRAINT IF EXISTS {_quote_pg_identifier(str(row.conname))}"
+            )
+        )
+
+
+def _drop_pg_unique_lead_id_constraints(connection) -> None:
+    rows = connection.execute(
+        text(
+            """
+            SELECT con.conname
+            FROM pg_constraint con
+            JOIN pg_class rel ON rel.oid = con.conrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            JOIN unnest(con.conkey) AS cols(attnum) ON true
+            JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = cols.attnum
+            WHERE nsp.nspname = current_schema()
+              AND rel.relname = 'crm_leads'
+              AND con.contype = 'u'
+              AND array_length(con.conkey, 1) = 1
+              AND att.attname = 'lead_id'
+            """
+        )
+    )
+    for row in rows:
+        connection.execute(
+            text(
+                f"ALTER TABLE {_quote_pg_identifier('crm_leads')} "
+                f"DROP CONSTRAINT IF EXISTS {_quote_pg_identifier(str(row.conname))}"
+            )
+        )
+
+
+def _drop_pg_unique_lead_id_indexes(connection) -> None:
+    rows = connection.execute(
+        text(
+            """
+            SELECT nsp.nspname AS schema_name, idx.relname AS index_name
+            FROM pg_index ind
+            JOIN pg_class idx ON idx.oid = ind.indexrelid
+            JOIN pg_class rel ON rel.oid = ind.indrelid
+            JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+            JOIN unnest(ind.indkey) AS cols(attnum) ON true
+            JOIN pg_attribute att ON att.attrelid = rel.oid AND att.attnum = cols.attnum
+            WHERE nsp.nspname = current_schema()
+              AND rel.relname = 'crm_leads'
+              AND ind.indisunique = true
+              AND ind.indisprimary = false
+              AND ind.indnatts = 1
+              AND att.attname = 'lead_id'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint con
+                WHERE con.conindid = idx.oid
+              )
+            """
+        )
+    )
+    for row in rows:
+        connection.execute(
+            text(
+                "DROP INDEX IF EXISTS "
+                f"{_quote_pg_identifier(str(row.schema_name))}.{_quote_pg_identifier(str(row.index_name))}"
+            )
+        )
 
 
 def _ensure_pg_constraint(connection, table_name: str, constraint_name: str, definition: str) -> None:
@@ -644,13 +702,6 @@ def _ensure_whatsapp_ai_settings_columns() -> None:
             connection.execute(text("SET lock_timeout = '10s'"))
         for statement in missing_migrations.values():
             connection.execute(text(statement))
-        if engine.dialect.name == "postgresql":
-            _ensure_pg_constraint(
-                connection,
-                "whatsapp_campaigns",
-                "fk_whatsapp_campaigns_funnel_id",
-                "FOREIGN KEY (funnel_id) REFERENCES crm_funnels(id) ON DELETE SET NULL",
-            )
 
 
 def _ensure_whatsapp_campaign_columns() -> None:
@@ -670,7 +721,10 @@ def _ensure_whatsapp_campaign_columns() -> None:
         for column_name, statement in migrations.items()
         if column_name not in existing_columns
     }
-    if not missing_migrations:
+    should_ensure_funnel_fk = engine.dialect.name == "postgresql" and (
+        "funnel_id" in existing_columns or "funnel_id" in missing_migrations
+    )
+    if not missing_migrations and not should_ensure_funnel_fk:
         return
 
     with engine.begin() as connection:
@@ -678,6 +732,13 @@ def _ensure_whatsapp_campaign_columns() -> None:
             connection.execute(text("SET lock_timeout = '10s'"))
         for statement in missing_migrations.values():
             connection.execute(text(statement))
+        if should_ensure_funnel_fk:
+            _ensure_pg_constraint(
+                connection,
+                "whatsapp_campaigns",
+                "fk_whatsapp_campaigns_funnel_id",
+                "FOREIGN KEY (funnel_id) REFERENCES crm_funnels(id) ON DELETE SET NULL",
+            )
 
 
 def _ensure_whatsapp_send_columns() -> None:
