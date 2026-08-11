@@ -47,6 +47,7 @@ def init_db() -> None:
 
     _wait_for_database()
     Base.metadata.create_all(bind=engine)
+    _ensure_tag_tables()
     _ensure_whatsapp_crm_tables()
     _ensure_crm_lead_columns()
     _ensure_whatsapp_ai_settings_columns()
@@ -94,6 +95,21 @@ def _ensure_whatsapp_crm_tables() -> None:
             CrmStageHistory.__table__,
         ],
     )
+
+
+def _ensure_tag_tables() -> None:
+    from backend.models import LeadTag, Tag
+
+    Base.metadata.create_all(bind=engine, tables=[Tag.__table__, LeadTag.__table__])
+
+    inspector = inspect(engine)
+    if "tags" not in inspector.get_table_names():
+        return
+
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("SET lock_timeout = '10s'"))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_lower_name ON tags (lower(name))"))
 
 
 def _ensure_crm_lead_columns() -> None:

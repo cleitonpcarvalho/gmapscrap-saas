@@ -53,6 +53,7 @@ import {
   ShieldCheck,
   SkipForward,
   Sparkles,
+  Tags,
   Trash2,
   Users,
   X
@@ -94,6 +95,27 @@ type SearchRun = {
   finished_at: string | null;
 };
 
+type LeadTagSummary = {
+  id: number;
+  name: string;
+  color: string;
+};
+
+type LeadTag = LeadTagSummary & {
+  description: string | null;
+  created_at: string;
+  lead_count: number;
+};
+
+type LeadTagForm = {
+  name: string;
+  color: string;
+  description: string;
+};
+
+type TagFilterMode = "any" | "all";
+type LeadTagBulkAction = "add" | "remove";
+
 type Lead = {
   id: number;
   run_id: number;
@@ -110,6 +132,7 @@ type Lead = {
   whatsapp_validation_status: string | null;
   validate_whatsapp: boolean;
   whatsapp_url: string;
+  tags: LeadTagSummary[];
   created_at: string;
 };
 
@@ -124,6 +147,7 @@ type ManualLeadForm = {
 };
 
 type DeleteDialog = { kind: "single"; lead: Lead } | { kind: "bulk"; ids: number[] } | null;
+type LeadTagBulkDialog = { action: LeadTagBulkAction; ids: number[] } | null;
 
 type AppView =
   | "dashboard"
@@ -348,6 +372,7 @@ type CrmLead = {
   last_message: string | null;
   last_message_at: string | null;
   conversation_id: number | null;
+  tags: LeadTagSummary[];
 };
 
 type WhatsAppAiSettings = {
@@ -616,6 +641,23 @@ const CRM_STAGES: CrmStageOption[] = [
   { value: "not_interested", label: "Sem interesse" },
   { value: "converted", label: "Convertido" }
 ];
+
+const TAG_COLOR_OPTIONS = [
+  "#e0f2fe",
+  "#dcfce7",
+  "#fef3c7",
+  "#fee2e2",
+  "#ede9fe",
+  "#fce7f3",
+  "#ccfbf1",
+  "#f3f4f6"
+];
+
+const defaultTagForm: LeadTagForm = {
+  name: "",
+  color: TAG_COLOR_OPTIONS[0],
+  description: ""
+};
 
 const defaultWhatsappAiForm = {
   system_prompt: "",
@@ -920,6 +962,173 @@ function WebsiteCell({ website }: { website: string | null | undefined }) {
   );
 }
 
+function normalizeTagColor(value: string) {
+  const color = value.trim();
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color : TAG_COLOR_OPTIONS[0];
+}
+
+function tagPayload(form: LeadTagForm) {
+  return {
+    name: form.name.trim(),
+    color: normalizeTagColor(form.color),
+    description: form.description.trim() || null
+  };
+}
+
+function tagStyle(tag: Pick<LeadTagSummary, "color">): CSSProperties {
+  return { "--tag-color": normalizeTagColor(tag.color) } as CSSProperties;
+}
+
+function toggleNumberSelection(selected: number[], id: number) {
+  return selected.includes(id) ? selected.filter((item) => item !== id) : [...selected, id];
+}
+
+function TagPills({
+  tags,
+  limit = 3,
+  emptyLabel = "-"
+}: {
+  tags: LeadTagSummary[] | undefined;
+  limit?: number;
+  emptyLabel?: string | null;
+}) {
+  const visibleTags = (tags || []).slice(0, limit);
+  const hiddenCount = Math.max(0, (tags || []).length - visibleTags.length);
+
+  if (visibleTags.length === 0) {
+    return emptyLabel ? <span className="tag-empty">{emptyLabel}</span> : null;
+  }
+
+  return (
+    <div className="lead-tag-list">
+      {visibleTags.map((tag) => (
+        <span className="lead-tag-pill" key={tag.id} style={tagStyle(tag)} title={tag.name}>
+          {tag.name}
+        </span>
+      ))}
+      {hiddenCount > 0 ? <span className="lead-tag-pill more-tag">+{hiddenCount}</span> : null}
+    </div>
+  );
+}
+
+function LeadTagFilter({
+  allLabel,
+  label,
+  placeholder,
+  tags,
+  selectedIds,
+  mode,
+  onChange,
+  onModeChange
+}: {
+  allLabel: string;
+  label: string;
+  placeholder: string;
+  tags: LeadTag[];
+  selectedIds: number[];
+  mode: TagFilterMode;
+  onChange: (nextSelected: number[]) => void;
+  onModeChange: (nextMode: TagFilterMode) => void;
+}) {
+  const selectedTags = selectedIds
+    .map((id) => tags.find((tag) => tag.id === id))
+    .filter((tag): tag is LeadTag => Boolean(tag));
+  const availableTags = tags.filter((tag) => !selectedIds.includes(tag.id));
+
+  return (
+    <label className="tag-filter lead-tag-filter">
+      {label}
+      <select
+        value=""
+        onChange={(event) => {
+          const nextTagId = Number(event.target.value);
+          if (!nextTagId) return;
+          onChange([...selectedIds, nextTagId]);
+        }}
+      >
+        <option value="">{placeholder}</option>
+        {availableTags.map((tag) => (
+          <option key={tag.id} value={tag.id}>
+            {tag.name}
+          </option>
+        ))}
+      </select>
+      <div className="tag-list">
+        {selectedTags.length === 0 ? <span className="filter-tag all-tag">{allLabel}</span> : null}
+        {selectedTags.map((tag) => (
+          <span className="filter-tag colored-filter-tag" key={tag.id} style={tagStyle(tag)}>
+            {tag.name}
+            <button
+              aria-label={`Remover tag ${tag.name}`}
+              onClick={() => onChange(selectedIds.filter((item) => item !== tag.id))}
+              type="button"
+            >
+              <X size={12} />
+            </button>
+          </span>
+        ))}
+        {selectedTags.length > 0 ? (
+          <>
+            <div className="tag-filter-mode" aria-label="Modo do filtro de tags">
+              <button
+                className={mode === "any" ? "active" : ""}
+                onClick={() => onModeChange("any")}
+                type="button"
+              >
+                Qualquer
+              </button>
+              <button
+                className={mode === "all" ? "active" : ""}
+                onClick={() => onModeChange("all")}
+                type="button"
+              >
+                Todas
+              </button>
+            </div>
+            <button className="filter-reset-tag" onClick={() => onChange([])} type="button">
+              Usar todas
+            </button>
+          </>
+        ) : null}
+      </div>
+    </label>
+  );
+}
+
+function TagCheckboxGrid({
+  tags,
+  selectedIds,
+  disabled,
+  onToggle
+}: {
+  tags: LeadTag[];
+  selectedIds: number[];
+  disabled?: boolean;
+  onToggle: (tagId: number, checked: boolean) => void;
+}) {
+  if (tags.length === 0) {
+    return <p className="empty-state">Nenhuma tag criada ainda.</p>;
+  }
+
+  return (
+    <div className="tag-checkbox-grid">
+      {tags.map((tag) => (
+        <label className="tag-checkbox" key={tag.id}>
+          <input
+            checked={selectedIds.includes(tag.id)}
+            disabled={disabled}
+            onChange={(event) => onToggle(tag.id, event.target.checked)}
+            type="checkbox"
+          />
+          <span className="lead-tag-pill" style={tagStyle(tag)}>
+            {tag.name}
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 const CRM_LEAD_DND_PREFIX = "crm-lead-";
 const CRM_STAGE_DND_PREFIX = "crm-stage-";
 
@@ -1058,6 +1267,7 @@ function CrmLeadCardContent({ lead }: { lead: CrmLead }) {
           </span>
         ) : null}
       </div>
+      <TagPills tags={lead.tags} emptyLabel={null} />
       {lastMessage ? <p className="crm-card-snippet">{lastMessage}</p> : null}
     </>
   );
@@ -1500,12 +1710,15 @@ export default function Home() {
   const [stats, setStats] = useState<Stats>(emptyStats);
   const [searches, setSearches] = useState<SearchRun[]>([]);
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [tags, setTags] = useState<LeadTag[]>([]);
   const [leadTotalCount, setLeadTotalCount] = useState(0);
   const [leadResultLimit, setLeadResultLimit] = useState(500);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [leadNameQuery, setLeadNameQuery] = useState("");
   const [selectedLeadNiches, setSelectedLeadNiches] = useState<string[]>([]);
   const [selectedLeadLocations, setSelectedLeadLocations] = useState<string[]>([]);
+  const [selectedLeadTagIds, setSelectedLeadTagIds] = useState<number[]>([]);
+  const [leadTagFilterMode, setLeadTagFilterMode] = useState<TagFilterMode>("any");
   const [leadWhatsappStatusFilter, setLeadWhatsappStatusFilter] = useState<LeadWhatsappStatusFilter>("");
   const [selectedLeadEmailCampaignId, setSelectedLeadEmailCampaignId] = useState("");
   const [leadEmailOpenedOnly, setLeadEmailOpenedOnly] = useState(false);
@@ -1599,6 +1812,8 @@ export default function Home() {
   const [crmLeads, setCrmLeads] = useState<CrmLead[]>([]);
   const [crmNoteDrafts, setCrmNoteDrafts] = useState<Record<number, string>>({});
   const [crmDetailLeadId, setCrmDetailLeadId] = useState<number | null>(null);
+  const [selectedCrmTagIds, setSelectedCrmTagIds] = useState<number[]>([]);
+  const [crmTagFilterMode, setCrmTagFilterMode] = useState<TagFilterMode>("any");
   const [activeCrmDragLeadId, setActiveCrmDragLeadId] = useState<number | null>(null);
   const [overCrmStage, setOverCrmStage] = useState<CrmStage | null>(null);
   const [whatsappAiSettings, setWhatsappAiSettings] = useState<WhatsAppAiSettings | null>(null);
@@ -1625,6 +1840,18 @@ export default function Home() {
   const [whatsappCampaignDeleteDialog, setWhatsappCampaignDeleteDialog] = useState<WhatsAppCampaign | null>(null);
   const [whatsappBusyAction, setWhatsappBusyAction] = useState("");
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
+  const [tagManagerOpen, setTagManagerOpen] = useState(false);
+  const [tagForm, setTagForm] = useState<LeadTagForm>(defaultTagForm);
+  const [editingTagId, setEditingTagId] = useState<number | null>(null);
+  const [tagDeleteDialog, setTagDeleteDialog] = useState<LeadTag | null>(null);
+  const [tagError, setTagError] = useState("");
+  const [tagMessage, setTagMessage] = useState("");
+  const [tagBusyAction, setTagBusyAction] = useState("");
+  const [leadTagBulkDialog, setLeadTagBulkDialog] = useState<LeadTagBulkDialog>(null);
+  const [leadTagBulkTagIds, setLeadTagBulkTagIds] = useState<number[]>([]);
+  const [leadTagBulkError, setLeadTagBulkError] = useState("");
+  const [leadTagBulkSaving, setLeadTagBulkSaving] = useState(false);
+  const [crmInlineTagForm, setCrmInlineTagForm] = useState<LeadTagForm>(defaultTagForm);
   const [manualLeadOpen, setManualLeadOpen] = useState(false);
   const [manualLeadForm, setManualLeadForm] = useState<ManualLeadForm>(defaultManualLeadForm);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialog>(null);
@@ -1680,16 +1907,27 @@ export default function Home() {
     if (leadEmailClickedOnly) params.set("email_clicked", "true");
     if (selectedLeadWhatsappCampaignId) params.set("whatsapp_campaign_id", selectedLeadWhatsappCampaignId);
     if (leadWhatsappRepliedOnly) params.set("whatsapp_replied", "true");
+    selectedLeadTagIds.forEach((tagId) => params.append("tag_ids", String(tagId)));
+    if (selectedLeadTagIds.length > 0) params.set("tag_filter_mode", leadTagFilterMode);
     const query = params.toString();
     return `/api/leads${query ? `?${query}` : ""}`;
   }, [
     leadEmailClickedOnly,
     leadEmailOpenedOnly,
+    leadTagFilterMode,
     leadWhatsappStatusFilter,
     leadWhatsappRepliedOnly,
+    selectedLeadTagIds,
     selectedLeadEmailCampaignId,
     selectedLeadWhatsappCampaignId
   ]);
+  const crmApiPath = useMemo(() => {
+    const params = new URLSearchParams();
+    selectedCrmTagIds.forEach((tagId) => params.append("tag_ids", String(tagId)));
+    if (selectedCrmTagIds.length > 0) params.set("tag_filter_mode", crmTagFilterMode);
+    const query = params.toString();
+    return `/api/crm/leads${query ? `?${query}` : ""}`;
+  }, [crmTagFilterMode, selectedCrmTagIds]);
   const filteredLeads = useMemo(() => {
     const normalizedLeadNameQuery = leadNameQuery.trim().toLowerCase();
     return leads.filter((lead) => {
@@ -1936,16 +2174,24 @@ export default function Home() {
     return progress;
   }
 
+  async function refreshTags() {
+    const nextTags = await apiFetch<LeadTag[]>("/api/tags");
+    setTags(nextTags);
+    return nextTags;
+  }
+
   async function refreshData() {
-    const [nextStats, nextSearches, nextLeadsResponse] = await Promise.all([
+    const [nextStats, nextSearches, nextLeadsResponse, nextTags] = await Promise.all([
       apiFetch<Stats>("/api/stats"),
       apiFetch<SearchRun[]>("/api/searches"),
-      apiFetchWithResponse<Lead[]>(leadApiPath)
+      apiFetchWithResponse<Lead[]>(leadApiPath),
+      apiFetch<LeadTag[]>("/api/tags")
     ]);
 
     setStats(nextStats);
     setSearches(nextSearches);
     setLeads(nextLeadsResponse.data);
+    setTags(nextTags);
     setLeadTotalCount(Number(nextLeadsResponse.response.headers.get("X-Total-Count")) || nextLeadsResponse.data.length);
     setLeadResultLimit(Number(nextLeadsResponse.response.headers.get("X-Result-Limit")) || 500);
   }
@@ -1967,13 +2213,14 @@ export default function Home() {
   }
 
   async function refreshWhatsappData() {
-    const [nextInstances, nextTemplates, nextCampaigns, nextCrmLeads, nextAiSettings, nextPortfolioItems] = await Promise.all([
+    const [nextInstances, nextTemplates, nextCampaigns, nextCrmLeads, nextAiSettings, nextPortfolioItems, nextTags] = await Promise.all([
       apiFetch<WhatsAppInstance[]>("/api/whatsapp/instances"),
       apiFetch<WhatsAppMessageTemplate[]>("/api/whatsapp/templates"),
       apiFetch<WhatsAppCampaign[]>("/api/whatsapp/campaigns"),
-      apiFetch<CrmLead[]>("/api/crm/leads"),
+      apiFetch<CrmLead[]>(crmApiPath),
       apiFetch<WhatsAppAiSettings>("/api/whatsapp/ai-settings"),
-      apiFetch<WhatsAppPortfolioItem[]>("/api/whatsapp/portfolio")
+      apiFetch<WhatsAppPortfolioItem[]>("/api/whatsapp/portfolio"),
+      apiFetch<LeadTag[]>("/api/tags")
     ]);
 
     setWhatsappInstances(nextInstances);
@@ -1987,6 +2234,7 @@ export default function Home() {
     });
     setWhatsappPortfolioItems(nextPortfolioItems);
     setCrmLeads(nextCrmLeads);
+    setTags(nextTags);
     setCrmNoteDrafts((current) =>
       Object.fromEntries(
         nextCrmLeads.map((lead) => [lead.lead_id, current[lead.lead_id] ?? lead.qualification_notes ?? ""])
@@ -2149,14 +2397,32 @@ export default function Home() {
   }, [leads]);
 
   useEffect(() => {
+    const availableTagIds = new Set(tags.map((tag) => tag.id));
+    setSelectedLeadTagIds((current) => {
+      const next = current.filter((id) => availableTagIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+    setSelectedCrmTagIds((current) => {
+      const next = current.filter((id) => availableTagIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+    setLeadTagBulkTagIds((current) => {
+      const next = current.filter((id) => availableTagIds.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [tags]);
+
+  useEffect(() => {
     setLeadPage(1);
   }, [
     leadEmailClickedOnly,
     leadEmailOpenedOnly,
     leadNameQuery,
+    leadTagFilterMode,
     leadWhatsappRepliedOnly,
     leadWhatsappStatusFilter,
     selectedLeadEmailCampaignId,
+    selectedLeadTagIds,
     selectedLeadNiches,
     selectedLeadLocations,
     selectedLeadWhatsappCampaignId
@@ -2264,7 +2530,7 @@ export default function Home() {
 
     refreshWhatsappData().catch(() => undefined);
     refreshEmailData().catch(() => undefined);
-  }, [user, activeView]);
+  }, [user, activeView, crmApiPath]);
 
   useEffect(() => {
     if (!user || !whatsappViews.includes(activeView)) return;
@@ -2277,7 +2543,7 @@ export default function Home() {
     }, 60000);
 
     return () => window.clearInterval(interval);
-  }, [user, activeView]);
+  }, [user, activeView, crmApiPath]);
 
   useEffect(() => {
     if (!selectedCrmLead) return;
@@ -2338,10 +2604,27 @@ export default function Home() {
     setUser(null);
     setSearches([]);
     setLeads([]);
+    setTags([]);
     setLeadTotalCount(0);
     setLeadResultLimit(500);
     setSelectedIds([]);
     setEditingLead(null);
+    setTagManagerOpen(false);
+    setTagForm(defaultTagForm);
+    setEditingTagId(null);
+    setTagDeleteDialog(null);
+    setSelectedLeadTagIds([]);
+    setLeadTagFilterMode("any");
+    setSelectedCrmTagIds([]);
+    setCrmTagFilterMode("any");
+    setLeadTagBulkDialog(null);
+    setLeadTagBulkTagIds([]);
+    setLeadTagBulkError("");
+    setLeadTagBulkSaving(false);
+    setCrmInlineTagForm(defaultTagForm);
+    setTagError("");
+    setTagMessage("");
+    setTagBusyAction("");
     setManualLeadOpen(false);
     setManualLeadForm(defaultManualLeadForm);
     setDeleteDialog(null);
@@ -3408,6 +3691,237 @@ export default function Home() {
     patchCrmLead(lead.lead_id, { qualification_notes: crmNoteDrafts[lead.lead_id] || null });
   }
 
+  function applyLeadTagSnapshot(updatedLead: Lead) {
+    setLeads((current) => current.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead)));
+    setCrmLeads((current) =>
+      current.map((lead) =>
+        lead.lead_id === updatedLead.id
+          ? {
+              ...lead,
+              phone: updatedLead.phone,
+              whatsapp_url: updatedLead.whatsapp_url,
+              website: updatedLead.website,
+              email: updatedLead.email,
+              niche: updatedLead.niche,
+              location: updatedLead.location,
+              tags: updatedLead.tags
+            }
+          : lead
+      )
+    );
+    setEditingLead((current) => (current?.id === updatedLead.id ? updatedLead : current));
+  }
+
+  function openTagManager() {
+    setTagError("");
+    setTagMessage("");
+    setTagForm(defaultTagForm);
+    setEditingTagId(null);
+    setTagDeleteDialog(null);
+    setTagManagerOpen(true);
+    refreshTags().catch((error) =>
+      setTagError(error instanceof Error ? error.message : "Não foi possível carregar as tags.")
+    );
+  }
+
+  function closeTagManager() {
+    if (tagBusyAction) return;
+    setTagManagerOpen(false);
+    setTagForm(defaultTagForm);
+    setEditingTagId(null);
+    setTagError("");
+    setTagMessage("");
+  }
+
+  function startEditTag(tag: LeadTag) {
+    setTagError("");
+    setTagMessage("");
+    setEditingTagId(tag.id);
+    setTagForm({
+      name: tag.name,
+      color: normalizeTagColor(tag.color),
+      description: tag.description || ""
+    });
+  }
+
+  function cancelEditTag() {
+    setEditingTagId(null);
+    setTagForm(defaultTagForm);
+    setTagError("");
+  }
+
+  async function handleSaveTag(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTagError("");
+    setTagMessage("");
+
+    if (!tagForm.name.trim()) {
+      setTagError("Informe o nome da tag.");
+      return;
+    }
+
+    setTagBusyAction(editingTagId ? `save-tag-${editingTagId}` : "create-tag");
+    try {
+      await apiFetch<LeadTag>(editingTagId ? `/api/tags/${editingTagId}` : "/api/tags", {
+        method: editingTagId ? "PATCH" : "POST",
+        body: JSON.stringify(tagPayload(tagForm))
+      });
+      setTagMessage(editingTagId ? "Tag atualizada." : "Tag criada.");
+      setTagForm(defaultTagForm);
+      setEditingTagId(null);
+      await refreshData();
+      await refreshWhatsappData();
+    } catch (error) {
+      setTagError(error instanceof Error ? error.message : "Não foi possível salvar a tag.");
+    } finally {
+      setTagBusyAction("");
+    }
+  }
+
+  function requestDeleteTag(tag: LeadTag) {
+    setTagError("");
+    setTagMessage("");
+    setTagDeleteDialog(tag);
+  }
+
+  async function confirmDeleteTag() {
+    if (!tagDeleteDialog) return;
+
+    const tag = tagDeleteDialog;
+    setTagError("");
+    setTagMessage("");
+    setTagBusyAction(`delete-tag-${tag.id}`);
+
+    try {
+      const response = await apiFetch<{ deleted: boolean; affected_leads: number }>(`/api/tags/${tag.id}`, {
+        method: "DELETE"
+      });
+      setSelectedLeadTagIds((current) => current.filter((id) => id !== tag.id));
+      setSelectedCrmTagIds((current) => current.filter((id) => id !== tag.id));
+      setLeadTagBulkTagIds((current) => current.filter((id) => id !== tag.id));
+      setTagDeleteDialog(null);
+      setTagForm((current) => (editingTagId === tag.id ? defaultTagForm : current));
+      setEditingTagId((current) => (current === tag.id ? null : current));
+      setTagMessage(`${response.affected_leads} leads perderam a tag "${tag.name}".`);
+      await refreshData();
+      await refreshWhatsappData();
+    } catch (error) {
+      setTagError(error instanceof Error ? error.message : "Não foi possível excluir a tag.");
+    } finally {
+      setTagBusyAction("");
+    }
+  }
+
+  async function toggleLeadTag(leadId: number, tagId: number, checked: boolean) {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setTagBusyAction(`lead-tag-${leadId}-${tagId}`);
+
+    try {
+      const updatedLead = checked
+        ? await apiFetch<Lead>(`/api/leads/${leadId}/tags`, {
+            method: "POST",
+            body: JSON.stringify({ tag_ids: [tagId] })
+          })
+        : await apiFetch<Lead>(`/api/leads/${leadId}/tags/${tagId}`, { method: "DELETE" });
+      applyLeadTagSnapshot(updatedLead);
+      await refreshTags();
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível atualizar as tags do lead.");
+    } finally {
+      setTagBusyAction("");
+    }
+  }
+
+  async function handleCreateCrmInlineTag(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedCrmLead) return;
+
+    setWhatsappError("");
+    setWhatsappMessage("");
+    if (!crmInlineTagForm.name.trim()) {
+      setWhatsappError("Informe o nome da tag.");
+      return;
+    }
+
+    setTagBusyAction("crm-create-tag");
+    try {
+      const createdTag = await apiFetch<LeadTag>("/api/tags", {
+        method: "POST",
+        body: JSON.stringify(tagPayload(crmInlineTagForm))
+      });
+      const updatedLead = await apiFetch<Lead>(`/api/leads/${selectedCrmLead.lead_id}/tags`, {
+        method: "POST",
+        body: JSON.stringify({ tag_ids: [createdTag.id] })
+      });
+      applyLeadTagSnapshot(updatedLead);
+      setCrmInlineTagForm(defaultTagForm);
+      setWhatsappMessage("Tag criada e aplicada ao lead.");
+      await refreshTags();
+    } catch (error) {
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível criar a tag.");
+    } finally {
+      setTagBusyAction("");
+    }
+  }
+
+  function openLeadTagBulkDialog(action: LeadTagBulkAction) {
+    if (selectedIds.length === 0) return;
+
+    setActionError("");
+    setActionMessage("");
+    setLeadTagBulkError("");
+    setLeadTagBulkTagIds([]);
+    setLeadTagBulkDialog({ action, ids: [...selectedIds] });
+  }
+
+  function closeLeadTagBulkDialog() {
+    if (leadTagBulkSaving) return;
+    setLeadTagBulkDialog(null);
+    setLeadTagBulkTagIds([]);
+    setLeadTagBulkError("");
+  }
+
+  async function confirmLeadTagBulk() {
+    if (!leadTagBulkDialog) return;
+
+    setLeadTagBulkError("");
+    if (leadTagBulkTagIds.length === 0) {
+      setLeadTagBulkError("Selecione pelo menos uma tag.");
+      return;
+    }
+
+    setLeadTagBulkSaving(true);
+    try {
+      const response = await apiFetch<{
+        action: LeadTagBulkAction;
+        matched_leads: number;
+        matched_tags: number;
+        changed_associations: number;
+      }>("/api/leads/tags/bulk", {
+        method: "POST",
+        body: JSON.stringify({
+          lead_ids: leadTagBulkDialog.ids,
+          tag_ids: leadTagBulkTagIds,
+          action: leadTagBulkDialog.action
+        })
+      });
+      const actionLabel = leadTagBulkDialog.action === "add" ? "aplicadas" : "removidas";
+      setActionMessage(
+        `${response.changed_associations} associações ${actionLabel} em ${response.matched_leads} leads.`
+      );
+      setSelectedIds([]);
+      setLeadTagBulkDialog(null);
+      setLeadTagBulkTagIds([]);
+      await refreshData();
+      await refreshWhatsappData();
+    } catch (error) {
+      setLeadTagBulkError(error instanceof Error ? error.message : "Não foi possível atualizar tags em lote.");
+    } finally {
+      setLeadTagBulkSaving(false);
+    }
+  }
+
   async function handleSaveWhatsappAiSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setWhatsappError("");
@@ -4309,6 +4823,28 @@ export default function Home() {
                       ? `Validar WhatsApp (${selectedIds.length})`
                       : "Validar WhatsApp"}
                 </button>
+                <button className="secondary-button compact-button" onClick={openTagManager} type="button">
+                  <Tags size={16} />
+                  Gerenciar tags
+                </button>
+                <button
+                  className="secondary-button compact-button"
+                  disabled={selectedIds.length === 0 || tags.length === 0}
+                  onClick={() => openLeadTagBulkDialog("add")}
+                  type="button"
+                >
+                  <Tags size={16} />
+                  Aplicar tags{selectedIds.length > 0 ? ` (${selectedIds.length})` : ""}
+                </button>
+                <button
+                  className="secondary-button compact-button"
+                  disabled={selectedIds.length === 0 || tags.length === 0}
+                  onClick={() => openLeadTagBulkDialog("remove")}
+                  type="button"
+                >
+                  <X size={16} />
+                  Remover tags
+                </button>
                 <button className="primary-button compact-button" onClick={openManualLeadModal} type="button">
                   <Plus size={16} />
                   Adicionar lead
@@ -4384,7 +4920,7 @@ export default function Home() {
               </label>
             </div>
 
-            <div className="filters-row">
+            <div className="filters-row lead-primary-filters-row">
               <TagDropdown
                 allLabel="Todos os nichos"
                 label="Filtrar por nicho"
@@ -4428,12 +4964,24 @@ export default function Home() {
                   </span>
                 </div>
               </label>
+              <LeadTagFilter
+                allLabel="Todas as tags"
+                label="Filtrar por tag"
+                mode={leadTagFilterMode}
+                onChange={setSelectedLeadTagIds}
+                onModeChange={setLeadTagFilterMode}
+                placeholder="Adicionar tag"
+                selectedIds={selectedLeadTagIds}
+                tags={tags}
+              />
               <button
                 className="secondary-button"
                 onClick={() => {
                   setSelectedLeadNiches([]);
                   setSelectedLeadLocations([]);
                   setLeadNameQuery("");
+                  setSelectedLeadTagIds([]);
+                  setLeadTagFilterMode("any");
                   setLeadWhatsappStatusFilter("");
                   setSelectedLeadEmailCampaignId("");
                   setLeadEmailOpenedOnly(false);
@@ -4522,6 +5070,7 @@ export default function Home() {
                     <th>Endereço</th>
                     <th>Telefone</th>
                     <th>WhatsApp</th>
+                    <th>Tags</th>
                     <th>Site</th>
                     <th>Insights site</th>
                     <th>E-mail</th>
@@ -4530,7 +5079,7 @@ export default function Home() {
                 <tbody>
                   {filteredLeads.length === 0 ? (
                     <tr>
-                      <td className="empty-cell" colSpan={11}>
+                      <td className="empty-cell" colSpan={12}>
                         <SkipForward size={18} />
                         Nenhum lead encontrado para os filtros.
                       </td>
@@ -4584,6 +5133,9 @@ export default function Home() {
                           <span className={whatsappStatus.className} title={whatsappStatus.title}>
                             {whatsappStatus.label}
                           </span>
+                        </td>
+                        <td>
+                          <TagPills tags={lead.tags} />
                         </td>
                         <td>
                           <WebsiteCell website={lead.website} />
@@ -5065,6 +5617,44 @@ export default function Home() {
             {(whatsappError || whatsappMessage) && (
               <div className={`notice ${whatsappError ? "danger" : "success"}`}>{whatsappError || whatsappMessage}</div>
             )}
+
+            <section className="panel crm-board-toolbar">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Pipeline</p>
+                  <h2>CRM WhatsApp</h2>
+                </div>
+                <div className="lead-actions">
+                  <span className="muted-count">{crmLeads.length} cards</span>
+                  <button className="secondary-button compact-button" onClick={openTagManager} type="button">
+                    <Tags size={16} />
+                    Gerenciar tags
+                  </button>
+                </div>
+              </div>
+              <div className="filters-row crm-board-filters-row">
+                <LeadTagFilter
+                  allLabel="Todas as tags"
+                  label="Filtrar board por tag"
+                  mode={crmTagFilterMode}
+                  onChange={setSelectedCrmTagIds}
+                  onModeChange={setCrmTagFilterMode}
+                  placeholder="Adicionar tag"
+                  selectedIds={selectedCrmTagIds}
+                  tags={tags}
+                />
+                <button
+                  className="secondary-button"
+                  onClick={() => {
+                    setSelectedCrmTagIds([]);
+                    setCrmTagFilterMode("any");
+                  }}
+                  type="button"
+                >
+                  Limpar filtros
+                </button>
+              </div>
+            </section>
 
             <DndContext
               collisionDetection={closestCorners}
@@ -6893,7 +7483,10 @@ export default function Home() {
             const websiteHref = website && !/^https?:\/\//i.test(website) ? `https://${website}` : website;
             const noteDraft = crmNoteDrafts[selectedCrmLead.lead_id] ?? selectedCrmLead.qualification_notes ?? "";
             const crmBusy = whatsappBusyAction === `crm-${selectedCrmLead.lead_id}`;
+            const crmTagBusy =
+              tagBusyAction === "crm-create-tag" || tagBusyAction.startsWith(`lead-tag-${selectedCrmLead.lead_id}-`);
             const notesChanged = crmNotesChanged(selectedCrmLead);
+            const selectedCrmLeadTagIds = selectedCrmLead.tags.map((tag) => tag.id);
 
             return (
               <div className="modal-backdrop" onMouseDown={handleCrmDetailBackdropMouseDown}>
@@ -6942,6 +7535,47 @@ export default function Home() {
                     </div>
                   </dl>
 
+                  <section className="crm-detail-tags" aria-label="Tags do lead">
+                    <div className="crm-detail-section-heading">
+                      <div>
+                        <p className="eyebrow">Tags</p>
+                        <h3>Classificação do lead</h3>
+                      </div>
+                      <TagPills tags={selectedCrmLead.tags} emptyLabel="Sem tags" />
+                    </div>
+
+                    <TagCheckboxGrid
+                      disabled={crmTagBusy}
+                      onToggle={(tagId, checked) => toggleLeadTag(selectedCrmLead.lead_id, tagId, checked)}
+                      selectedIds={selectedCrmLeadTagIds}
+                      tags={tags}
+                    />
+
+                    <form className="inline-tag-form" onSubmit={handleCreateCrmInlineTag}>
+                      <input
+                        placeholder="Nova tag"
+                        value={crmInlineTagForm.name}
+                        onChange={(event) => setCrmInlineTagForm({ ...crmInlineTagForm, name: event.target.value })}
+                      />
+                      <div className="tag-color-options compact-tag-color-options" aria-label="Cor da nova tag">
+                        {TAG_COLOR_OPTIONS.map((color) => (
+                          <button
+                            aria-label={`Usar cor ${color}`}
+                            className={`tag-color-option ${normalizeTagColor(crmInlineTagForm.color) === color ? "active" : ""}`}
+                            key={color}
+                            onClick={() => setCrmInlineTagForm({ ...crmInlineTagForm, color })}
+                            style={{ background: color }}
+                            type="button"
+                          />
+                        ))}
+                      </div>
+                      <button className="secondary-button compact-button" disabled={crmTagBusy} type="submit">
+                        {tagBusyAction === "crm-create-tag" ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
+                        Criar tag
+                      </button>
+                    </form>
+                  </section>
+
                   <label className="crm-stage-control">
                     Estágio
                     <select
@@ -6985,6 +7619,164 @@ export default function Home() {
             );
           })()
         : null}
+
+      {tagManagerOpen ? (
+        <div className="modal-backdrop">
+          <section className="edit-modal tag-manager-modal" role="dialog" aria-modal="true">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Tags globais</p>
+                <h2>Gerenciar tags</h2>
+              </div>
+              <button className="icon-button" onClick={closeTagManager} title="Fechar" type="button">
+                <X size={18} />
+              </button>
+            </div>
+
+            {tagError ? <div className="notice danger modal-helper">{tagError}</div> : null}
+            {tagMessage ? <div className="notice success modal-helper">{tagMessage}</div> : null}
+
+            <div className="tag-manager-layout">
+              <form className="tag-manager-form" onSubmit={handleSaveTag}>
+                <div className="panel-heading compact-heading">
+                  <div>
+                    <p className="eyebrow">{editingTagId ? "Editar" : "Nova tag"}</p>
+                    <h3>{editingTagId ? "Atualizar tag" : "Criar tag"}</h3>
+                  </div>
+                </div>
+                <label>
+                  Nome
+                  <input
+                    value={tagForm.name}
+                    onChange={(event) => setTagForm({ ...tagForm, name: event.target.value })}
+                    placeholder="Ex: Usa Bling"
+                  />
+                </label>
+                <label>
+                  Descrição
+                  <textarea
+                    rows={3}
+                    value={tagForm.description}
+                    onChange={(event) => setTagForm({ ...tagForm, description: event.target.value })}
+                    placeholder="Opcional"
+                  />
+                </label>
+                <div className="tag-color-field">
+                  <span>Cor</span>
+                  <div className="tag-color-options">
+                    {TAG_COLOR_OPTIONS.map((color) => (
+                      <button
+                        aria-label={`Usar cor ${color}`}
+                        className={`tag-color-option ${normalizeTagColor(tagForm.color) === color ? "active" : ""}`}
+                        key={color}
+                        onClick={() => setTagForm({ ...tagForm, color })}
+                        style={{ background: color }}
+                        type="button"
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="modal-actions tag-form-actions">
+                  {editingTagId ? (
+                    <button className="secondary-button" disabled={Boolean(tagBusyAction)} onClick={cancelEditTag} type="button">
+                      Cancelar edição
+                    </button>
+                  ) : null}
+                  <button className="primary-button" disabled={Boolean(tagBusyAction)} type="submit">
+                    {tagBusyAction === "create-tag" || tagBusyAction.startsWith("save-tag-") ? (
+                      <Loader2 className="spin" size={18} />
+                    ) : (
+                      <Save size={18} />
+                    )}
+                    {editingTagId ? "Salvar tag" : "Criar tag"}
+                  </button>
+                </div>
+              </form>
+
+              <div className="tag-manager-list">
+                {tags.length === 0 ? <p className="empty-state">Nenhuma tag criada ainda.</p> : null}
+                {tags.map((tag) => (
+                  <article className="tag-manager-row" key={tag.id}>
+                    <div className="tag-manager-main">
+                      <span className="lead-tag-pill" style={tagStyle(tag)}>
+                        {tag.name}
+                      </span>
+                      {tag.description ? <p>{tag.description}</p> : null}
+                      <small>{tag.lead_count} leads</small>
+                    </div>
+                    <div className="row-actions">
+                      <button
+                        className="icon-button"
+                        disabled={Boolean(tagBusyAction)}
+                        onClick={() => startEditTag(tag)}
+                        title="Editar tag"
+                        type="button"
+                      >
+                        <Edit3 size={16} />
+                      </button>
+                      <button
+                        className="icon-button danger"
+                        disabled={Boolean(tagBusyAction)}
+                        onClick={() => requestDeleteTag(tag)}
+                        title="Excluir tag"
+                        type="button"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {tagDeleteDialog ? (
+        <div className="modal-backdrop">
+          <section className="confirm-modal">
+            <div className="confirm-icon">
+              <Trash2 size={22} />
+            </div>
+            <div>
+              <p className="eyebrow">Confirmar exclusão</p>
+              <h2>Excluir tag?</h2>
+              <p className="confirm-copy">
+                A tag "{tagDeleteDialog.name}" será removida de {tagDeleteDialog.lead_count} leads.
+              </p>
+            </div>
+
+            {tagError ? <p className="error-text">{tagError}</p> : null}
+
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                disabled={tagBusyAction === `delete-tag-${tagDeleteDialog.id}`}
+                onClick={() => {
+                  setTagError("");
+                  setTagDeleteDialog(null);
+                }}
+                type="button"
+              >
+                Cancelar
+              </button>
+              <button
+                className="danger-button"
+                disabled={tagBusyAction === `delete-tag-${tagDeleteDialog.id}`}
+                onClick={confirmDeleteTag}
+                type="button"
+              >
+                {tagBusyAction === `delete-tag-${tagDeleteDialog.id}` ? (
+                  <Loader2 className="spin" size={18} />
+                ) : (
+                  <Trash2 size={18} />
+                )}
+                Excluir
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {manualLeadOpen ? (
         <div className="modal-backdrop">
@@ -7290,6 +8082,56 @@ export default function Home() {
           </section>
         </div>
       ) : null}
+
+      {leadTagBulkDialog
+        ? (() => {
+            const isRemove = leadTagBulkDialog.action === "remove";
+            const title = isRemove ? "Remover tags dos leads?" : "Aplicar tags aos leads?";
+            const actionText = isRemove ? "Remover tags" : "Aplicar tags";
+            return (
+              <div className="modal-backdrop">
+                <section className="confirm-modal tag-bulk-modal">
+                  <div className={`confirm-icon ${isRemove ? "" : "start-confirm-icon"}`}>
+                    {isRemove ? <X size={22} /> : <Tags size={22} />}
+                  </div>
+                  <div>
+                    <p className="eyebrow">Ação em lote</p>
+                    <h2>{title}</h2>
+                    <p className="confirm-copy">
+                      {leadTagBulkDialog.ids.length} leads selecionados serão atualizados.
+                    </p>
+                  </div>
+
+                  <div className="modal-helper">
+                    <TagCheckboxGrid
+                      disabled={leadTagBulkSaving}
+                      onToggle={(tagId) => setLeadTagBulkTagIds((current) => toggleNumberSelection(current, tagId))}
+                      selectedIds={leadTagBulkTagIds}
+                      tags={tags}
+                    />
+                  </div>
+
+                  {leadTagBulkError ? <p className="error-text">{leadTagBulkError}</p> : null}
+
+                  <div className="modal-actions">
+                    <button className="secondary-button" disabled={leadTagBulkSaving} onClick={closeLeadTagBulkDialog} type="button">
+                      Cancelar
+                    </button>
+                    <button
+                      className={isRemove ? "danger-button" : "primary-button"}
+                      disabled={leadTagBulkSaving || tags.length === 0}
+                      onClick={confirmLeadTagBulk}
+                      type="button"
+                    >
+                      {leadTagBulkSaving ? <Loader2 className="spin" size={18} /> : isRemove ? <X size={18} /> : <Tags size={18} />}
+                      {actionText}
+                    </button>
+                  </div>
+                </section>
+              </div>
+            );
+          })()
+        : null}
 
       {deleteDialog ? (
         <div className="modal-backdrop">

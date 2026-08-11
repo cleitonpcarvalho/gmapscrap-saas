@@ -24,6 +24,8 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
         "whatsapp_webhook_settings",
         "crm_leads",
         "crm_stage_history",
+        "tags",
+        "lead_tags",
     }.issubset(tables)
 
     lead_columns = {column["name"] for column in inspector.get_columns("leads")}
@@ -33,8 +35,12 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     email_send_columns = {column["name"] for column in inspector.get_columns("email_sends")}
     whatsapp_campaign_columns = {column["name"] for column in inspector.get_columns("whatsapp_campaigns")}
     crm_lead_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
+    tag_columns = {column["name"] for column in inspector.get_columns("tags")}
+    lead_tag_columns = {column["name"] for column in inspector.get_columns("lead_tags")}
 
     assert "position" in crm_lead_columns
+    assert {"id", "name", "color", "description", "created_at"}.issubset(tag_columns)
+    assert {"lead_id", "tag_id", "created_at"}.issubset(lead_tag_columns)
     assert "whatsapp_validated" in lead_columns
     assert "whatsapp_validated_at" in lead_columns
     assert "whatsapp_validation_status" in lead_columns

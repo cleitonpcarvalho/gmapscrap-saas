@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -35,6 +35,33 @@ class SearchRun(Base):
     )
 
 
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    color: Mapped[str] = mapped_column(String(7), default="#e0f2fe", nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (Index("uq_tags_lower_name", func.lower(name), unique=True),)
+
+    leads: Mapped[list["Lead"]] = relationship(
+        secondary="lead_tags",
+        back_populates="tags",
+        lazy="selectin",
+        passive_deletes=True,
+    )
+
+
+class LeadTag(Base):
+    __tablename__ = "lead_tags"
+    __table_args__ = (UniqueConstraint("lead_id", "tag_id", name="uq_lead_tags_lead_tag"),)
+
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), primary_key=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Lead(Base):
     __tablename__ = "leads"
     __table_args__ = (UniqueConstraint("website", name="uq_leads_website"),)
@@ -54,6 +81,13 @@ class Lead(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     search_run: Mapped[SearchRun] = relationship(back_populates="leads")
+    tags: Mapped[list[Tag]] = relationship(
+        secondary="lead_tags",
+        back_populates="leads",
+        lazy="selectin",
+        order_by="Tag.name",
+        passive_deletes=True,
+    )
 
     @property
     def niche(self) -> str:

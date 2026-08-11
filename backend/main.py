@@ -7,7 +7,7 @@ from io import StringIO
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import delete, desc, func, or_, select
@@ -25,7 +25,9 @@ from backend.models import (
     EmailTemplate,
     Lead,
     LeadList,
+    LeadTag,
     SearchRun,
+    Tag,
     WhatsAppAiSettings,
     WhatsAppCampaign,
     WhatsAppCampaignTemplate,
@@ -75,6 +77,13 @@ from backend.schemas import (
     SmtpConfigUpdate,
     SmtpTestRequest,
     StatsRead,
+    TagCreate,
+    TagDeleteResponse,
+    TagRead,
+    TagUpdate,
+    LeadTagsBulkRequest,
+    LeadTagsBulkResponse,
+    LeadTagsRequest,
     UserRead,
     WhatsAppCampaignCreate,
     WhatsAppCampaignRead,
@@ -326,6 +335,64 @@ def _latest_whatsapp_context_for_lead(db: Session, lead_id: int) -> tuple[WhatsA
     return conversation, message
 
 
+def _unique_positive_ids(values: list[int] | None) -> list[int]:
+    if not values or not isinstance(values, list):
+        return []
+    return list(dict.fromkeys(value for value in values if value > 0))
+
+
+def _sorted_tags(tags: list[Tag] | None) -> list[Tag]:
+    return sorted(tags or [], key=lambda tag: tag.name.lower())
+
+
+def _tag_read(tag: Tag, lead_count: int = 0) -> TagRead:
+    return TagRead(
+        id=tag.id,
+        name=tag.name,
+        color=tag.color,
+        description=tag.description,
+        created_at=tag.created_at,
+        lead_count=lead_count,
+    )
+
+
+def _apply_tag_filter(query, tag_ids: list[int], tag_filter_mode: str):
+    if not tag_ids:
+        return query
+
+    if tag_filter_mode == "all":
+        matching_leads = (
+            select(LeadTag.lead_id)
+            .where(LeadTag.tag_id.in_(tag_ids))
+            .group_by(LeadTag.lead_id)
+            .having(func.count(func.distinct(LeadTag.tag_id)) == len(tag_ids))
+        )
+        return query.where(Lead.id.in_(matching_leads))
+
+    return query.where(Lead.id.in_(select(LeadTag.lead_id).where(LeadTag.tag_id.in_(tag_ids))))
+
+
+def _load_lead_for_read(db: Session, lead_id: int) -> Lead | None:
+    return db.scalar(
+        select(Lead)
+        .options(selectinload(Lead.search_run), selectinload(Lead.tags))
+        .where(Lead.id == lead_id)
+    )
+
+
+def _find_tag_by_name(db: Session, name: str, *, exclude_id: int | None = None) -> Tag | None:
+    stmt = select(Tag).where(func.lower(Tag.name) == name.lower())
+    if exclude_id is not None:
+        stmt = stmt.where(Tag.id != exclude_id)
+    return db.scalar(stmt)
+
+
+def _existing_tag_ids(db: Session, tag_ids: list[int]) -> set[int]:
+    if not tag_ids:
+        return set()
+    return set(db.scalars(select(Tag.id).where(Tag.id.in_(tag_ids))).all())
+
+
 def _crm_lead_read(db: Session, crm_lead: CrmLead) -> CrmLeadRead:
     lead = crm_lead.lead
     conversation, latest_message = _latest_whatsapp_context_for_lead(db, crm_lead.lead_id)
@@ -345,6 +412,7 @@ def _crm_lead_read(db: Session, crm_lead: CrmLead) -> CrmLeadRead:
         email=lead.email if lead else "",
         niche=lead.search_run.niche if lead and lead.search_run else "",
         location=lead.search_run.location if lead and lead.search_run else "",
+        tags=_sorted_tags(lead.tags) if lead else [],
         last_message=latest_message.content if latest_message else None,
         last_message_at=conversation.last_message_at if conversation else None,
         conversation_id=conversation.id if conversation else None,
@@ -633,6 +701,8 @@ def list_leads(
     niche: str | None = None,
     location: str | None = None,
     whatsapp_status: str | None = None,
+    tag_ids: list[int] | None = Query(default=None),
+    tag_filter_mode: str = "any",
     email_campaign_id: int | None = None,
     email_opened: bool = False,
     email_clicked: bool = False,
@@ -649,6 +719,13 @@ def list_leads(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Status de validação de WhatsApp inválido.",
         )
+    normalized_tag_filter_mode = (tag_filter_mode or "any").strip().lower()
+    if normalized_tag_filter_mode not in {"any", "all"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Modo de filtro por tags inválido. Use 'any' ou 'all'.",
+        )
+    normalized_tag_ids = _unique_positive_ids(tag_ids)
 
     def apply_filters(query):
         if run_id is not None:
@@ -702,10 +779,15 @@ def list_leads(
             )
             query = query.where(Lead.id.in_(replied_leads_stmt))
 
+        query = _apply_tag_filter(query, normalized_tag_ids, normalized_tag_filter_mode)
+
         return query
 
     stmt = apply_filters(
-        select(Lead).options(selectinload(Lead.search_run)).join(SearchRun).order_by(desc(Lead.created_at))
+        select(Lead)
+        .options(selectinload(Lead.search_run), selectinload(Lead.tags))
+        .join(SearchRun)
+        .order_by(desc(Lead.created_at))
     )
     total_count = db.scalar(select(func.count()).select_from(apply_filters(select(Lead.id).join(SearchRun)).subquery())) or 0
     if response is not None:
@@ -1085,6 +1167,204 @@ def bulk_delete_leads(
     return BulkDeleteResponse(deleted=len(leads))
 
 
+@app.get("/api/tags", response_model=list[TagRead])
+def list_tags(
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> list[TagRead]:
+    _ = username
+    rows = db.execute(
+        select(Tag, func.count(LeadTag.lead_id))
+        .outerjoin(LeadTag, LeadTag.tag_id == Tag.id)
+        .group_by(Tag.id)
+        .order_by(func.lower(Tag.name))
+    ).all()
+    return [_tag_read(tag, int(lead_count or 0)) for tag, lead_count in rows]
+
+
+@app.post("/api/tags", response_model=TagRead)
+def create_tag(
+    payload: TagCreate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> TagRead:
+    _ = username
+    if _find_tag_by_name(db, payload.name):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe uma tag com esse nome.")
+
+    tag = Tag(name=payload.name, color=payload.color, description=payload.description)
+    db.add(tag)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe uma tag com esse nome.") from None
+    db.refresh(tag)
+    return _tag_read(tag, 0)
+
+
+@app.patch("/api/tags/{tag_id}", response_model=TagRead)
+def update_tag(
+    tag_id: int,
+    payload: TagUpdate,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> TagRead:
+    _ = username
+    tag = db.get(Tag, tag_id)
+    if not tag:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag não encontrada")
+
+    payload_data = payload.model_dump(exclude_unset=True)
+    if "name" in payload_data and payload_data["name"] is not None:
+        if _find_tag_by_name(db, payload_data["name"], exclude_id=tag.id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe uma tag com esse nome.")
+        tag.name = payload_data["name"]
+    if "color" in payload_data and payload_data["color"] is not None:
+        tag.color = payload_data["color"]
+    if "description" in payload_data:
+        tag.description = payload_data["description"]
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Já existe uma tag com esse nome.") from None
+
+    db.refresh(tag)
+    lead_count = db.scalar(select(func.count(LeadTag.lead_id)).where(LeadTag.tag_id == tag.id)) or 0
+    return _tag_read(tag, int(lead_count))
+
+
+@app.delete("/api/tags/{tag_id}", response_model=TagDeleteResponse)
+def delete_tag(
+    tag_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> TagDeleteResponse:
+    _ = username
+    tag_exists = db.scalar(select(Tag.id).where(Tag.id == tag_id))
+    if tag_exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag não encontrada")
+
+    affected_leads = db.scalar(select(func.count(LeadTag.lead_id)).where(LeadTag.tag_id == tag_id)) or 0
+    db.execute(delete(LeadTag).where(LeadTag.tag_id == tag_id))
+    db.execute(delete(Tag).where(Tag.id == tag_id))
+    db.commit()
+    return TagDeleteResponse(deleted=True, affected_leads=int(affected_leads))
+
+
+@app.post("/api/leads/{lead_id}/tags", response_model=LeadRead)
+def add_tags_to_lead(
+    lead_id: int,
+    payload: LeadTagsRequest,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> Lead:
+    _ = username
+    lead = db.get(Lead, lead_id)
+    if not lead:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+
+    tag_ids = _unique_positive_ids(payload.tag_ids)
+    existing_tag_ids = _existing_tag_ids(db, tag_ids)
+    if len(existing_tag_ids) != len(tag_ids):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Uma ou mais tags não foram encontradas")
+
+    existing_pairs = set(
+        db.execute(
+            select(LeadTag.tag_id).where(
+                LeadTag.lead_id == lead_id,
+                LeadTag.tag_id.in_(tag_ids),
+            )
+        ).scalars()
+    )
+    for tag_id in tag_ids:
+        if tag_id not in existing_pairs:
+            db.add(LeadTag(lead_id=lead_id, tag_id=tag_id))
+
+    db.commit()
+    updated_lead = _load_lead_for_read(db, lead_id)
+    if not updated_lead:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+    return updated_lead
+
+
+@app.delete("/api/leads/{lead_id}/tags/{tag_id}", response_model=LeadRead)
+def remove_tag_from_lead(
+    lead_id: int,
+    tag_id: int,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> Lead:
+    _ = username
+    if not db.get(Lead, lead_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+    if not db.get(Tag, tag_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag não encontrada")
+
+    db.execute(delete(LeadTag).where(LeadTag.lead_id == lead_id, LeadTag.tag_id == tag_id))
+    db.commit()
+    updated_lead = _load_lead_for_read(db, lead_id)
+    if not updated_lead:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
+    return updated_lead
+
+
+@app.post("/api/leads/tags/bulk", response_model=LeadTagsBulkResponse)
+def bulk_update_lead_tags(
+    payload: LeadTagsBulkRequest,
+    db: Session = Depends(get_db),
+    username: str = Depends(require_user),
+) -> LeadTagsBulkResponse:
+    _ = username
+    lead_ids = _unique_positive_ids(payload.lead_ids)
+    tag_ids = _unique_positive_ids(payload.tag_ids)
+    existing_lead_ids = set(db.scalars(select(Lead.id).where(Lead.id.in_(lead_ids))).all())
+    existing_tag_ids = _existing_tag_ids(db, tag_ids)
+    if len(existing_tag_ids) != len(tag_ids):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Uma ou mais tags não foram encontradas")
+
+    changed = 0
+    if payload.action == "add":
+        existing_pairs = {
+            (lead_id, tag_id)
+            for lead_id, tag_id in db.execute(
+                select(LeadTag.lead_id, LeadTag.tag_id).where(
+                    LeadTag.lead_id.in_(existing_lead_ids),
+                    LeadTag.tag_id.in_(existing_tag_ids),
+                )
+            ).all()
+        }
+        for lead_id in existing_lead_ids:
+            for tag_id in existing_tag_ids:
+                if (lead_id, tag_id) not in existing_pairs:
+                    db.add(LeadTag(lead_id=lead_id, tag_id=tag_id))
+                    changed += 1
+    else:
+        existing_pairs = db.execute(
+            select(LeadTag.lead_id, LeadTag.tag_id).where(
+                LeadTag.lead_id.in_(existing_lead_ids),
+                LeadTag.tag_id.in_(existing_tag_ids),
+            )
+        ).all()
+        changed = len(existing_pairs)
+        db.execute(
+            delete(LeadTag).where(
+                LeadTag.lead_id.in_(existing_lead_ids),
+                LeadTag.tag_id.in_(existing_tag_ids),
+            )
+        )
+
+    db.commit()
+    return LeadTagsBulkResponse(
+        action=payload.action,
+        matched_leads=len(existing_lead_ids),
+        matched_tags=len(existing_tag_ids),
+        changed_associations=changed,
+    )
+
+
 @app.post("/api/whatsapp/instances", response_model=WhatsAppInstanceRead)
 def create_whatsapp_instance(
     payload: WhatsAppInstanceCreate,
@@ -1349,6 +1629,8 @@ def delete_whatsapp_portfolio_item(
 @app.get("/api/crm/leads", response_model=list[CrmLeadRead])
 def list_crm_leads(
     stage: str | None = None,
+    tag_ids: list[int] | None = Query(default=None),
+    tag_filter_mode: str = "any",
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
 ) -> list[CrmLeadRead]:
@@ -1356,15 +1638,37 @@ def list_crm_leads(
     normalized_stage = (stage or "").strip()
     if normalized_stage and normalized_stage not in CRM_STAGES:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Estágio de CRM inválido")
+    normalized_tag_filter_mode = (tag_filter_mode or "any").strip().lower()
+    if normalized_tag_filter_mode not in {"any", "all"}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Modo de filtro por tags inválido. Use 'any' ou 'all'.",
+        )
+    normalized_tag_ids = _unique_positive_ids(tag_ids)
 
-    stmt = select(CrmLead).options(selectinload(CrmLead.lead).selectinload(Lead.search_run)).order_by(
-        CrmLead.position.is_(None),
-        CrmLead.position.asc(),
-        desc(CrmLead.updated_at),
-        desc(CrmLead.id),
+    stmt = (
+        select(CrmLead)
+        .options(selectinload(CrmLead.lead).selectinload(Lead.search_run), selectinload(CrmLead.lead).selectinload(Lead.tags))
+        .order_by(
+            CrmLead.position.is_(None),
+            CrmLead.position.asc(),
+            desc(CrmLead.updated_at),
+            desc(CrmLead.id),
+        )
     )
     if normalized_stage:
         stmt = stmt.where(CrmLead.stage == normalized_stage)
+    if normalized_tag_ids:
+        if normalized_tag_filter_mode == "all":
+            matching_leads = (
+                select(LeadTag.lead_id)
+                .where(LeadTag.tag_id.in_(normalized_tag_ids))
+                .group_by(LeadTag.lead_id)
+                .having(func.count(func.distinct(LeadTag.tag_id)) == len(normalized_tag_ids))
+            )
+            stmt = stmt.where(CrmLead.lead_id.in_(matching_leads))
+        else:
+            stmt = stmt.where(CrmLead.lead_id.in_(select(LeadTag.lead_id).where(LeadTag.tag_id.in_(normalized_tag_ids))))
 
     crm_leads = list(db.scalars(stmt).all())
     return [_crm_lead_read(db, crm_lead) for crm_lead in crm_leads]
@@ -1407,7 +1711,7 @@ def update_crm_lead(
     db.commit()
     crm_lead = db.scalar(
         select(CrmLead)
-        .options(selectinload(CrmLead.lead).selectinload(Lead.search_run))
+        .options(selectinload(CrmLead.lead).selectinload(Lead.search_run), selectinload(CrmLead.lead).selectinload(Lead.tags))
         .where(CrmLead.id == crm_lead.id)
     )
     if not crm_lead:

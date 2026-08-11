@@ -45,6 +45,14 @@ class SearchCreate(BaseModel):
         return self
 
 
+class TagSummary(BaseModel):
+    id: int
+    name: str
+    color: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class LeadRead(BaseModel):
     id: int
     run_id: int
@@ -61,6 +69,7 @@ class LeadRead(BaseModel):
     whatsapp_validation_status: str | None = None
     validate_whatsapp: bool = False
     whatsapp_url: str = ""
+    tags: list[TagSummary] = Field(default_factory=list)
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -102,6 +111,83 @@ class BulkDeleteRequest(BaseModel):
 
 class BulkDeleteResponse(BaseModel):
     deleted: int
+
+
+TagBulkAction = Literal["add", "remove"]
+
+
+class TagCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    color: str = Field(default="#e0f2fe", pattern=r"^#[0-9A-Fa-f]{6}$")
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("Informe o nome da tag.")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class TagUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = " ".join(value.strip().split())
+        if not normalized:
+            raise ValueError("Informe o nome da tag.")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
+class TagRead(TagSummary):
+    description: str | None = None
+    created_at: datetime
+    lead_count: int = 0
+
+
+class TagDeleteResponse(BaseModel):
+    deleted: bool
+    affected_leads: int
+
+
+class LeadTagsRequest(BaseModel):
+    tag_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class LeadTagsBulkRequest(BaseModel):
+    lead_ids: list[int] = Field(min_length=1, max_length=500)
+    tag_ids: list[int] = Field(min_length=1, max_length=100)
+    action: TagBulkAction
+
+
+class LeadTagsBulkResponse(BaseModel):
+    action: TagBulkAction
+    matched_leads: int
+    matched_tags: int
+    changed_associations: int
 
 
 class SearchRunRead(BaseModel):
@@ -363,6 +449,7 @@ class CrmLeadRead(BaseModel):
     email: str
     niche: str
     location: str
+    tags: list[TagSummary] = Field(default_factory=list)
     last_message: str | None = None
     last_message_at: datetime | None = None
     conversation_id: int | None = None

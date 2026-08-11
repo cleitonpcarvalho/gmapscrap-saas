@@ -1071,6 +1071,10 @@ td span {
   padding-bottom: 4px;
 }
 
+.crm-board-toolbar {
+  margin-bottom: 14px;
+}
+
 .crm-column {
   min-width: 240px;
   display: grid;
@@ -1289,6 +1293,97 @@ td span {
   font-weight: 800;
 }
 
+.crm-detail-tags {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.crm-detail-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.crm-detail-section-heading h3,
+.tag-manager-form h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.tag-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 8px;
+}
+
+.tag-checkbox {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.tag-checkbox input {
+  width: 16px;
+  min-height: 16px;
+  flex: 0 0 auto;
+}
+
+.inline-tag-form {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.inline-tag-form input {
+  min-height: 38px;
+}
+
+.tag-color-field {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tag-color-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.compact-tag-color-options {
+  flex-wrap: nowrap;
+}
+
+.tag-color-option {
+  width: 28px;
+  height: 28px;
+  border: 2px solid rgba(23, 33, 29, 0.12);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.tag-color-option.active {
+  border-color: var(--accent-dark);
+  box-shadow: 0 0 0 3px rgba(8, 127, 140, 0.12);
+}
+
 .crm-stage-control,
 .crm-notes-control {
   display: grid;
@@ -1373,8 +1468,16 @@ td span {
   margin-top: 18px;
 }
 
+.lead-primary-filters-row {
+  grid-template-columns: repeat(4, minmax(160px, 1fr)) auto;
+}
+
 .history-filters-row {
   grid-template-columns: repeat(4, minmax(170px, 1fr)) auto;
+}
+
+.crm-board-filters-row {
+  grid-template-columns: minmax(240px, 420px) auto;
 }
 
 .lead-campaign-filters-row {
@@ -1442,6 +1545,72 @@ td span {
   color: var(--accent-dark);
   background: rgba(255, 255, 255, 0.76);
   cursor: pointer;
+}
+
+.colored-filter-tag {
+  color: var(--ink);
+  background: var(--tag-color, var(--accent-soft));
+}
+
+.lead-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.lead-tag-pill {
+  max-width: 150px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid rgba(23, 33, 29, 0.08);
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--tag-color, var(--surface-soft));
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lead-tag-pill.more-tag,
+.tag-empty {
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
+.tag-empty {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.tag-filter-mode {
+  display: inline-flex;
+  min-height: 28px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+}
+
+.tag-filter-mode button {
+  min-width: 76px;
+  border: 0;
+  padding: 0 9px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.tag-filter-mode button.active {
+  color: #fff;
+  background: var(--accent);
 }
 
 .pagination-row {
@@ -1560,6 +1729,14 @@ td a {
   width: min(980px, 100%);
 }
 
+.tag-manager-modal {
+  width: min(920px, 100%);
+}
+
+.tag-bulk-modal {
+  width: min(560px, 100%);
+}
+
 .modal-helper {
   margin-top: 16px;
 }
@@ -1647,6 +1824,68 @@ td a {
   margin-top: 22px;
 }
 
+.tag-manager-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(280px, 1fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.tag-manager-form {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.compact-heading {
+  align-items: flex-start;
+}
+
+.tag-form-actions {
+  justify-content: flex-start;
+  margin-top: 0;
+}
+
+.tag-manager-list {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.tag-manager-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.tag-manager-main {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.tag-manager-main p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.tag-manager-main small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .wide-field {
   grid-column: 1 / -1;
 }
@@ -1694,7 +1933,9 @@ td a {
   .dashboard-metrics,
   .dashboard-grid,
   .template-layout,
-  .lead-campaign-filters-row {
+  .lead-campaign-filters-row,
+  .lead-primary-filters-row,
+  .tag-manager-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1725,7 +1966,9 @@ td a {
   .search-options,
   .quantity-row,
   .edit-grid,
-  .crm-detail-list {
+  .crm-detail-list,
+  .tag-manager-layout,
+  .inline-tag-form {
     width: 100%;
     grid-template-columns: 1fr;
   }
