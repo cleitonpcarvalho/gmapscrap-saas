@@ -109,6 +109,25 @@ def test_list_crm_leads_filters_by_stage_and_includes_latest_message(db_session:
     assert result[0].conversation_id == conversation.id
 
 
+def test_list_crm_leads_orders_by_position(db_session: Session) -> None:
+    first_lead = seed_lead(db_session, name="First Lead")
+    second_lead = seed_lead(db_session, name="Second Lead", phone="+5511888880000")
+    third_lead = seed_lead(db_session, name="Third Lead", phone="+5511777770000")
+    db_session.add_all(
+        [
+            CrmLead(lead_id=first_lead.id, stage="new", position=2),
+            CrmLead(lead_id=second_lead.id, stage="new", position=0),
+            CrmLead(lead_id=third_lead.id, stage="new", position=1),
+        ]
+    )
+    db_session.commit()
+
+    result = main.list_crm_leads(stage="new", db=db_session, username="test-user")
+
+    assert [lead.lead_id for lead in result] == [second_lead.id, third_lead.id, first_lead.id]
+    assert [lead.position for lead in result] == [0, 1, 2]
+
+
 def test_update_crm_lead_stage_creates_manual_history(db_session: Session) -> None:
     lead = seed_lead(db_session)
     crm_lead = CrmLead(lead_id=lead.id, stage="new")
@@ -129,6 +148,43 @@ def test_update_crm_lead_stage_creates_manual_history(db_session: Session) -> No
     assert result.qualification_notes == "Budget confirmed"
     assert crm_lead.stage == "qualified"
     assert history.crm_lead_id == crm_lead.id
+    assert history.from_stage == "new"
+    assert history.to_stage == "qualified"
+    assert history.changed_by == "manual"
+
+
+def test_update_crm_lead_accepts_stage_and_position_together(db_session: Session) -> None:
+    source_first = seed_lead(db_session, name="Source First")
+    moving_lead = seed_lead(db_session, name="Moving Lead", phone="+5511888880000")
+    target_first = seed_lead(db_session, name="Target First", phone="+5511777770000")
+    target_second = seed_lead(db_session, name="Target Second", phone="+5511666660000")
+    db_session.add_all(
+        [
+            CrmLead(lead_id=source_first.id, stage="new", position=0),
+            CrmLead(lead_id=moving_lead.id, stage="new", position=1),
+            CrmLead(lead_id=target_first.id, stage="qualified", position=0),
+            CrmLead(lead_id=target_second.id, stage="qualified", position=1),
+        ]
+    )
+    db_session.commit()
+
+    result = main.update_crm_lead(
+        moving_lead.id,
+        CrmLeadUpdate(stage="qualified", position=1),
+        db=db_session,
+        username="test-user",
+    )
+
+    history = db_session.scalars(select(CrmStageHistory)).one()
+    crm_rows = list(db_session.scalars(select(CrmLead)).all())
+    positions = {(row.lead_id, row.stage): row.position for row in crm_rows}
+
+    assert result.stage == "qualified"
+    assert result.position == 1
+    assert positions[(source_first.id, "new")] == 0
+    assert positions[(target_first.id, "qualified")] == 0
+    assert positions[(moving_lead.id, "qualified")] == 1
+    assert positions[(target_second.id, "qualified")] == 2
     assert history.from_stage == "new"
     assert history.to_stage == "qualified"
     assert history.changed_by == "manual"

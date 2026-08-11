@@ -94,7 +94,7 @@ from backend.schemas import (
     WhatsAppTemplateGenerateResponse,
 )
 from backend.scrapers.email_scraper import normalize_site_url
-from backend.services.crm import CRM_STAGES, get_or_create_crm_lead, update_crm_stage
+from backend.services.crm import CRM_STAGES, get_or_create_crm_lead, move_crm_lead, update_crm_stage
 from backend.services.content_preview import fetch_content_preview
 from backend.services.email_campaigns import (
     mark_clicked,
@@ -336,9 +336,11 @@ def _crm_lead_read(db: Session, crm_lead: CrmLead) -> CrmLeadRead:
         stage=crm_lead.stage,
         qualification_notes=crm_lead.qualification_notes,
         score=crm_lead.score,
+        position=crm_lead.position,
         updated_at=crm_lead.updated_at,
         lead_name=lead.name if lead else "",
         phone=lead.phone if lead else None,
+        whatsapp_url=lead.whatsapp_url if lead else "",
         website=lead.website if lead else None,
         email=lead.email if lead else "",
         niche=lead.search_run.niche if lead and lead.search_run else "",
@@ -1356,6 +1358,8 @@ def list_crm_leads(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Estágio de CRM inválido")
 
     stmt = select(CrmLead).options(selectinload(CrmLead.lead).selectinload(Lead.search_run)).order_by(
+        CrmLead.position.is_(None),
+        CrmLead.position.asc(),
         desc(CrmLead.updated_at),
         desc(CrmLead.id),
     )
@@ -1381,11 +1385,20 @@ def update_crm_lead(
     crm_lead = get_or_create_crm_lead(db, lead_id)
     payload_data = payload.model_dump(exclude_unset=True)
 
-    if "stage" in payload_data and payload_data["stage"] is not None:
-        next_stage = payload_data["stage"]
-        if next_stage not in CRM_STAGES:
+    should_move = ("stage" in payload_data and payload_data["stage"] is not None) or (
+        "position" in payload_data and payload_data["position"] is not None
+    )
+    if should_move:
+        next_stage = payload_data.get("stage")
+        if next_stage is not None and next_stage not in CRM_STAGES:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Estágio de CRM inválido")
-        crm_lead = update_crm_stage(db, lead_id, next_stage, changed_by="manual")
+        crm_lead = move_crm_lead(
+            db,
+            lead_id,
+            stage=next_stage,
+            position=payload_data.get("position"),
+            changed_by="manual",
+        )
 
     if "qualification_notes" in payload_data:
         notes = payload_data["qualification_notes"]

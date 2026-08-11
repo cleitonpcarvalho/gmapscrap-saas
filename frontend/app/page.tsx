@@ -1,6 +1,27 @@
 "use client";
 
 import {
+  closestCorners,
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+  type UniqueIdentifier
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy
+} from "@dnd-kit/sortable";
+import {
   ArrowDownToLine,
   BarChart3,
   Building2,
@@ -36,7 +57,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import type { FormEvent } from "react";
+import type { CSSProperties, FormEvent, MouseEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 type User = { username: string };
@@ -307,6 +328,7 @@ type WhatsAppCampaign = {
 };
 
 type CrmStage = "new" | "responded" | "qualified" | "not_interested" | "converted";
+type CrmStageOption = { value: CrmStage; label: string };
 
 type CrmLead = {
   id: number;
@@ -314,9 +336,11 @@ type CrmLead = {
   stage: CrmStage;
   qualification_notes: string | null;
   score: number | null;
+  position: number | null;
   updated_at: string;
   lead_name: string;
   phone: string | null;
+  whatsapp_url: string;
   website: string | null;
   email: string;
   niche: string;
@@ -585,7 +609,7 @@ const defaultWhatsappTemplateForm = {
 
 const WHATSAPP_VARIABLES = ["{nome_empresa}", "{website}", "{phone}", "{niche}", "{location}"];
 
-const CRM_STAGES: { value: CrmStage; label: string }[] = [
+const CRM_STAGES: CrmStageOption[] = [
   { value: "new", label: "Novo" },
   { value: "responded", label: "Respondeu" },
   { value: "qualified", label: "Qualificado" },
@@ -870,7 +894,7 @@ function leadPayload(lead: Lead) {
   };
 }
 
-function PhoneCell({ lead }: { lead: Lead }) {
+function PhoneCell({ lead }: { lead: Pick<Lead, "phone" | "whatsapp_url"> }) {
   const phone = safeText(lead.phone).trim();
   const url = safeText(lead.whatsapp_url).trim();
 
@@ -893,6 +917,222 @@ function WebsiteCell({ website }: { website: string | null | undefined }) {
       <Globe2 size={15} />
       {displayWebsite(url)}
     </a>
+  );
+}
+
+const CRM_LEAD_DND_PREFIX = "crm-lead-";
+const CRM_STAGE_DND_PREFIX = "crm-stage-";
+
+function crmLeadDragId(leadId: number) {
+  return `${CRM_LEAD_DND_PREFIX}${leadId}`;
+}
+
+function crmStageDropId(stage: CrmStage) {
+  return `${CRM_STAGE_DND_PREFIX}${stage}`;
+}
+
+function parseCrmLeadDragId(id: UniqueIdentifier | null | undefined) {
+  const value = String(id || "");
+  if (!value.startsWith(CRM_LEAD_DND_PREFIX)) return null;
+  const leadId = Number(value.slice(CRM_LEAD_DND_PREFIX.length));
+  return Number.isFinite(leadId) ? leadId : null;
+}
+
+function parseCrmStageDropId(id: UniqueIdentifier | null | undefined): CrmStage | null {
+  const value = String(id || "");
+  if (!value.startsWith(CRM_STAGE_DND_PREFIX)) return null;
+  const stage = value.slice(CRM_STAGE_DND_PREFIX.length) as CrmStage;
+  return CRM_STAGES.some((item) => item.value === stage) ? stage : null;
+}
+
+function compareCrmLeadsForBoard(first: CrmLead, second: CrmLead) {
+  const firstPosition = first.position ?? Number.MAX_SAFE_INTEGER;
+  const secondPosition = second.position ?? Number.MAX_SAFE_INTEGER;
+  if (firstPosition !== secondPosition) return firstPosition - secondPosition;
+
+  const firstUpdated = Date.parse(first.updated_at || "") || 0;
+  const secondUpdated = Date.parse(second.updated_at || "") || 0;
+  if (firstUpdated !== secondUpdated) return secondUpdated - firstUpdated;
+
+  return second.id - first.id;
+}
+
+function emptyCrmLeadGroups(): Record<CrmStage, CrmLead[]> {
+  return CRM_STAGES.reduce(
+    (accumulator, stage) => ({ ...accumulator, [stage.value]: [] }),
+    {} as Record<CrmStage, CrmLead[]>
+  );
+}
+
+function groupCrmLeadsByStage(leads: CrmLead[]) {
+  const grouped = emptyCrmLeadGroups();
+  leads.forEach((lead) => {
+    grouped[lead.stage] = [...grouped[lead.stage], lead];
+  });
+  CRM_STAGES.forEach((stage) => {
+    grouped[stage.value] = [...grouped[stage.value]].sort(compareCrmLeadsForBoard);
+  });
+  return grouped;
+}
+
+function crmStageFromDndData(data: unknown): CrmStage | null {
+  if (!data || typeof data !== "object" || !("stage" in data)) return null;
+  const stage = String((data as { stage?: unknown }).stage || "") as CrmStage;
+  return CRM_STAGES.some((item) => item.value === stage) ? stage : null;
+}
+
+function crmDropTargetStage(over: { id: UniqueIdentifier; data: { current?: unknown } } | null | undefined) {
+  return crmStageFromDndData(over?.data.current) || parseCrmStageDropId(over?.id);
+}
+
+function crmTargetIndex(
+  overId: UniqueIdentifier | null | undefined,
+  targetStage: CrmStage,
+  grouped: Record<CrmStage, CrmLead[]>
+) {
+  const overLeadId = parseCrmLeadDragId(overId);
+  if (!overLeadId) return grouped[targetStage].length;
+
+  const overIndex = grouped[targetStage].findIndex((lead) => lead.lead_id === overLeadId);
+  return overIndex >= 0 ? overIndex : grouped[targetStage].length;
+}
+
+function clampCrmTargetIndex(index: number, length: number) {
+  return Math.max(0, Math.min(index, length));
+}
+
+function moveCrmLeadForBoard(
+  leads: CrmLead[],
+  leadId: number,
+  targetStage: CrmStage,
+  targetIndex: number
+): { changed: boolean; leads: CrmLead[]; position: number } {
+  const movingLead = leads.find((lead) => lead.lead_id === leadId);
+  if (!movingLead) return { changed: false, leads, position: 0 };
+
+  const grouped = groupCrmLeadsByStage(leads);
+  const sourceStage = movingLead.stage;
+  const sourceIndex = grouped[sourceStage].findIndex((lead) => lead.lead_id === leadId);
+  const sourceLeads = grouped[sourceStage].filter((lead) => lead.lead_id !== leadId);
+  const targetLeads =
+    sourceStage === targetStage ? sourceLeads : grouped[targetStage].filter((lead) => lead.lead_id !== leadId);
+  const boundedIndex = clampCrmTargetIndex(targetIndex, targetLeads.length);
+
+  if (sourceStage === targetStage && sourceIndex === boundedIndex) {
+    return { changed: false, leads, position: boundedIndex };
+  }
+
+  const movedLead = { ...movingLead, stage: targetStage };
+  targetLeads.splice(boundedIndex, 0, movedLead);
+
+  const updates = new Map<number, CrmLead>();
+  sourceLeads.forEach((lead, index) => {
+    updates.set(lead.lead_id, { ...lead, position: index });
+  });
+  targetLeads.forEach((lead, index) => {
+    updates.set(lead.lead_id, { ...lead, stage: targetStage, position: index });
+  });
+
+  return {
+    changed: true,
+    leads: leads.map((lead) => updates.get(lead.lead_id) || lead),
+    position: boundedIndex
+  };
+}
+
+function CrmLeadCardContent({ lead }: { lead: CrmLead }) {
+  const hasNotes = Boolean(safeText(lead.qualification_notes).trim());
+  const lastMessage = safeText(lead.last_message).trim();
+  const context = [lead.niche, lead.location].filter(Boolean).join(" · ") || "-";
+
+  return (
+    <>
+      <div className="crm-card-header">
+        <div>
+          <strong>{formatOptionalText(lead.lead_name)}</strong>
+          <span>{context}</span>
+        </div>
+        {hasNotes ? (
+          <span className="crm-note-indicator" title="Há notas salvas">
+            <FileText size={13} />
+          </span>
+        ) : null}
+      </div>
+      {lastMessage ? <p className="crm-card-snippet">{lastMessage}</p> : null}
+    </>
+  );
+}
+
+function SortableCrmLeadCard({
+  lead,
+  disabled,
+  onOpen
+}: {
+  lead: CrmLead;
+  disabled: boolean;
+  onOpen: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: crmLeadDragId(lead.lead_id),
+    data: { type: "lead", leadId: lead.lead_id, stage: lead.stage },
+    disabled
+  });
+  const style: CSSProperties = {
+    transform: transform
+      ? `translate3d(${Math.round(transform.x)}px, ${Math.round(transform.y)}px, 0) scaleX(${transform.scaleX ?? 1}) scaleY(${transform.scaleY ?? 1})`
+      : undefined,
+    transition
+  };
+
+  return (
+    <button
+      className={`crm-lead-card crm-lead-card-button ${isDragging ? "is-dragging" : ""}`}
+      disabled={disabled}
+      onClick={onOpen}
+      ref={setNodeRef}
+      style={style}
+      type="button"
+      {...attributes}
+      {...listeners}
+    >
+      <CrmLeadCardContent lead={lead} />
+    </button>
+  );
+}
+
+function CrmStageColumn({
+  stage,
+  leads,
+  isDragOver,
+  children
+}: {
+  stage: CrmStageOption;
+  leads: CrmLead[];
+  isDragOver: boolean;
+  children: ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: crmStageDropId(stage.value),
+    data: { type: "stage", stage: stage.value }
+  });
+
+  return (
+    <section className={`crm-column ${isOver || isDragOver ? "drag-over" : ""}`} ref={setNodeRef}>
+      <div className="crm-column-heading">
+        <div>
+          <h2>{stage.label}</h2>
+          <small>{leads.length} leads</small>
+        </div>
+        <span className={`status-pill ${stage.value}`}>{leads.length}</span>
+      </div>
+
+      <SortableContext items={leads.map((lead) => crmLeadDragId(lead.lead_id))} strategy={verticalListSortingStrategy}>
+        <div className="crm-card-list">
+          {leads.length === 0 ? <p className="empty-state">Sem leads neste estágio.</p> : null}
+          {children}
+        </div>
+      </SortableContext>
+    </section>
   );
 }
 
@@ -1358,6 +1598,9 @@ export default function Home() {
   const [whatsappCampaigns, setWhatsappCampaigns] = useState<WhatsAppCampaign[]>([]);
   const [crmLeads, setCrmLeads] = useState<CrmLead[]>([]);
   const [crmNoteDrafts, setCrmNoteDrafts] = useState<Record<number, string>>({});
+  const [crmDetailLeadId, setCrmDetailLeadId] = useState<number | null>(null);
+  const [activeCrmDragLeadId, setActiveCrmDragLeadId] = useState<number | null>(null);
+  const [overCrmStage, setOverCrmStage] = useState<CrmStage | null>(null);
   const [whatsappAiSettings, setWhatsappAiSettings] = useState<WhatsAppAiSettings | null>(null);
   const [whatsappAiForm, setWhatsappAiForm] = useState(defaultWhatsappAiForm);
   const [whatsappPortfolioItems, setWhatsappPortfolioItems] = useState<WhatsAppPortfolioItem[]>([]);
@@ -1401,6 +1644,11 @@ export default function Home() {
   const [savingManualLead, setSavingManualLead] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [runActionLoading, setRunActionLoading] = useState<number | null>(null);
+  const crmDndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 160, tolerance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const activeRun = useMemo(
     () => searches.find((run) => run.status === "running" || run.status === "queued"),
@@ -1529,16 +1777,15 @@ export default function Home() {
 
     return { connected, running, sent, total };
   }, [whatsappCampaigns, whatsappInstances]);
-  const crmLeadsByStage = useMemo(() => {
-    const grouped = CRM_STAGES.reduce(
-      (accumulator, stage) => ({ ...accumulator, [stage.value]: [] }),
-      {} as Record<CrmStage, CrmLead[]>
-    );
-    crmLeads.forEach((lead) => {
-      grouped[lead.stage] = [...grouped[lead.stage], lead];
-    });
-    return grouped;
-  }, [crmLeads]);
+  const crmLeadsByStage = useMemo(() => groupCrmLeadsByStage(crmLeads), [crmLeads]);
+  const selectedCrmLead = useMemo(
+    () => (crmDetailLeadId ? crmLeads.find((lead) => lead.lead_id === crmDetailLeadId) || null : null),
+    [crmDetailLeadId, crmLeads]
+  );
+  const activeCrmDragLead = useMemo(
+    () => (activeCrmDragLeadId ? crmLeads.find((lead) => lead.lead_id === activeCrmDragLeadId) || null : null),
+    [activeCrmDragLeadId, crmLeads]
+  );
   const previewTemplate = selectedTemplate || templateForm;
   const previewContentLink = previewTemplate.content_link.trim();
   const previewContentData = contentPreviews[previewContentLink];
@@ -2031,6 +2278,19 @@ export default function Home() {
 
     return () => window.clearInterval(interval);
   }, [user, activeView]);
+
+  useEffect(() => {
+    if (!selectedCrmLead) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        requestCloseCrmDetailModal();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedCrmLead, crmNoteDrafts]);
 
   function switchView(view: AppView) {
     setActiveView(view);
@@ -3024,10 +3284,98 @@ export default function Home() {
     }
   }
 
-  async function patchCrmLead(leadId: number, payload: { stage?: CrmStage; qualification_notes?: string | null }) {
+  function crmNotesChanged(lead: CrmLead | null) {
+    if (!lead) return false;
+    const noteDraft = crmNoteDrafts[lead.lead_id] ?? lead.qualification_notes ?? "";
+    return noteDraft !== (lead.qualification_notes || "");
+  }
+
+  function openCrmDetailModal(lead: CrmLead) {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setCrmDetailLeadId(lead.lead_id);
+  }
+
+  function requestCloseCrmDetailModal() {
+    if (crmNotesChanged(selectedCrmLead)) {
+      const shouldClose = window.confirm("Há notas não salvas neste lead. Fechar mesmo assim?");
+      if (!shouldClose) return;
+      if (selectedCrmLead) {
+        setCrmNoteDrafts((current) => ({
+          ...current,
+          [selectedCrmLead.lead_id]: selectedCrmLead.qualification_notes || ""
+        }));
+      }
+    }
+    setCrmDetailLeadId(null);
+  }
+
+  function handleCrmDetailBackdropMouseDown(event: MouseEvent<HTMLDivElement>) {
+    if (event.target === event.currentTarget) {
+      requestCloseCrmDetailModal();
+    }
+  }
+
+  function handleCrmDragStart(event: DragStartEvent) {
+    const leadId = parseCrmLeadDragId(event.active.id);
+    if (!leadId) return;
+    const lead = crmLeads.find((item) => item.lead_id === leadId);
+    setActiveCrmDragLeadId(leadId);
+    setOverCrmStage(lead?.stage || null);
+  }
+
+  function handleCrmDragOver(event: DragOverEvent) {
+    setOverCrmStage(crmDropTargetStage(event.over));
+  }
+
+  function handleCrmDragCancel() {
+    setActiveCrmDragLeadId(null);
+    setOverCrmStage(null);
+  }
+
+  async function handleCrmDragEnd(event: DragEndEvent) {
+    const leadId = parseCrmLeadDragId(event.active.id);
+    const targetStage = crmDropTargetStage(event.over);
+    setActiveCrmDragLeadId(null);
+    setOverCrmStage(null);
+
+    if (!leadId || !targetStage) return;
+
+    const previousLeads = crmLeads;
+    const grouped = groupCrmLeadsByStage(previousLeads);
+    const targetIndex = crmTargetIndex(event.over?.id, targetStage, grouped);
+    const moveResult = moveCrmLeadForBoard(previousLeads, leadId, targetStage, targetIndex);
+    if (!moveResult.changed) return;
+
     setWhatsappError("");
     setWhatsappMessage("");
     setWhatsappBusyAction(`crm-${leadId}`);
+    setCrmLeads(moveResult.leads);
+
+    try {
+      const updatedLead = await apiFetch<CrmLead>(`/api/crm/leads/${leadId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ stage: targetStage, position: moveResult.position })
+      });
+      setCrmLeads((current) => current.map((lead) => (lead.lead_id === leadId ? { ...lead, ...updatedLead } : lead)));
+      setCrmNoteDrafts((current) => ({ ...current, [leadId]: updatedLead.qualification_notes || "" }));
+      setWhatsappMessage("CRM atualizado.");
+    } catch (error) {
+      setCrmLeads(previousLeads);
+      setWhatsappError(error instanceof Error ? error.message : "Não foi possível mover o card no CRM.");
+    } finally {
+      setWhatsappBusyAction("");
+    }
+  }
+
+  async function patchCrmLead(
+    leadId: number,
+    payload: { stage?: CrmStage; position?: number; qualification_notes?: string | null }
+  ) {
+    setWhatsappError("");
+    setWhatsappMessage("");
+    setWhatsappBusyAction(`crm-${leadId}`);
+    const shouldRefreshBoardOrder = payload.stage !== undefined || payload.position !== undefined;
 
     try {
       const updatedLead = await apiFetch<CrmLead>(`/api/crm/leads/${leadId}`, {
@@ -3037,6 +3385,9 @@ export default function Home() {
       setCrmLeads((current) => current.map((lead) => (lead.lead_id === leadId ? updatedLead : lead)));
       setCrmNoteDrafts((current) => ({ ...current, [leadId]: updatedLead.qualification_notes || "" }));
       setWhatsappMessage("CRM atualizado.");
+      if (shouldRefreshBoardOrder) {
+        await refreshWhatsappData();
+      }
     } catch (error) {
       setWhatsappError(error instanceof Error ? error.message : "Não foi possível atualizar o CRM.");
     } finally {
@@ -4715,99 +5066,44 @@ export default function Home() {
               <div className={`notice ${whatsappError ? "danger" : "success"}`}>{whatsappError || whatsappMessage}</div>
             )}
 
-            <section className="crm-board" aria-label="Pipeline de CRM">
-              {CRM_STAGES.map((stage) => {
-                const stageLeads = crmLeadsByStage[stage.value] || [];
-                return (
-                  <section className="crm-column" key={stage.value}>
-                    <div className="crm-column-heading">
-                      <div>
-                        <h2>{stage.label}</h2>
-                        <small>{stageLeads.length} leads</small>
-                      </div>
-                      <span className={`status-pill ${stage.value}`}>{stageLeads.length}</span>
-                    </div>
-
-                    <div className="crm-card-list">
-                      {stageLeads.length === 0 ? <p className="empty-state">Sem leads neste estágio.</p> : null}
-                      {stageLeads.map((lead) => {
-                        const website = safeText(lead.website).trim();
-                        const websiteHref = website && !/^https?:\/\//i.test(website) ? `https://${website}` : website;
-                        const noteDraft = crmNoteDrafts[lead.lead_id] ?? lead.qualification_notes ?? "";
-                        const crmBusy = whatsappBusyAction === `crm-${lead.lead_id}`;
-                        const notesChanged = noteDraft !== (lead.qualification_notes || "");
-
-                        return (
-                          <article className="crm-lead-card" key={lead.lead_id}>
-                            <div className="crm-card-header">
-                              <div>
-                                <strong>{formatOptionalText(lead.lead_name)}</strong>
-                                <span>
-                                  {[lead.niche, lead.location].filter(Boolean).join(" · ") || "-"}
-                                </span>
-                              </div>
-                              <span className={`status-pill ${lead.stage}`}>{crmStageLabel(lead.stage)}</span>
-                            </div>
-
-                            <div className="crm-contact-row">
-                              <span>{formatOptionalText(lead.phone)}</span>
-                              {website ? (
-                                <a href={websiteHref} target="_blank" rel="noreferrer">
-                                  <Globe2 size={14} />
-                                  {displayWebsite(website)}
-                                </a>
-                              ) : (
-                                <span>-</span>
-                              )}
-                            </div>
-
-                            <div className="crm-message-block">
-                              <span>Última mensagem</span>
-                              <p>{formatOptionalText(lead.last_message)}</p>
-                              <small>{formatDate(lead.last_message_at)}</small>
-                            </div>
-
-                            <label className="crm-stage-control">
-                              Estágio
-                              <select
-                                disabled={crmBusy}
-                                value={lead.stage}
-                                onChange={(event) => handleCrmStageChange(lead, event.target.value as CrmStage)}
-                              >
-                                {CRM_STAGES.map((stageOption) => (
-                                  <option key={stageOption.value} value={stageOption.value}>
-                                    {stageOption.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-
-                            <label className="crm-notes-control">
-                              Notas
-                              <textarea
-                                rows={4}
-                                value={noteDraft}
-                                onChange={(event) => handleCrmNoteChange(lead.lead_id, event.target.value)}
-                              />
-                            </label>
-
-                            <button
-                              className="secondary-button compact-button"
-                              disabled={crmBusy || !notesChanged}
-                              onClick={() => saveCrmNotes(lead)}
-                              type="button"
-                            >
-                              {crmBusy ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
-                              Salvar notas
-                            </button>
-                          </article>
-                        );
-                      })}
-                    </div>
-                  </section>
-                );
-              })}
-            </section>
+            <DndContext
+              collisionDetection={closestCorners}
+              onDragCancel={handleCrmDragCancel}
+              onDragEnd={handleCrmDragEnd}
+              onDragOver={handleCrmDragOver}
+              onDragStart={handleCrmDragStart}
+              sensors={crmDndSensors}
+            >
+              <section className="crm-board" aria-label="Pipeline de CRM">
+                {CRM_STAGES.map((stage) => {
+                  const stageLeads = crmLeadsByStage[stage.value] || [];
+                  return (
+                    <CrmStageColumn
+                      isDragOver={overCrmStage === stage.value}
+                      key={stage.value}
+                      leads={stageLeads}
+                      stage={stage}
+                    >
+                      {stageLeads.map((lead) => (
+                        <SortableCrmLeadCard
+                          disabled={whatsappBusyAction === `crm-${lead.lead_id}`}
+                          key={lead.lead_id}
+                          lead={lead}
+                          onOpen={() => openCrmDetailModal(lead)}
+                        />
+                      ))}
+                    </CrmStageColumn>
+                  );
+                })}
+              </section>
+              <DragOverlay>
+                {activeCrmDragLead ? (
+                  <article className="crm-lead-card crm-drag-overlay">
+                    <CrmLeadCardContent lead={activeCrmDragLead} />
+                  </article>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
           </section>
         ) : activeView === "whatsappAi" ? (
           <section className="email-workspace whatsapp-workspace whatsapp-ai-workspace">
@@ -6590,6 +6886,105 @@ export default function Home() {
           </form>
         </div>
       ) : null}
+
+      {selectedCrmLead
+        ? (() => {
+            const website = safeText(selectedCrmLead.website).trim();
+            const websiteHref = website && !/^https?:\/\//i.test(website) ? `https://${website}` : website;
+            const noteDraft = crmNoteDrafts[selectedCrmLead.lead_id] ?? selectedCrmLead.qualification_notes ?? "";
+            const crmBusy = whatsappBusyAction === `crm-${selectedCrmLead.lead_id}`;
+            const notesChanged = crmNotesChanged(selectedCrmLead);
+
+            return (
+              <div className="modal-backdrop" onMouseDown={handleCrmDetailBackdropMouseDown}>
+                <section className="edit-modal crm-detail-modal" role="dialog" aria-modal="true">
+                  <div className="panel-heading">
+                    <div>
+                      <p className="eyebrow">Lead no CRM</p>
+                      <h2>{formatOptionalText(selectedCrmLead.lead_name)}</h2>
+                    </div>
+                    <button className="icon-button" onClick={requestCloseCrmDetailModal} title="Fechar" type="button">
+                      <X size={18} />
+                    </button>
+                  </div>
+
+                  <div className="crm-detail-meta">
+                    <span>{formatOptionalText(selectedCrmLead.niche)}</span>
+                    <span>{formatOptionalText(selectedCrmLead.location)}</span>
+                  </div>
+
+                  <dl className="crm-detail-list">
+                    <div>
+                      <dt>Telefone</dt>
+                      <dd>
+                        <PhoneCell lead={selectedCrmLead} />
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Site</dt>
+                      <dd>
+                        {website ? (
+                          <a href={websiteHref} target="_blank" rel="noreferrer">
+                            <Globe2 size={15} />
+                            {displayWebsite(website)}
+                          </a>
+                        ) : (
+                          "-"
+                        )}
+                      </dd>
+                    </div>
+                    <div className="wide-field">
+                      <dt>Última mensagem</dt>
+                      <dd className="crm-detail-message">
+                        <p>{formatOptionalText(selectedCrmLead.last_message)}</p>
+                        <small>{formatDate(selectedCrmLead.last_message_at)}</small>
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <label className="crm-stage-control">
+                    Estágio
+                    <select
+                      disabled={crmBusy}
+                      value={selectedCrmLead.stage}
+                      onChange={(event) => handleCrmStageChange(selectedCrmLead, event.target.value as CrmStage)}
+                    >
+                      {CRM_STAGES.map((stageOption) => (
+                        <option key={stageOption.value} value={stageOption.value}>
+                          {stageOption.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="crm-notes-control">
+                    Notas
+                    <textarea
+                      rows={5}
+                      value={noteDraft}
+                      onChange={(event) => handleCrmNoteChange(selectedCrmLead.lead_id, event.target.value)}
+                    />
+                  </label>
+
+                  <div className="modal-actions">
+                    <button className="secondary-button" onClick={requestCloseCrmDetailModal} type="button">
+                      Fechar
+                    </button>
+                    <button
+                      className="primary-button"
+                      disabled={crmBusy || !notesChanged}
+                      onClick={() => saveCrmNotes(selectedCrmLead)}
+                      type="button"
+                    >
+                      {crmBusy ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+                      Salvar notas
+                    </button>
+                  </div>
+                </section>
+              </div>
+            );
+          })()
+        : null}
 
       {manualLeadOpen ? (
         <div className="modal-backdrop">

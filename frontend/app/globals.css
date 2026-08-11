@@ -1079,6 +1079,16 @@ td span {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.74);
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.crm-column.drag-over {
+  border-color: rgba(20, 116, 87, 0.42);
+  background: rgba(235, 249, 242, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(20, 116, 87, 0.14);
 }
 
 .crm-column-heading {
@@ -1104,16 +1114,55 @@ td span {
 .crm-card-list {
   display: grid;
   gap: 10px;
+  min-height: 82px;
+  align-content: start;
 }
 
 .crm-lead-card {
+  width: 100%;
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 8px;
+  min-height: 92px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 8px 20px rgba(23, 33, 29, 0.05);
+  color: var(--ink);
+  text-align: left;
+}
+
+.crm-lead-card-button {
+  appearance: none;
+  font: inherit;
+  cursor: grab;
+  touch-action: manipulation;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.crm-lead-card-button:hover,
+.crm-lead-card-button:focus-visible {
+  border-color: rgba(20, 116, 87, 0.38);
+  box-shadow: 0 12px 26px rgba(23, 33, 29, 0.09);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.crm-lead-card-button:active {
+  cursor: grabbing;
+}
+
+.crm-lead-card-button.is-dragging {
+  opacity: 0.42;
+  box-shadow: none;
+}
+
+.crm-drag-overlay {
+  cursor: grabbing;
+  box-shadow: 0 18px 42px rgba(23, 33, 29, 0.18);
 }
 
 .crm-card-header {
@@ -1131,52 +1180,113 @@ td span {
 }
 
 .crm-card-header strong {
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.crm-card-header div > span,
-.crm-contact-row,
-.crm-message-block span,
-.crm-message-block small {
+.crm-card-header div > span {
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.crm-contact-row {
-  display: grid;
-  gap: 6px;
-}
-
-.crm-contact-row a {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  width: fit-content;
-  max-width: 100%;
+.crm-note-indicator {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
   color: var(--accent-dark);
+  background: var(--surface-soft);
+}
+
+.crm-card-snippet {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crm-detail-modal {
+  width: min(760px, 100%);
+}
+
+.crm-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 18px;
+}
+
+.crm-detail-meta span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-soft);
+  font-size: 12px;
   font-weight: 800;
+}
+
+.crm-detail-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0 0 16px;
+}
+
+.crm-detail-list div {
+  min-width: 0;
+}
+
+.crm-detail-list .wide-field {
+  grid-column: 1 / -1;
+}
+
+.crm-detail-list dt {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.crm-detail-list dd {
+  margin: 0;
   overflow-wrap: anywhere;
 }
 
-.crm-message-block {
+.crm-detail-list a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-dark);
+  font-weight: 800;
+}
+
+.crm-detail-message {
   display: grid;
-  gap: 4px;
-  padding: 10px;
+  gap: 6px;
+  padding: 12px;
   border-radius: 8px;
   background: var(--surface-soft);
 }
 
-.crm-message-block p {
-  display: -webkit-box;
+.crm-detail-message p {
   margin: 0;
-  min-height: 38px;
-  overflow: hidden;
   color: var(--ink);
-  font-size: 13px;
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.crm-detail-message small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .crm-stage-control,
@@ -1614,7 +1724,8 @@ td a {
   .template-layout,
   .search-options,
   .quantity-row,
-  .edit-grid {
+  .edit-grid,
+  .crm-detail-list {
     width: 100%;
     grid-template-columns: 1fr;
   }

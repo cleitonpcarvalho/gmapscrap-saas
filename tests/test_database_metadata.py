@@ -1,6 +1,7 @@
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 from backend import models  # noqa: F401
+from backend import database
 from backend.database import Base
 
 
@@ -31,7 +32,9 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     email_campaign_columns = {column["name"] for column in inspector.get_columns("email_campaigns")}
     email_send_columns = {column["name"] for column in inspector.get_columns("email_sends")}
     whatsapp_campaign_columns = {column["name"] for column in inspector.get_columns("whatsapp_campaigns")}
+    crm_lead_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
 
+    assert "position" in crm_lead_columns
     assert "whatsapp_validated" in lead_columns
     assert "whatsapp_validated_at" in lead_columns
     assert "whatsapp_validation_status" in lead_columns
@@ -49,3 +52,55 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     assert "language" in email_campaign_columns
     assert "language" in whatsapp_campaign_columns
     assert "generated_content" in email_send_columns
+
+
+def test_ensure_crm_lead_columns_backfills_position_by_current_order(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE crm_leads (
+                    id INTEGER PRIMARY KEY,
+                    lead_id INTEGER NOT NULL,
+                    stage VARCHAR(30) NOT NULL,
+                    qualification_notes TEXT,
+                    score INTEGER,
+                    updated_at DATETIME
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                INSERT INTO crm_leads (id, lead_id, stage, updated_at)
+                VALUES
+                    (1, 101, 'new', '2026-01-01 10:00:00'),
+                    (2, 102, 'new', '2026-01-03 10:00:00'),
+                    (3, 103, 'new', '2026-01-02 10:00:00'),
+                    (4, 201, 'qualified', '2026-01-01 10:00:00'),
+                    (5, 202, 'qualified', '2026-01-04 10:00:00')
+                """
+            )
+        )
+
+    monkeypatch.setattr(database, "engine", engine)
+
+    database._ensure_crm_lead_columns()
+
+    inspector = inspect(engine)
+    crm_lead_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text("SELECT lead_id, stage, position FROM crm_leads ORDER BY stage ASC, position ASC")
+        ).all()
+
+    assert "position" in crm_lead_columns
+    assert rows == [
+        (102, "new", 0),
+        (103, "new", 1),
+        (101, "new", 2),
+        (202, "qualified", 0),
+        (201, "qualified", 1),
+    ]

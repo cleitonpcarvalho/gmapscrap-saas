@@ -344,6 +344,7 @@ CrmStage = Literal["new", "responded", "qualified", "not_interested", "converted
 
 class CrmLeadUpdate(BaseModel):
     stage: CrmStage | None = None
+    position: int | None = Field(default=None, ge=0)
     qualification_notes: str | None = Field(default=None, max_length=5000)
 
 
@@ -353,9 +354,11 @@ class CrmLeadRead(BaseModel):
     stage: CrmStage
     qualification_notes: str | None = None
     score: int | None = None
+    position: int | None = None
     updated_at: datetime
     lead_name: str
     phone: str | None = None
+    whatsapp_url: str = ""
     website: str | None = None
     email: str
     niche: str

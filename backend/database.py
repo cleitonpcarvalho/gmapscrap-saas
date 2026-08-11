@@ -48,6 +48,7 @@ def init_db() -> None:
     _wait_for_database()
     Base.metadata.create_all(bind=engine)
     _ensure_whatsapp_crm_tables()
+    _ensure_crm_lead_columns()
     _ensure_whatsapp_ai_settings_columns()
     _ensure_whatsapp_campaign_columns()
     _ensure_whatsapp_send_columns()
@@ -93,6 +94,61 @@ def _ensure_whatsapp_crm_tables() -> None:
             CrmStageHistory.__table__,
         ],
     )
+
+
+def _ensure_crm_lead_columns() -> None:
+    inspector = inspect(engine)
+    if "crm_leads" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
+    position_missing = "position" not in existing_columns
+
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.execute(text("SET lock_timeout = '10s'"))
+        if position_missing:
+            connection.execute(text("ALTER TABLE crm_leads ADD COLUMN position INTEGER"))
+        _backfill_crm_lead_positions(connection, reset=position_missing)
+
+
+def _backfill_crm_lead_positions(connection, *, reset: bool = False) -> None:
+    if reset:
+        rows = connection.execute(
+            text("SELECT id, stage FROM crm_leads ORDER BY stage ASC, updated_at DESC, id DESC")
+        ).mappings()
+        positions_by_stage: dict[str, int] = {}
+        for row in rows:
+            stage = str(row["stage"])
+            position = positions_by_stage.get(stage, 0)
+            connection.execute(
+                text("UPDATE crm_leads SET position = :position WHERE id = :id"),
+                {"position": position, "id": row["id"]},
+            )
+            positions_by_stage[stage] = position + 1
+        return
+
+    stages = connection.execute(text("SELECT DISTINCT stage FROM crm_leads WHERE position IS NULL")).scalars()
+    for stage in stages:
+        max_position = connection.execute(
+            text("SELECT MAX(position) FROM crm_leads WHERE stage = :stage AND position IS NOT NULL"),
+            {"stage": stage},
+        ).scalar()
+        next_position = int(max_position) + 1 if max_position is not None else 0
+        rows = connection.execute(
+            text(
+                "SELECT id FROM crm_leads "
+                "WHERE stage = :stage AND position IS NULL "
+                "ORDER BY updated_at DESC, id DESC"
+            ),
+            {"stage": stage},
+        ).mappings()
+        for row in rows:
+            connection.execute(
+                text("UPDATE crm_leads SET position = :position WHERE id = :id"),
+                {"position": next_position, "id": row["id"]},
+            )
+            next_position += 1
 
 
 def _ensure_whatsapp_conversation_columns() -> None:
