@@ -46,7 +46,37 @@ def test_crm_funnel_migration_runs_against_real_postgres(monkeypatch: pytest.Mon
 
     try:
         test_engine = create_engine(postgres_url, connect_args={"options": f"-csearch_path={schema_name}"})
+        legacy_stages = ["new", "responded", "qualified", "not_interested", "converted"]
         with test_engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE crm_funnels (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(120) NOT NULL,
+                        description VARCHAR(500),
+                        is_default BOOLEAN NOT NULL DEFAULT false,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                    )
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE crm_funnel_stages (
+                        id SERIAL PRIMARY KEY,
+                        funnel_id INTEGER NOT NULL REFERENCES crm_funnels(id) ON DELETE CASCADE,
+                        key VARCHAR(60) NOT NULL,
+                        label VARCHAR(120) NOT NULL,
+                        color VARCHAR(7) NOT NULL,
+                        position INTEGER NOT NULL,
+                        is_won BOOLEAN NOT NULL DEFAULT false,
+                        is_lost BOOLEAN NOT NULL DEFAULT false
+                    )
+                    """
+                )
+            )
             connection.execute(
                 text(
                     """
@@ -57,6 +87,7 @@ def test_crm_funnel_migration_runs_against_real_postgres(monkeypatch: pytest.Mon
                         qualification_notes TEXT,
                         score INTEGER,
                         updated_at TIMESTAMP,
+                        position INTEGER,
                         CONSTRAINT legacy_unique_lead_only_weird_name UNIQUE (lead_id),
                         CONSTRAINT legacy_stage_check_weird_name
                             CHECK (stage IN ('new', 'responded', 'qualified', 'not_interested', 'converted'))
@@ -83,12 +114,20 @@ def test_crm_funnel_migration_runs_against_real_postgres(monkeypatch: pytest.Mon
                     """
                 )
             )
-            connection.execute(
-                text(
-                    "INSERT INTO crm_leads (id, lead_id, stage, updated_at) "
-                    "VALUES (1, 501, 'qualified', '2026-01-01')"
+            for index in range(9):
+                connection.execute(
+                    text(
+                        "INSERT INTO crm_leads (id, lead_id, stage, updated_at, position) "
+                        "VALUES (:id, :lead_id, :stage, :updated_at, :position)"
+                    ),
+                    {
+                        "id": index + 1,
+                        "lead_id": 501 + index,
+                        "stage": legacy_stages[index % len(legacy_stages)],
+                        "updated_at": f"2026-01-{index + 1:02d}",
+                        "position": index,
+                    },
                 )
-            )
             connection.execute(
                 text(
                     "INSERT INTO crm_stage_history (id, crm_lead_id, from_stage, to_stage, changed_at, changed_by) "
@@ -112,9 +151,9 @@ def test_crm_funnel_migration_runs_against_real_postgres(monkeypatch: pytest.Mon
                 ),
                 {"funnel_id": default_funnel["id"]},
             ).mappings().all()
-            card = connection.execute(
-                text("SELECT lead_id, funnel_id, stage_id, stage FROM crm_leads WHERE id = 1")
-            ).mappings().one()
+            cards = connection.execute(
+                text("SELECT lead_id, funnel_id, stage_id, stage FROM crm_leads ORDER BY id")
+            ).mappings().all()
             history = connection.execute(
                 text("SELECT from_stage_id, to_stage_id FROM crm_stage_history WHERE id = 1")
             ).mappings().one()
@@ -123,9 +162,10 @@ def test_crm_funnel_migration_runs_against_real_postgres(monkeypatch: pytest.Mon
             assert [stage["key"] for stage in default_stages] == ["new", "responded", "qualified", "not_interested", "converted"]
             assert default_stages[3]["is_lost"] is True
             assert default_stages[4]["is_won"] is True
-            assert card["funnel_id"] == default_funnel["id"]
-            assert card["stage"] == "qualified"
-            assert card["stage_id"] is not None
+            assert len(cards) == 9
+            assert {card["lead_id"] for card in cards} == set(range(501, 510))
+            assert all(card["funnel_id"] == default_funnel["id"] for card in cards)
+            assert all(card["stage_id"] is not None for card in cards)
             assert history["from_stage_id"] is not None
             assert history["to_stage_id"] is not None
 
@@ -147,7 +187,7 @@ def test_crm_funnel_migration_runs_against_real_postgres(monkeypatch: pytest.Mon
             connection.execute(
                 text(
                     "INSERT INTO crm_leads (id, lead_id, funnel_id, stage_id, stage, updated_at) "
-                    "VALUES (2, 501, :funnel_id, :stage_id, 'custom_stage', '2026-01-02')"
+                    "VALUES (100, 501, :funnel_id, :stage_id, 'custom_stage', '2026-01-10')"
                 ),
                 {"funnel_id": custom_funnel_id, "stage_id": custom_stage_id},
             )

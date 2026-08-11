@@ -41,6 +41,28 @@ def _database_url() -> str | URL:
 engine = create_engine(_database_url(), pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+SCHEMA_LOCK_TIMEOUT = "10s"
+SCHEMA_STATEMENT_TIMEOUT = "45s"
+
+
+def _set_schema_timeouts(connection) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    connection.execute(text(f"SET LOCAL lock_timeout = '{SCHEMA_LOCK_TIMEOUT}'"))
+    connection.execute(text(f"SET LOCAL statement_timeout = '{SCHEMA_STATEMENT_TIMEOUT}'"))
+
+
+def _run_schema_statement(statement: str) -> None:
+    with engine.begin() as connection:
+        _set_schema_timeouts(connection)
+        connection.execute(text(statement))
+
+
+def _run_schema_operation(operation) -> None:
+    with engine.begin() as connection:
+        _set_schema_timeouts(connection)
+        operation(connection)
+
 
 def init_db() -> None:
     from backend import models  # noqa: F401
@@ -112,8 +134,7 @@ def _ensure_tag_tables() -> None:
         return
 
     with engine.begin() as connection:
-        if engine.dialect.name == "postgresql":
-            connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_lower_name ON tags (lower(name))"))
 
 
@@ -137,8 +158,7 @@ def _ensure_crm_funnel_tables() -> None:
         return
 
     with engine.begin() as connection:
-        if engine.dialect.name == "postgresql":
-            connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_funnels_lower_name ON crm_funnels (lower(name))"))
         connection.execute(
             text(
@@ -212,7 +232,8 @@ def _ensure_crm_lead_columns() -> None:
     _ensure_crm_funnel_tables()
 
     inspector = inspect(engine)
-    if "crm_leads" not in inspector.get_table_names():
+    table_names = inspector.get_table_names()
+    if "crm_leads" not in table_names:
         return
 
     original_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
@@ -220,36 +241,44 @@ def _ensure_crm_lead_columns() -> None:
     if engine.dialect.name == "sqlite" and _sqlite_crm_leads_needs_rebuild(inspector):
         _rebuild_sqlite_crm_tables()
         inspector = inspect(engine)
+        table_names = inspector.get_table_names()
 
     existing_columns = {column["name"] for column in inspector.get_columns("crm_leads")}
+    history_table_exists = "crm_stage_history" in table_names
+    history_columns = {column["name"] for column in inspector.get_columns("crm_stage_history")} if history_table_exists else set()
     position_column_missing = "position" not in existing_columns
     should_reset_positions = original_position_missing or position_column_missing
     funnel_id_missing = "funnel_id" not in existing_columns
     stage_id_missing = "stage_id" not in existing_columns
 
-    with engine.begin() as connection:
-        if engine.dialect.name == "postgresql":
-            connection.execute(text("SET lock_timeout = '10s'"))
+    if engine.dialect.name == "postgresql":
+        def drop_legacy_constraints(connection) -> None:
             _drop_pg_check_constraints_for_columns(connection, "crm_leads", ["stage"])
-            _drop_pg_check_constraints_for_columns(connection, "crm_stage_history", ["from_stage", "to_stage"])
-            connection.execute(text("ALTER TABLE crm_leads ALTER COLUMN stage TYPE VARCHAR(60)"))
-            connection.execute(text("ALTER TABLE crm_stage_history ALTER COLUMN from_stage TYPE VARCHAR(60)"))
-            connection.execute(text("ALTER TABLE crm_stage_history ALTER COLUMN to_stage TYPE VARCHAR(60)"))
+            if history_table_exists:
+                _drop_pg_check_constraints_for_columns(connection, "crm_stage_history", ["from_stage", "to_stage"])
             _drop_pg_unique_lead_id_constraints(connection)
             _drop_pg_unique_lead_id_indexes(connection)
-        if position_column_missing:
-            connection.execute(text("ALTER TABLE crm_leads ADD COLUMN position INTEGER"))
-        if funnel_id_missing:
-            connection.execute(text("ALTER TABLE crm_leads ADD COLUMN funnel_id INTEGER"))
-        if stage_id_missing:
-            connection.execute(text("ALTER TABLE crm_leads ADD COLUMN stage_id INTEGER"))
-        if "crm_stage_history" in inspector.get_table_names():
-            history_columns = {column["name"] for column in inspector.get_columns("crm_stage_history")}
-            if "from_stage_id" not in history_columns:
-                connection.execute(text("ALTER TABLE crm_stage_history ADD COLUMN from_stage_id INTEGER"))
-            if "to_stage_id" not in history_columns:
-                connection.execute(text("ALTER TABLE crm_stage_history ADD COLUMN to_stage_id INTEGER"))
-        if engine.dialect.name == "postgresql":
+
+        _run_schema_operation(drop_legacy_constraints)
+        _run_schema_statement("ALTER TABLE crm_leads ALTER COLUMN stage TYPE VARCHAR(60)")
+        if history_table_exists and "from_stage" in history_columns:
+            _run_schema_statement("ALTER TABLE crm_stage_history ALTER COLUMN from_stage TYPE VARCHAR(60)")
+        if history_table_exists and "to_stage" in history_columns:
+            _run_schema_statement("ALTER TABLE crm_stage_history ALTER COLUMN to_stage TYPE VARCHAR(60)")
+
+    if position_column_missing:
+        _run_schema_statement("ALTER TABLE crm_leads ADD COLUMN position INTEGER")
+    if funnel_id_missing:
+        _run_schema_statement("ALTER TABLE crm_leads ADD COLUMN funnel_id INTEGER")
+    if stage_id_missing:
+        _run_schema_statement("ALTER TABLE crm_leads ADD COLUMN stage_id INTEGER")
+    if history_table_exists and "from_stage_id" not in history_columns:
+        _run_schema_statement("ALTER TABLE crm_stage_history ADD COLUMN from_stage_id INTEGER")
+    if history_table_exists and "to_stage_id" not in history_columns:
+        _run_schema_statement("ALTER TABLE crm_stage_history ADD COLUMN to_stage_id INTEGER")
+
+    if engine.dialect.name == "postgresql":
+        def ensure_crm_foreign_keys(connection) -> None:
             _ensure_pg_constraint(
                 connection,
                 "crm_leads",
@@ -262,30 +291,35 @@ def _ensure_crm_lead_columns() -> None:
                 "fk_crm_leads_stage_id",
                 "FOREIGN KEY (stage_id) REFERENCES crm_funnel_stages(id) ON DELETE RESTRICT",
             )
-            _ensure_pg_constraint(
-                connection,
-                "crm_stage_history",
-                "fk_crm_stage_history_from_stage_id",
-                "FOREIGN KEY (from_stage_id) REFERENCES crm_funnel_stages(id) ON DELETE SET NULL",
-            )
-            _ensure_pg_constraint(
-                connection,
-                "crm_stage_history",
-                "fk_crm_stage_history_to_stage_id",
-                "FOREIGN KEY (to_stage_id) REFERENCES crm_funnel_stages(id) ON DELETE SET NULL",
-            )
+            if history_table_exists:
+                _ensure_pg_constraint(
+                    connection,
+                    "crm_stage_history",
+                    "fk_crm_stage_history_from_stage_id",
+                    "FOREIGN KEY (from_stage_id) REFERENCES crm_funnel_stages(id) ON DELETE SET NULL",
+                )
+                _ensure_pg_constraint(
+                    connection,
+                    "crm_stage_history",
+                    "fk_crm_stage_history_to_stage_id",
+                    "FOREIGN KEY (to_stage_id) REFERENCES crm_funnel_stages(id) ON DELETE SET NULL",
+                )
+
+        _run_schema_operation(ensure_crm_foreign_keys)
+
+    def backfill_crm_cards(connection) -> None:
         _backfill_crm_lead_funnels(connection)
         _backfill_crm_lead_positions(connection, reset=should_reset_positions)
         _backfill_crm_stage_history_stage_ids(connection)
-        connection.execute(
-            text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_leads_lead_funnel "
-                "ON crm_leads (lead_id, funnel_id)"
-            )
-        )
-        if engine.dialect.name == "postgresql":
-            connection.execute(text("ALTER TABLE crm_leads ALTER COLUMN funnel_id SET NOT NULL"))
-            connection.execute(text("ALTER TABLE crm_leads ALTER COLUMN stage_id SET NOT NULL"))
+
+    _run_schema_operation(backfill_crm_cards)
+    _run_schema_statement(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_leads_lead_funnel "
+        "ON crm_leads (lead_id, funnel_id)"
+    )
+    if engine.dialect.name == "postgresql":
+        _run_schema_statement("ALTER TABLE crm_leads ALTER COLUMN funnel_id SET NOT NULL")
+        _run_schema_statement("ALTER TABLE crm_leads ALTER COLUMN stage_id SET NOT NULL")
 
 
 def _quote_pg_identifier(value: str) -> str:
@@ -674,7 +708,7 @@ def _ensure_whatsapp_conversation_columns() -> None:
 
     try:
         with engine.begin() as connection:
-            connection.execute(text("SET lock_timeout = '10s'"))
+            _set_schema_timeouts(connection)
             connection.execute(text("ALTER TABLE whatsapp_conversations ALTER COLUMN lead_id DROP NOT NULL"))
     except SQLAlchemyError:
         return
@@ -698,8 +732,7 @@ def _ensure_whatsapp_ai_settings_columns() -> None:
         if column_name not in existing_columns
     }
     with engine.begin() as connection:
-        if engine.dialect.name == "postgresql":
-            connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         for statement in missing_migrations.values():
             connection.execute(text(statement))
 
@@ -728,8 +761,7 @@ def _ensure_whatsapp_campaign_columns() -> None:
         return
 
     with engine.begin() as connection:
-        if engine.dialect.name == "postgresql":
-            connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         for statement in missing_migrations.values():
             connection.execute(text(statement))
         if should_ensure_funnel_fk:
@@ -764,8 +796,7 @@ def _ensure_whatsapp_send_columns() -> None:
         return
 
     with engine.begin() as connection:
-        if engine.dialect.name == "postgresql":
-            connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         for statement in missing_migrations.values():
             connection.execute(text(statement))
         if should_drop_template_not_null and engine.dialect.name == "postgresql":
@@ -811,7 +842,7 @@ def _ensure_email_template_columns() -> None:
     }
 
     with engine.begin() as connection:
-        connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         for column_name, statement in migrations.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
@@ -831,7 +862,7 @@ def _ensure_search_run_columns() -> None:
     }
 
     with engine.begin() as connection:
-        connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         for column_name, statement in migrations.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
@@ -843,10 +874,12 @@ def _ensure_lead_columns() -> None:
         return
 
     existing_columns = {column["name"] for column in inspector.get_columns("leads")}
+    website_column = next((column for column in inspector.get_columns("leads") if column["name"] == "website"), None)
+    should_drop_website_not_null = bool(website_column and not website_column.get("nullable", True))
 
     try:
         with engine.begin() as connection:
-            connection.execute(text("SET lock_timeout = '10s'"))
+            _set_schema_timeouts(connection)
             if "whatsapp_validated" not in existing_columns:
                 connection.execute(text("ALTER TABLE leads ADD COLUMN whatsapp_validated BOOLEAN"))
                 connection.execute(
@@ -877,8 +910,7 @@ def _ensure_lead_columns() -> None:
             if "site_insights" not in existing_columns:
                 connection.execute(text("ALTER TABLE leads ADD COLUMN site_insights TEXT"))
 
-            website_column = next((column for column in inspector.get_columns("leads") if column["name"] == "website"), None)
-            if website_column and not website_column.get("nullable", True):
+            if should_drop_website_not_null:
                 connection.execute(text("ALTER TABLE leads ALTER COLUMN website DROP NOT NULL"))
     except SQLAlchemyError:
         return
@@ -909,7 +941,7 @@ def _ensure_lead_list_columns() -> None:
     }
 
     with engine.begin() as connection:
-        connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         for column_name, statement in migrations.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
@@ -929,7 +961,7 @@ def _ensure_email_campaign_columns() -> None:
     }
 
     with engine.begin() as connection:
-        connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         for column_name, statement in migrations.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
@@ -946,7 +978,7 @@ def _ensure_email_send_columns() -> None:
     }
 
     with engine.begin() as connection:
-        connection.execute(text("SET lock_timeout = '10s'"))
+        _set_schema_timeouts(connection)
         for column_name, statement in migrations.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))

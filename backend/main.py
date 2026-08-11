@@ -1,9 +1,13 @@
 import logging
 import base64
 import csv
+import multiprocessing
+import os
 import secrets
+import traceback
 from datetime import datetime, timezone
 from io import StringIO
+from queue import Empty
 from types import SimpleNamespace
 from typing import Any
 
@@ -170,6 +174,7 @@ from backend.scrapers.maps_scraper import MapLead
 settings = get_settings()
 app = FastAPI(title="GmapScrap Web", version="0.1.0")
 logger = logging.getLogger(__name__)
+STARTUP_MIGRATION_TIMEOUT_SECONDS = 60
 
 app.add_middleware(
     CORSMiddleware,
@@ -183,12 +188,76 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
-    init_db()
+    migration_ok = _run_startup_migration_with_timeout(_startup_migration_timeout_seconds())
+    if not migration_ok:
+        logger.error(
+            "Aplicação iniciada em modo degradado: migração inicial do banco falhou ou excedeu o tempo limite. "
+            "Schedulers não foram iniciados."
+        )
+        return
     resume_unfinished_search_runs()
     resume_running_email_campaigns()
     start_email_campaign_scheduler()
     resume_running_whatsapp_campaigns()
     start_whatsapp_campaign_scheduler()
+
+
+def _startup_migration_timeout_seconds() -> int:
+    raw_value = os.getenv("GMAPSCRAP_STARTUP_MIGRATION_TIMEOUT_SECONDS", str(STARTUP_MIGRATION_TIMEOUT_SECONDS))
+    try:
+        return max(0, int(raw_value))
+    except ValueError:
+        logger.warning("GMAPSCRAP_STARTUP_MIGRATION_TIMEOUT_SECONDS inválido: %s", raw_value)
+        return STARTUP_MIGRATION_TIMEOUT_SECONDS
+
+
+def _startup_migration_worker(result_queue) -> None:
+    try:
+        init_db()
+    except BaseException:
+        result_queue.put(("error", traceback.format_exc()))
+        raise
+    result_queue.put(("ok", ""))
+
+
+def _run_startup_migration_with_timeout(timeout_seconds: int) -> bool:
+    if timeout_seconds <= 0:
+        init_db()
+        return True
+
+    context = multiprocessing.get_context("spawn")
+    result_queue = context.Queue()
+    process = context.Process(target=_startup_migration_worker, args=(result_queue,), name="startup-db-migration")
+    process.start()
+    process.join(timeout_seconds)
+
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
+        if process.is_alive():
+            process.kill()
+            process.join(5)
+        result_queue.close()
+        result_queue.join_thread()
+        logger.error("Migração inicial do banco excedeu %ss e foi abortada.", timeout_seconds)
+        return False
+
+    try:
+        status_value, detail = result_queue.get(timeout=1)
+    except Empty:
+        status_value, detail = ("ok" if process.exitcode == 0 else "error", "")
+    finally:
+        result_queue.close()
+        result_queue.join_thread()
+
+    if process.exitcode == 0 and status_value == "ok":
+        return True
+
+    if detail:
+        logger.error("Migração inicial do banco falhou:\n%s", detail)
+    else:
+        logger.error("Migração inicial do banco falhou com exit code %s.", process.exitcode)
+    return False
 
 
 def require_user(request: Request) -> str:

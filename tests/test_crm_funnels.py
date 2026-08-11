@@ -201,6 +201,127 @@ def test_migration_creates_default_funnel_and_backfills_existing_cards(monkeypat
     assert card.stage == "qualified"
 
 
+def test_migration_resumes_from_production_partial_state_with_nine_cards(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    legacy_stages = ["new", "responded", "qualified", "not_interested", "converted"]
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE crm_funnels (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    name VARCHAR(120) NOT NULL,
+                    description VARCHAR(500),
+                    is_default BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE crm_funnel_stages (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    funnel_id INTEGER NOT NULL,
+                    key VARCHAR(60) NOT NULL,
+                    label VARCHAR(120) NOT NULL,
+                    color VARCHAR(7) NOT NULL,
+                    position INTEGER NOT NULL,
+                    is_won BOOLEAN NOT NULL DEFAULT 0,
+                    is_lost BOOLEAN NOT NULL DEFAULT 0
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE crm_leads (
+                    id INTEGER PRIMARY KEY,
+                    lead_id INTEGER NOT NULL UNIQUE,
+                    stage VARCHAR(30) NOT NULL CHECK (stage IN ('new', 'responded', 'qualified', 'not_interested', 'converted')),
+                    qualification_notes TEXT,
+                    score INTEGER,
+                    updated_at DATETIME,
+                    position INTEGER
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE crm_stage_history (
+                    id INTEGER PRIMARY KEY,
+                    crm_lead_id INTEGER NOT NULL,
+                    from_stage VARCHAR(30) NOT NULL CHECK (from_stage IN ('new', 'responded', 'qualified', 'not_interested', 'converted')),
+                    to_stage VARCHAR(30) NOT NULL CHECK (to_stage IN ('new', 'responded', 'qualified', 'not_interested', 'converted')),
+                    changed_at DATETIME,
+                    changed_by VARCHAR(20) NOT NULL CHECK (changed_by IN ('ai', 'manual'))
+                )
+                """
+            )
+        )
+        for index in range(9):
+            connection.execute(
+                text(
+                    "INSERT INTO crm_leads (id, lead_id, stage, updated_at, position) "
+                    "VALUES (:id, :lead_id, :stage, :updated_at, :position)"
+                ),
+                {
+                    "id": index + 1,
+                    "lead_id": 900 + index,
+                    "stage": legacy_stages[index % len(legacy_stages)],
+                    "updated_at": f"2026-01-{index + 1:02d}",
+                    "position": index,
+                },
+            )
+
+    monkeypatch.setattr(database, "engine", engine)
+
+    database._ensure_crm_lead_columns()
+    database._ensure_crm_lead_columns()
+
+    with engine.begin() as connection:
+        default_funnel = connection.execute(text("SELECT id FROM crm_funnels WHERE is_default = 1")).one()
+        card_rows = connection.execute(
+            text("SELECT lead_id, funnel_id, stage_id, stage FROM crm_leads ORDER BY id")
+        ).mappings().all()
+        default_stage_count = connection.execute(
+            text("SELECT COUNT(*) FROM crm_funnel_stages WHERE funnel_id = :funnel_id"),
+            {"funnel_id": default_funnel.id},
+        ).scalar_one()
+        connection.execute(
+            text(
+                "INSERT INTO crm_funnels (id, name, description, is_default) "
+                "VALUES (99, 'Funil retomada', '', 0)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO crm_funnel_stages (id, funnel_id, key, label, color, position, is_won, is_lost) "
+                "VALUES (199, 99, 'custom_stage', 'Custom', '#e0f2fe', 0, 0, 0)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO crm_leads (id, lead_id, funnel_id, stage_id, stage, updated_at, position) "
+                "VALUES (100, 900, 99, 199, 'custom_stage', '2026-02-01', 0)"
+            )
+        )
+        card_count_for_first_lead = connection.execute(
+            text("SELECT COUNT(*) FROM crm_leads WHERE lead_id = 900")
+        ).scalar_one()
+
+    assert len(card_rows) == 9
+    assert {row["lead_id"] for row in card_rows} == set(range(900, 909))
+    assert all(row["funnel_id"] == default_funnel.id for row in card_rows)
+    assert all(row["stage_id"] is not None for row in card_rows)
+    assert default_stage_count == 5
+    assert card_count_for_first_lead == 2
+
+
 def test_migration_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = create_engine("sqlite:///:memory:")
     with engine.begin() as connection:
