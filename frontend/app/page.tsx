@@ -362,6 +362,7 @@ type CrmFunnelStage = {
   key: string;
   label: string;
   color: string;
+  description: string | null;
   position: number;
   is_won: boolean;
   is_lost: boolean;
@@ -701,6 +702,7 @@ type CrmFunnelForm = {
 type CrmStageForm = {
   label: string;
   color: string;
+  description: string;
   is_won: boolean;
   is_lost: boolean;
 };
@@ -713,6 +715,7 @@ const defaultFunnelForm: CrmFunnelForm = {
 const defaultStageForm: CrmStageForm = {
   label: "",
   color: STAGE_COLOR_OPTIONS[0],
+  description: "",
   is_won: false,
   is_lost: false
 };
@@ -1059,6 +1062,7 @@ function crmStagePayload(form: CrmStageForm) {
   return {
     label: form.label.trim(),
     color: normalizeStageColor(form.color),
+    description: form.description.trim() || null,
     is_won: form.is_won,
     is_lost: form.is_lost
   };
@@ -1511,6 +1515,7 @@ function SortableFunnelStageRow({
         <small>
           {stage.card_count} cards · chave {stage.key}
         </small>
+        {stage.description ? <p>{stage.description}</p> : null}
         <div className="stage-terminal-flags">
           {stage.is_won ? <span>Ganho</span> : null}
           {stage.is_lost ? <span>Perda</span> : null}
@@ -4114,6 +4119,7 @@ export default function Home() {
     setStageForm({
       label: stage.label,
       color: normalizeStageColor(stage.color),
+      description: stage.description || "",
       is_won: stage.is_won,
       is_lost: stage.is_lost
     });
@@ -8074,6 +8080,7 @@ export default function Home() {
                     key: selectedCrmLead.stage,
                     label: selectedCrmLead.stage_label || crmStageLabel(selectedCrmLead.stage, selectedCrmStages),
                     color: selectedCrmLead.stage_color || STAGE_COLOR_OPTIONS[0],
+                    description: null,
                     position: selectedCrmStages.length,
                     is_won: false,
                     is_lost: false,
@@ -8360,6 +8367,16 @@ export default function Home() {
                         value={stageForm.label}
                         onChange={(event) => setStageForm({ ...stageForm, label: event.target.value })}
                         placeholder="Ex: Proposta enviada"
+                      />
+                    </label>
+                    <label>
+                      Descrição
+                      <textarea
+                        disabled={!selectedCrmFunnel}
+                        rows={4}
+                        value={stageForm.description}
+                        onChange={(event) => setStageForm({ ...stageForm, description: event.target.value })}
+                        placeholder="Quando a IA deve usar este estágio"
                       />
                     </label>
                     <div className="tag-color-field">

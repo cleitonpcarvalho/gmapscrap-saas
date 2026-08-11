@@ -2034,6 +2034,13 @@ td a {
   font-weight: 800;
 }
 
+.stage-manager-main p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .stage-color-dot {
   width: 18px;
   height: 18px;

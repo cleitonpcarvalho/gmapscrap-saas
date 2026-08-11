@@ -16,11 +16,51 @@ CRM_STAGES = {"new", "responded", "qualified", "not_interested", "converted"}
 
 DEFAULT_CRM_FUNNEL_NAME = "Funil padrão"
 DEFAULT_CRM_STAGE_DEFINITIONS = [
-    {"key": "new", "label": "Novo", "color": "#f3f4f6", "position": 0, "is_won": False, "is_lost": False},
-    {"key": "responded", "label": "Respondeu", "color": "#dff7f1", "position": 1, "is_won": False, "is_lost": False},
-    {"key": "qualified", "label": "Qualificado", "color": "#dcf6e8", "position": 2, "is_won": False, "is_lost": False},
-    {"key": "not_interested", "label": "Sem interesse", "color": "#ffe4e6", "position": 3, "is_won": False, "is_lost": True},
-    {"key": "converted", "label": "Convertido", "color": "#fff4ce", "position": 4, "is_won": True, "is_lost": False},
+    {
+        "key": "new",
+        "label": "Novo",
+        "color": "#f3f4f6",
+        "description": "Lead recém-chegado, ainda sem resposta ou qualificação.",
+        "position": 0,
+        "is_won": False,
+        "is_lost": False,
+    },
+    {
+        "key": "responded",
+        "label": "Respondeu",
+        "color": "#dff7f1",
+        "description": "Lead respondeu à abordagem, mas ainda não há qualificação suficiente.",
+        "position": 1,
+        "is_won": False,
+        "is_lost": False,
+    },
+    {
+        "key": "qualified",
+        "label": "Qualificado",
+        "color": "#dcf6e8",
+        "description": "Lead demonstrou dor, necessidade ou encaixe claro com a oferta.",
+        "position": 2,
+        "is_won": False,
+        "is_lost": False,
+    },
+    {
+        "key": "not_interested",
+        "label": "Sem interesse",
+        "color": "#ffe4e6",
+        "description": "Lead recusou a conversa, pediu para não seguir ou demonstrou desinteresse claro.",
+        "position": 3,
+        "is_won": False,
+        "is_lost": True,
+    },
+    {
+        "key": "converted",
+        "label": "Convertido",
+        "color": "#fff4ce",
+        "description": "Lead aceitou avançar para reunião, fechamento ou próximo passo comercial concreto.",
+        "position": 4,
+        "is_won": True,
+        "is_lost": False,
+    },
 ]
 
 
@@ -66,6 +106,7 @@ def _ensure_default_stages(db: Session, funnel: CrmFunnel) -> None:
         if stage:
             stage.label = definition["label"]
             stage.color = definition["color"]
+            stage.description = definition["description"]
             stage.position = definition["position"]
             stage.is_won = definition["is_won"]
             stage.is_lost = definition["is_lost"]

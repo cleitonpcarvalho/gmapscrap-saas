@@ -378,6 +378,7 @@ class CrmFunnelStage(Base):
     key: Mapped[str] = mapped_column(String(60), nullable=False)
     label: Mapped[str] = mapped_column(String(120), nullable=False)
     color: Mapped[str] = mapped_column(String(7), default="#f3f4f6", nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_won: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_lost: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

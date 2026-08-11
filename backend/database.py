@@ -165,11 +165,51 @@ def _ensure_tag_tables() -> None:
 
 DEFAULT_CRM_FUNNEL_NAME = "Funil padrão"
 DEFAULT_CRM_STAGES = [
-    {"key": "new", "label": "Novo", "color": "#f3f4f6", "position": 0, "is_won": False, "is_lost": False},
-    {"key": "responded", "label": "Respondeu", "color": "#dff7f1", "position": 1, "is_won": False, "is_lost": False},
-    {"key": "qualified", "label": "Qualificado", "color": "#dcf6e8", "position": 2, "is_won": False, "is_lost": False},
-    {"key": "not_interested", "label": "Sem interesse", "color": "#ffe4e6", "position": 3, "is_won": False, "is_lost": True},
-    {"key": "converted", "label": "Convertido", "color": "#fff4ce", "position": 4, "is_won": True, "is_lost": False},
+    {
+        "key": "new",
+        "label": "Novo",
+        "color": "#f3f4f6",
+        "description": "Lead recém-chegado, ainda sem resposta ou qualificação.",
+        "position": 0,
+        "is_won": False,
+        "is_lost": False,
+    },
+    {
+        "key": "responded",
+        "label": "Respondeu",
+        "color": "#dff7f1",
+        "description": "Lead respondeu à abordagem, mas ainda não há qualificação suficiente.",
+        "position": 1,
+        "is_won": False,
+        "is_lost": False,
+    },
+    {
+        "key": "qualified",
+        "label": "Qualificado",
+        "color": "#dcf6e8",
+        "description": "Lead demonstrou dor, necessidade ou encaixe claro com a oferta.",
+        "position": 2,
+        "is_won": False,
+        "is_lost": False,
+    },
+    {
+        "key": "not_interested",
+        "label": "Sem interesse",
+        "color": "#ffe4e6",
+        "description": "Lead recusou a conversa, pediu para não seguir ou demonstrou desinteresse claro.",
+        "position": 3,
+        "is_won": False,
+        "is_lost": True,
+    },
+    {
+        "key": "converted",
+        "label": "Convertido",
+        "color": "#fff4ce",
+        "description": "Lead aceitou avançar para reunião, fechamento ou próximo passo comercial concreto.",
+        "position": 4,
+        "is_won": True,
+        "is_lost": False,
+    },
 ]
 
 
@@ -179,8 +219,12 @@ def _ensure_crm_funnel_tables() -> None:
     Base.metadata.create_all(bind=engine, tables=[CrmFunnel.__table__, CrmFunnelStage.__table__])
 
     inspector = inspect(engine)
-    if "crm_funnels" not in inspector.get_table_names() or "crm_funnel_stages" not in inspector.get_table_names():
+    table_names = inspector.get_table_names()
+    if "crm_funnels" not in table_names or "crm_funnel_stages" not in table_names:
         return
+    stage_columns = {column["name"] for column in inspector.get_columns("crm_funnel_stages")}
+    if "description" not in stage_columns:
+        _run_schema_statement("ALTER TABLE crm_funnel_stages ADD COLUMN description VARCHAR(500)")
 
     with engine.begin() as connection:
         _set_schema_timeouts(connection)
@@ -237,7 +281,8 @@ def _ensure_default_crm_funnel_stages(connection, funnel_id: int) -> None:
             connection.execute(
                 text(
                     "UPDATE crm_funnel_stages "
-                    "SET label = :label, color = :color, position = :position, is_won = :is_won, is_lost = :is_lost "
+                    "SET label = :label, color = :color, description = :description, "
+                    "position = :position, is_won = :is_won, is_lost = :is_lost "
                     "WHERE id = :id"
                 ),
                 {**params, "id": existing[0]},
@@ -246,8 +291,8 @@ def _ensure_default_crm_funnel_stages(connection, funnel_id: int) -> None:
         connection.execute(
             text(
                 "INSERT INTO crm_funnel_stages "
-                "(funnel_id, key, label, color, position, is_won, is_lost) "
-                "VALUES (:funnel_id, :key, :label, :color, :position, :is_won, :is_lost)"
+                "(funnel_id, key, label, color, description, position, is_won, is_lost) "
+                "VALUES (:funnel_id, :key, :label, :color, :description, :position, :is_won, :is_lost)"
             ),
             params,
         )

@@ -556,6 +556,7 @@ def _stage_read(stage: CrmFunnelStage, card_count: int = 0) -> CrmFunnelStageRea
         key=stage.key,
         label=stage.label,
         color=stage.color,
+        description=stage.description,
         position=stage.position,
         is_won=stage.is_won,
         is_lost=stage.is_lost,
@@ -1909,6 +1910,7 @@ def create_crm_funnel(
             key="new",
             label="Novo",
             color="#f3f4f6",
+            description="Lead recém-chegado, ainda sem resposta ou qualificação.",
             position=0,
             is_won=False,
             is_lost=False,
@@ -2066,6 +2068,7 @@ def create_crm_funnel_stage(
         key=key,
         label=payload.label,
         color=payload.color,
+        description=payload.description,
         position=position,
         is_won=payload.is_won,
         is_lost=payload.is_lost,
@@ -2138,6 +2141,8 @@ def update_crm_funnel_stage(
         stage.label = payload_data["label"]
     if "color" in payload_data and payload_data["color"] is not None:
         stage.color = payload_data["color"]
+    if "description" in payload_data:
+        stage.description = payload_data["description"]
     if "position" in payload_data and payload_data["position"] is not None:
         stage.position = payload_data["position"]
     if "is_won" in payload_data and payload_data["is_won"] is not None:

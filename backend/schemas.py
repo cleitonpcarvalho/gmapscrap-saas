@@ -433,6 +433,7 @@ class CrmFunnelStageCreate(BaseModel):
     label: str = Field(min_length=1, max_length=120)
     key: str | None = Field(default=None, min_length=1, max_length=60, pattern=r"^[a-z0-9_]+$")
     color: str = Field(default="#f3f4f6", pattern=r"^#[0-9A-Fa-f]{6}$")
+    description: str | None = Field(default=None, max_length=500)
     is_won: bool = False
     is_lost: bool = False
 
@@ -444,11 +445,20 @@ class CrmFunnelStageCreate(BaseModel):
             raise ValueError("Informe o nome do estágio.")
         return normalized
 
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
 
 class CrmFunnelStageUpdate(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=120)
     key: str | None = Field(default=None, min_length=1, max_length=60, pattern=r"^[a-z0-9_]+$")
     color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    description: str | None = Field(default=None, max_length=500)
     position: int | None = Field(default=None, ge=0)
     is_won: bool | None = None
     is_lost: bool | None = None
@@ -463,6 +473,14 @@ class CrmFunnelStageUpdate(BaseModel):
             raise ValueError("Informe o nome do estágio.")
         return normalized
 
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
 
 class CrmFunnelStageReorderRequest(BaseModel):
     stage_ids: list[int] = Field(min_length=1)
@@ -474,6 +492,7 @@ class CrmFunnelStageRead(BaseModel):
     key: str
     label: str
     color: str
+    description: str | None = None
     position: int
     is_won: bool
     is_lost: bool

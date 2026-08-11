@@ -14,22 +14,28 @@ from sqlalchemy.orm import Session
 
 from backend.config import get_settings
 from backend.models import (
+    CrmFunnel,
+    CrmFunnelStage,
+    CrmLead,
     Lead,
     LeadTag,
     Tag,
+    WhatsAppCampaign,
     WhatsAppAiSettings,
     WhatsAppConversation,
     WhatsAppInstance,
     WhatsAppMessage,
     WhatsAppPortfolioItem,
+    WhatsAppSend,
 )
-from backend.services.crm import CRM_STAGES, update_crm_stage
+from backend.services.crm import get_default_crm_funnel, move_crm_lead
 from backend.services.whatsapp_providers.evolution import EvolutionProvider
 
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 RECENT_AI_REPLY_SECONDS = 10
 AI_TAG_PROMPT_LIMIT = 30
+AI_STAGE_PROMPT_LIMIT = 20
 AI_TOOL_NAMES = {"update_lead_stage", "apply_lead_tags"}
 DEFAULT_SYSTEM_PROMPT = (
     "Você é um assistente comercial da Automa Soluct no WhatsApp. "
@@ -48,11 +54,7 @@ SALES_CONVERSATION_STRATEGY = (
     "- Proponha ativamente uma reunião quando houver contexto suficiente; não espere passivamente o lead pedir.\n"
     "- Nunca trate de valores, preços, descontos, parcelas, formas de pagamento ou negociação comercial no WhatsApp. "
     "Quando isso aparecer, diga que os detalhes de investimento são tratados na reunião.\n"
-    "- Se o lead demonstrar interesse real em marcar reunião, por exemplo dizendo \"sim\", \"pode ser\", "
-    "\"vamos marcar\" ou equivalente, chame update_lead_stage com stage converted e responda confirmando que alguém "
-    "vai entrar em contato para agendar. Não tente escolher data ou horário sozinho.\n"
-    "- Se o lead demonstrar desinteresse claro, chame update_lead_stage com stage not_interested e responda de forma "
-    "educada, breve e sem insistir."
+    "- Quando houver mudança clara de status comercial, use os estágios disponíveis do funil informado no contexto."
 )
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,17 @@ logger = logging.getLogger(__name__)
 class AiResponse:
     text: str
     tool_calls: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class AiCrmStageContext:
+    funnel: CrmFunnel
+    all_stages: list[CrmFunnelStage]
+    available_stages: list[CrmFunnelStage]
+    truncated: bool
+    current_stage: CrmFunnelStage | None
+    won_stage: CrmFunnelStage | None
+    lost_stage: CrmFunnelStage | None
 
 
 def get_or_create_ai_settings(db: Session) -> WhatsAppAiSettings:
@@ -210,9 +223,15 @@ def _openai_payload(
     portfolio_context = _portfolio_context(db)
     lead_context = _lead_context(conversation.lead)
     history = _conversation_history(db, conversation.id)
+    stage_context = _safe_ai_crm_stage_context(db, conversation) if include_tools else None
+    crm_stage_context = _ai_crm_stage_context_text(stage_context)
     available_tags, tags_truncated = _available_ai_tags_for_prompt(db) if include_tools and ai_settings.auto_apply_tags_enabled else ([], False)
     tag_context = _ai_tag_context(available_tags, tags_truncated)
-    tool_instruction = _tool_instruction(include_tools, has_tag_tool=bool(available_tags))
+    tool_instruction = _tool_instruction(
+        include_tools,
+        stage_context=stage_context,
+        has_tag_tool=bool(available_tags),
+    )
 
     payload: dict[str, Any] = {
         "model": settings.openai_model,
@@ -221,7 +240,7 @@ def _openai_payload(
                 "role": "system",
                 "content": (
                     f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n\n{SALES_CONVERSATION_STRATEGY}\n\n"
-                    f"{services_context}\n\n{portfolio_context}\n\n{tag_context}{tool_instruction}\n\n"
+                    f"{services_context}\n\n{portfolio_context}\n\n{crm_stage_context}{tag_context}{tool_instruction}\n\n"
                     f"Contexto do lead:\n{lead_context}"
                 ),
             },
@@ -230,11 +249,14 @@ def _openai_payload(
         "max_output_tokens": 450,
     }
     if include_tools:
-        tools = [_update_lead_stage_tool_schema()]
+        tools = []
+        if stage_context and stage_context.available_stages:
+            tools.append(_update_lead_stage_tool_schema(stage_context.available_stages))
         if available_tags:
             tools.append(_apply_lead_tags_tool_schema(available_tags))
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
     return payload
 
 
@@ -302,21 +324,220 @@ def _portfolio_context(db: Session) -> str:
     )
 
 
-def _tool_instruction(include_tools: bool, *, has_tag_tool: bool) -> str:
+def _safe_ai_crm_stage_context(db: Session, conversation: WhatsAppConversation) -> AiCrmStageContext | None:
+    try:
+        return _ai_crm_stage_context(db, conversation)
+    except Exception:
+        logger.exception("Falha ao carregar contexto de funil para conversa %s.", conversation.id)
+        return None
+
+
+def _ai_crm_stage_context(db: Session, conversation: WhatsAppConversation) -> AiCrmStageContext:
+    funnel, current_stage = _resolve_ai_crm_funnel(db, conversation.lead_id)
+    stages = _ordered_crm_stages(funnel.stages)
+    available_stages = _limited_crm_stages(stages, current_stage=current_stage)
+    available_stage_ids = {stage.id for stage in available_stages}
+    return AiCrmStageContext(
+        funnel=funnel,
+        all_stages=stages,
+        available_stages=available_stages,
+        truncated=len(available_stages) < len(stages),
+        current_stage=current_stage if current_stage and current_stage.id in available_stage_ids else None,
+        won_stage=_terminal_stage(available_stages, is_won=True),
+        lost_stage=_terminal_stage(available_stages, is_lost=True),
+    )
+
+
+def _resolve_ai_crm_funnel(db: Session, lead_id: int | None) -> tuple[CrmFunnel, CrmFunnelStage | None]:
+    if not lead_id:
+        return get_default_crm_funnel(db), None
+
+    cards = list(
+        db.scalars(
+            select(CrmLead)
+            .where(CrmLead.lead_id == lead_id)
+            .order_by(desc(CrmLead.updated_at), desc(CrmLead.id))
+        ).all()
+    )
+    if not cards:
+        return get_default_crm_funnel(db), None
+
+    selected_card = cards[0]
+    campaign_funnel_id = _latest_campaign_funnel_id_for_lead(db, lead_id) if len(cards) > 1 else None
+    if campaign_funnel_id is not None:
+        campaign_card = next((card for card in cards if card.funnel_id == campaign_funnel_id), None)
+        if campaign_card:
+            selected_card = campaign_card
+            logger.info(
+                "Lead possui cards em múltiplos funis; usando funil da campanha WhatsApp mais recente",
+                extra={"lead_id": lead_id, "funnel_id": campaign_funnel_id},
+            )
+        else:
+            logger.info(
+                "Lead possui cards em múltiplos funis, mas campanha recente não possui card correspondente; usando card CRM mais recente",
+                extra={"lead_id": lead_id, "campaign_funnel_id": campaign_funnel_id},
+            )
+    elif len(cards) > 1:
+        logger.info(
+            "Lead possui cards em múltiplos funis; usando card CRM atualizado mais recentemente",
+            extra={"lead_id": lead_id, "crm_lead_ids": [card.id for card in cards]},
+        )
+
+    funnel = _load_funnel_with_stages(db, selected_card.funnel_id)
+    if not funnel:
+        logger.warning("Card CRM %s aponta para funil inexistente; usando funil padrão.", selected_card.id)
+        return get_default_crm_funnel(db), None
+
+    current_stage = db.get(CrmFunnelStage, selected_card.stage_id) if selected_card.stage_id else None
+    if current_stage and current_stage.funnel_id != funnel.id:
+        current_stage = None
+    return funnel, current_stage
+
+
+def _latest_campaign_funnel_id_for_lead(db: Session, lead_id: int) -> int | None:
+    row = db.execute(
+        select(WhatsAppCampaign.funnel_id)
+        .join(WhatsAppSend, WhatsAppSend.campaign_id == WhatsAppCampaign.id)
+        .where(WhatsAppSend.lead_id == lead_id, WhatsAppCampaign.funnel_id.is_not(None))
+        .order_by(
+            WhatsAppSend.sent_at.is_(None),
+            desc(WhatsAppSend.sent_at),
+            desc(WhatsAppSend.created_at),
+            desc(WhatsAppSend.id),
+        )
+        .limit(1)
+    ).first()
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def _load_funnel_with_stages(db: Session, funnel_id: int | None) -> CrmFunnel | None:
+    if funnel_id is None:
+        return None
+    return db.scalar(select(CrmFunnel).where(CrmFunnel.id == funnel_id))
+
+
+def _ordered_crm_stages(stages: list[CrmFunnelStage] | None) -> list[CrmFunnelStage]:
+    return sorted(stages or [], key=lambda stage: (stage.position, stage.id))
+
+
+def _limited_crm_stages(
+    stages: list[CrmFunnelStage],
+    *,
+    current_stage: CrmFunnelStage | None = None,
+) -> list[CrmFunnelStage]:
+    selected = list(stages[:AI_STAGE_PROMPT_LIMIT])
+    required = [stage for stage in [current_stage, _terminal_stage(stages, is_won=True), _terminal_stage(stages, is_lost=True)] if stage]
+    for stage in required:
+        if any(item.id == stage.id for item in selected):
+            continue
+        if len(selected) < AI_STAGE_PROMPT_LIMIT:
+            selected.append(stage)
+            continue
+        required_ids = {item.id for item in required}
+        replace_index = next(
+            (index for index in range(len(selected) - 1, -1, -1) if selected[index].id not in required_ids),
+            len(selected) - 1,
+        )
+        selected[replace_index] = stage
+
+    unique_by_id = {stage.id: stage for stage in selected}
+    return sorted(unique_by_id.values(), key=lambda stage: (stage.position, stage.id))
+
+
+def _terminal_stage(
+    stages: list[CrmFunnelStage],
+    *,
+    is_won: bool = False,
+    is_lost: bool = False,
+) -> CrmFunnelStage | None:
+    for stage in stages:
+        if is_won and stage.is_won:
+            return stage
+        if is_lost and stage.is_lost:
+            return stage
+    return None
+
+
+def _ai_crm_stage_context_text(stage_context: AiCrmStageContext | None) -> str:
+    if not stage_context or not stage_context.available_stages:
+        return ""
+
+    stage_lines = []
+    for stage in stage_context.available_stages:
+        description = _crm_stage_description(stage)
+        terminal_markers = []
+        if stage.is_won:
+            terminal_markers.append("ganho")
+        if stage.is_lost:
+            terminal_markers.append("perda")
+        terminal_text = f" [{', '.join(terminal_markers)}]" if terminal_markers else ""
+        stage_lines.append(f"- {stage.key}: {stage.label}{terminal_text} — {description}")
+    stage_lines_text = "\n".join(stage_lines)
+
+    suffix = (
+        f"\nHá mais estágios neste funil, mas apenas {AI_STAGE_PROMPT_LIMIT} foram disponibilizados nesta conversa; "
+        "use somente os estágios listados abaixo."
+        if stage_context.truncated
+        else ""
+    )
+    current_stage_text = (
+        f"\nEstágio atual do card: {stage_context.current_stage.key} ({stage_context.current_stage.label})."
+        if stage_context.current_stage
+        else ""
+    )
+    return (
+        f"Funil de CRM desta conversa: {stage_context.funnel.name}.\n"
+        "Estágios disponíveis para update_lead_stage:\n"
+        f"{stage_lines_text}"
+        f"{suffix}"
+        f"{current_stage_text}\n\n"
+    )
+
+
+def _crm_stage_description(stage: CrmFunnelStage) -> str:
+    description = (stage.description or "").strip()
+    if description:
+        return description
+    if stage.is_won:
+        return "Use quando a oportunidade estiver ganha ou houver próximo passo comercial concreto."
+    if stage.is_lost:
+        return "Use quando houver desinteresse claro, recusa ou perda da oportunidade."
+    return "Use quando a conversa indicar claramente este status no funil."
+
+
+def _tool_instruction(
+    include_tools: bool,
+    *,
+    stage_context: AiCrmStageContext | None,
+    has_tag_tool: bool,
+) -> str:
     if not include_tools:
         return "Nesta chamada, não use ferramentas. Escreva apenas a resposta final que será enviada ao usuário."
 
-    instruction = (
-        "Se identificar interesse, desinteresse ou avanço no funil, chame a function update_lead_stage. "
-        "Mesmo quando chamar uma function, também escreva a resposta que deve ser enviada ao usuário."
-    )
+    instructions = ["Mesmo quando chamar uma function, também escreva a resposta que deve ser enviada ao usuário."]
+    if stage_context and stage_context.available_stages:
+        instructions.append(
+            "Se identificar uma mudança clara no status comercial, chame update_lead_stage usando somente um stage listado em Estágios disponíveis."
+        )
+        if stage_context.won_stage:
+            instructions.append(
+                "Quando o lead demonstrar interesse real em avançar, marcar reunião, fechar ou aceitar um próximo passo concreto, "
+                f"chame update_lead_stage com stage {stage_context.won_stage.key}. "
+                "Responda confirmando que alguém vai entrar em contato para agendar quando fizer sentido. "
+                "Não tente escolher data ou horário sozinho."
+            )
+        if stage_context.lost_stage:
+            instructions.append(
+                "Quando o lead demonstrar desinteresse claro, recusar contato ou pedir para não seguir, "
+                f"chame update_lead_stage com stage {stage_context.lost_stage.key} e responda de forma educada, breve e sem insistir."
+            )
     if has_tag_tool:
-        instruction += (
-            " Se a conversa trouxer evidência concreta de uma classificação disponível, chame apply_lead_tags "
+        instructions.append(
+            "Se a conversa trouxer evidência concreta de uma classificação disponível, chame apply_lead_tags "
             "usando somente os nomes listados em Tags disponíveis. Não crie tags, não chute categorias e não aplique "
             "tags por inferência fraca."
         )
-    return instruction
+    return " ".join(instructions)
 
 
 def _available_ai_tags_for_prompt(db: Session) -> tuple[list[Tag], bool]:
@@ -353,11 +574,11 @@ def _ai_tag_context(tags: list[Tag], truncated: bool) -> str:
     )
 
 
-def _update_lead_stage_tool_schema() -> dict[str, Any]:
+def _update_lead_stage_tool_schema(stages: list[CrmFunnelStage]) -> dict[str, Any]:
     return {
         "type": "function",
         "name": "update_lead_stage",
-        "description": "Atualiza o estágio do lead no CRM quando a conversa indicar mudança clara no funil.",
+        "description": "Atualiza o estágio do lead no CRM usando um estágio disponível no funil desta conversa.",
         "parameters": {
             "type": "object",
             "additionalProperties": False,
@@ -365,8 +586,8 @@ def _update_lead_stage_tool_schema() -> dict[str, Any]:
             "properties": {
                 "stage": {
                     "type": "string",
-                    "enum": ["new", "responded", "qualified", "not_interested", "converted"],
-                    "description": "Novo estágio do lead no CRM.",
+                    "enum": [stage.key for stage in stages],
+                    "description": "Novo estágio do lead no CRM, usando uma das chaves disponíveis no funil.",
                 },
                 "reason": {
                     "type": "string",
@@ -453,11 +674,14 @@ def _apply_tool_calls(
         return
 
     settings = ai_settings or get_or_create_ai_settings(db)
+    stage_context: AiCrmStageContext | None = None
     for tool_call in tool_calls:
         tool_name = _tool_name(tool_call)
         arguments = _tool_arguments(tool_call)
         if tool_name == "update_lead_stage":
-            _apply_update_lead_stage_tool(db, conversation, arguments)
+            if stage_context is None:
+                stage_context = _safe_ai_crm_stage_context(db, conversation)
+            _apply_update_lead_stage_tool(db, conversation, arguments, stage_context)
             continue
         if tool_name == "apply_lead_tags":
             if not settings.auto_apply_tags_enabled:
@@ -468,13 +692,44 @@ def _apply_tool_calls(
         logger.warning("IA solicitou ferramenta desconhecida para conversa %s: %s", conversation.id, tool_name)
 
 
-def _apply_update_lead_stage_tool(db: Session, conversation: WhatsAppConversation, arguments: dict[str, Any]) -> None:
+def _apply_update_lead_stage_tool(
+    db: Session,
+    conversation: WhatsAppConversation,
+    arguments: dict[str, Any],
+    stage_context: AiCrmStageContext | None,
+) -> None:
+    if not stage_context or not stage_context.available_stages:
+        logger.warning("IA solicitou mudança de estágio, mas não há contexto de funil para conversa %s.", conversation.id)
+        return
     stage = str(arguments.get("stage") or "").strip()
     reason = str(arguments.get("reason") or "").strip()
-    if stage not in CRM_STAGES:
-        logger.warning("IA solicitou estágio de CRM inválido para conversa %s: %s", conversation.id, stage)
+    available_stage_keys = {crm_stage.key for crm_stage in stage_context.available_stages}
+    all_stage_keys = {crm_stage.key for crm_stage in stage_context.all_stages}
+    if stage not in available_stage_keys:
+        if stage in all_stage_keys:
+            logger.warning(
+                "IA solicitou estágio de CRM existente, mas não disponível no prompt para conversa %s: %s",
+                conversation.id,
+                stage,
+            )
+        else:
+            logger.warning("IA solicitou estágio de CRM inválido para conversa %s: %s", conversation.id, stage)
         return
-    update_crm_stage(db, conversation.lead_id, stage, changed_by="ai", reason=reason)
+    try:
+        move_crm_lead(
+            db,
+            conversation.lead_id,
+            stage=stage,
+            changed_by="ai",
+            reason=reason,
+            funnel_id=stage_context.funnel.id,
+        )
+    except Exception:
+        logger.exception(
+            "Falha ao mover card por IA para lead %s na conversa %s.",
+            conversation.lead_id,
+            conversation.id,
+        )
 
 
 def _apply_lead_tags_tool(db: Session, conversation: WhatsAppConversation, arguments: dict[str, Any]) -> None:

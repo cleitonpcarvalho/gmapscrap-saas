@@ -16,19 +16,25 @@ from starlette.requests import Request
 from backend import main
 from backend.database import Base
 from backend.models import (
+    CrmFunnel,
+    CrmFunnelStage,
     CrmLead,
     CrmStageHistory,
     Lead,
+    LeadList,
     LeadTag,
     SearchRun,
     Tag,
+    WhatsAppCampaign,
     WhatsAppAiSettings,
     WhatsAppConversation,
     WhatsAppInstance,
     WhatsAppMessage,
     WhatsAppPortfolioItem,
+    WhatsAppSend,
 )
 from backend.schemas import WhatsAppPortfolioItemCreate
+from backend.services.crm import get_default_crm_funnel, get_or_create_crm_lead
 from backend.services import whatsapp_ai_agent
 
 
@@ -109,6 +115,102 @@ def seed_lead_and_instance(db: Session, *, phone: str = "(11) 99999-0000") -> di
     db.add_all([lead, instance])
     db.commit()
     return {"lead_id": lead.id, "instance_id": instance.id}
+
+
+def seed_custom_funnel(db: Session, *, name: str = "Funil consultivo") -> dict[str, int]:
+    funnel = CrmFunnel(name=name, description="Funil com etapas próprias.", is_default=False)
+    db.add(funnel)
+    db.flush()
+    stages = [
+        CrmFunnelStage(
+            funnel_id=funnel.id,
+            key="triagem",
+            label="Triagem",
+            color="#e0f2fe",
+            description="Use quando o lead ainda está explicando o cenário inicial.",
+            position=0,
+            is_won=False,
+            is_lost=False,
+        ),
+        CrmFunnelStage(
+            funnel_id=funnel.id,
+            key="proposta",
+            label="Proposta enviada",
+            color="#fef3c7",
+            description="Use quando o lead pediu uma proposta ou próximos detalhes comerciais.",
+            position=1,
+            is_won=False,
+            is_lost=False,
+        ),
+        CrmFunnelStage(
+            funnel_id=funnel.id,
+            key="fechado",
+            label="Fechado",
+            color="#dcf6e8",
+            description="Use quando o lead aceitou avançar para fechamento ou reunião decisiva.",
+            position=2,
+            is_won=True,
+            is_lost=False,
+        ),
+        CrmFunnelStage(
+            funnel_id=funnel.id,
+            key="perdido",
+            label="Perdido",
+            color="#fee2e2",
+            description="Use quando o lead recusou seguir.",
+            position=3,
+            is_won=False,
+            is_lost=True,
+        ),
+    ]
+    db.add_all(stages)
+    db.flush()
+    return {
+        "funnel_id": funnel.id,
+        "first_stage_id": stages[0].id,
+        "proposal_stage_id": stages[1].id,
+        "won_stage_id": stages[2].id,
+        "lost_stage_id": stages[3].id,
+    }
+
+
+def seed_campaign_send(db: Session, *, lead_id: int, instance_id: int, funnel_id: int) -> WhatsAppCampaign:
+    lead_list = LeadList(name=f"Lista funil {funnel_id}", channel="whatsapp")
+    db.add(lead_list)
+    db.flush()
+    campaign = WhatsAppCampaign(
+        name=f"Campanha funil {funnel_id}",
+        list_id=lead_list.id,
+        instance_id=instance_id,
+        funnel_id=funnel_id,
+        status="running",
+        message="Rodando",
+    )
+    db.add(campaign)
+    db.flush()
+    db.add(
+        WhatsAppSend(
+            campaign_id=campaign.id,
+            lead_id=lead_id,
+            recipient_phone="5511999990000",
+            status="sent",
+            sent_at=datetime.now(timezone.utc),
+        )
+    )
+    db.flush()
+    return campaign
+
+
+def seed_conversation(db: Session, *, lead_id: int, instance_id: int) -> WhatsAppConversation:
+    conversation = WhatsAppConversation(
+        lead_id=lead_id,
+        instance_id=instance_id,
+        status="open",
+        last_message_at=datetime.now(timezone.utc),
+    )
+    db.add(conversation)
+    db.commit()
+    return conversation
 
 
 def enable_ai(
@@ -289,6 +391,186 @@ def test_whatsapp_ai_function_call_updates_crm_stage_and_history(
     assert history.changed_by == "ai"
 
 
+def test_whatsapp_ai_moves_card_in_custom_funnel_with_custom_stage_keys(db_session: Session) -> None:
+    ids = seed_lead_and_instance(db_session)
+    custom = seed_custom_funnel(db_session)
+    db_session.add(
+        CrmLead(
+            lead_id=ids["lead_id"],
+            funnel_id=custom["funnel_id"],
+            stage_id=custom["first_stage_id"],
+            stage="triagem",
+            position=0,
+        )
+    )
+    db_session.commit()
+    conversation = seed_conversation(db_session, lead_id=ids["lead_id"], instance_id=ids["instance_id"])
+    enable_ai(db_session)
+    settings = db_session.get(WhatsAppAiSettings, 1)
+    assert settings is not None
+
+    payload = whatsapp_ai_agent._openai_payload(db_session, conversation, settings, include_tools=True)
+    tool_schema = payload["tools"][0]
+
+    assert tool_schema["name"] == "update_lead_stage"
+    assert tool_schema["parameters"]["properties"]["stage"]["enum"] == ["triagem", "proposta", "fechado", "perdido"]
+    assert "Funil de CRM desta conversa: Funil consultivo." in payload["input"][0]["content"]
+    assert "- fechado: Fechado [ganho]" in payload["input"][0]["content"]
+
+    whatsapp_ai_agent._apply_tool_calls(
+        db_session,
+        conversation,
+        [
+            {
+                "type": "function_call",
+                "name": "update_lead_stage",
+                "arguments": json.dumps({"stage": "fechado", "reason": "Lead aceitou avançar."}),
+            }
+        ],
+        ai_settings=settings,
+    )
+    db_session.commit()
+
+    crm_lead = db_session.scalars(select(CrmLead).where(CrmLead.lead_id == ids["lead_id"])).one()
+    history = db_session.scalars(select(CrmStageHistory)).one()
+    assert crm_lead.funnel_id == custom["funnel_id"]
+    assert crm_lead.stage == "fechado"
+    assert crm_lead.stage_id == custom["won_stage_id"]
+    assert history.from_stage == "triagem"
+    assert history.to_stage == "fechado"
+
+
+def test_whatsapp_ai_ignores_unknown_stage_key_and_continues_service(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    seed_lead_and_instance(db_session)
+    enable_ai(db_session)
+    captured: dict[str, Any] = {}
+    caplog.set_level(logging.WARNING, logger=whatsapp_ai_agent.__name__)
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
+        return FakeOpenAIResponse(
+            {
+                "output_text": "Entendi. Vou seguir por aqui com você.",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "update_lead_stage",
+                        "arguments": json.dumps({"stage": "nao_existe", "reason": "Teste"}),
+                    }
+                ],
+            }
+        )
+
+    def fake_send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
+        captured["send"] = {"instance_id": instance_id, "phone": phone, "text": text}
+        return {"key": {"id": "OUTBOUND_INVALID_STAGE"}}
+
+    monkeypatch.setattr(whatsapp_ai_agent.requests, "post", fake_openai_post)
+    monkeypatch.setattr(whatsapp_ai_agent.EvolutionProvider, "send_text_message", fake_send_text_message)
+
+    response = main.receive_evolution_webhook(evolution_text_payload(), request=webhook_request(), db=db_session)
+
+    crm_lead = db_session.scalars(select(CrmLead)).one()
+    assert response["status"] == "ok"
+    assert captured["send"]["text"] == "Entendi. Vou seguir por aqui com você."
+    assert crm_lead.stage == "new"
+    assert db_session.scalars(select(CrmStageHistory)).all() == []
+    assert "IA solicitou estágio de CRM inválido" in caplog.text
+
+
+def test_whatsapp_ai_prompt_omits_terminal_instructions_when_funnel_has_no_won_or_lost(
+    db_session: Session,
+) -> None:
+    ids = seed_lead_and_instance(db_session)
+    funnel = CrmFunnel(name="Funil sem terminal", description="", is_default=False)
+    db_session.add(funnel)
+    db_session.flush()
+    first = CrmFunnelStage(
+        funnel_id=funnel.id,
+        key="aberto",
+        label="Aberto",
+        color="#e0f2fe",
+        description="Use quando a conversa está em aberto.",
+        position=0,
+        is_won=False,
+        is_lost=False,
+    )
+    second = CrmFunnelStage(
+        funnel_id=funnel.id,
+        key="analise",
+        label="Análise",
+        color="#fef3c7",
+        description="Use quando ainda precisa avaliar a demanda.",
+        position=1,
+        is_won=False,
+        is_lost=False,
+    )
+    db_session.add_all([first, second])
+    db_session.flush()
+    db_session.add(CrmLead(lead_id=ids["lead_id"], funnel_id=funnel.id, stage_id=first.id, stage=first.key, position=0))
+    db_session.commit()
+    conversation = seed_conversation(db_session, lead_id=ids["lead_id"], instance_id=ids["instance_id"])
+    enable_ai(db_session)
+    settings = db_session.get(WhatsAppAiSettings, 1)
+    assert settings is not None
+
+    payload = whatsapp_ai_agent._openai_payload(db_session, conversation, settings, include_tools=True)
+    system_content = payload["input"][0]["content"]
+
+    assert payload["tools"][0]["parameters"]["properties"]["stage"]["enum"] == ["aberto", "analise"]
+    assert "Quando o lead demonstrar interesse real em avançar" not in system_content
+    assert "Quando o lead demonstrar desinteresse claro" not in system_content
+
+
+def test_whatsapp_ai_with_multiple_cards_prefers_latest_campaign_funnel(db_session: Session) -> None:
+    ids = seed_lead_and_instance(db_session)
+    default_funnel = get_default_crm_funnel(db_session)
+    default_card = get_or_create_crm_lead(db_session, ids["lead_id"], funnel_id=default_funnel.id)
+    custom = seed_custom_funnel(db_session)
+    custom_card = CrmLead(
+        lead_id=ids["lead_id"],
+        funnel_id=custom["funnel_id"],
+        stage_id=custom["first_stage_id"],
+        stage="triagem",
+        position=0,
+    )
+    db_session.add(custom_card)
+    db_session.flush()
+    seed_campaign_send(
+        db_session,
+        lead_id=ids["lead_id"],
+        instance_id=ids["instance_id"],
+        funnel_id=custom["funnel_id"],
+    )
+    db_session.commit()
+    conversation = seed_conversation(db_session, lead_id=ids["lead_id"], instance_id=ids["instance_id"])
+    enable_ai(db_session)
+    settings = db_session.get(WhatsAppAiSettings, 1)
+    assert settings is not None
+
+    whatsapp_ai_agent._apply_tool_calls(
+        db_session,
+        conversation,
+        [
+            {
+                "type": "function_call",
+                "name": "update_lead_stage",
+                "arguments": json.dumps({"stage": "fechado", "reason": "Lead aceitou avançar."}),
+            }
+        ],
+        ai_settings=settings,
+    )
+    db_session.commit()
+
+    db_session.refresh(default_card)
+    db_session.refresh(custom_card)
+    assert default_card.stage == "new"
+    assert custom_card.stage == "fechado"
+
+
 def test_whatsapp_ai_applies_existing_tag_with_ai_origin(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -305,6 +587,16 @@ def test_whatsapp_ai_applies_existing_tag_with_ai_origin(
             {
                 "output_text": "Entendi. Essa integração com ERP faz sentido para o seu cenário.",
                 "output": [
+                    {
+                        "type": "function_call",
+                        "name": "update_lead_stage",
+                        "arguments": json.dumps(
+                            {
+                                "stage": "qualified",
+                                "reason": "Lead informou que usa ERP e quer automatizar atendimento.",
+                            }
+                        ),
+                    },
                     {
                         "type": "function_call",
                         "name": "apply_lead_tags",
@@ -333,11 +625,13 @@ def test_whatsapp_ai_applies_existing_tag_with_ai_origin(
     )
 
     association = db_session.scalars(select(LeadTag)).one()
+    crm_lead = db_session.scalars(select(CrmLead)).one()
     tools = captured["openai_payload"]["tools"]
     system_content = captured["openai_payload"]["input"][0]["content"]
 
     assert association.lead_id == ids["lead_id"]
     assert association.origin == "ai"
+    assert crm_lead.stage == "qualified"
     assert [tool["name"] for tool in tools] == ["update_lead_stage", "apply_lead_tags"]
     assert tools[1]["parameters"]["properties"]["tags"]["items"]["enum"] == ["Usa ERP"]
     assert "Tags disponíveis para classificação automática" in system_content
@@ -473,8 +767,17 @@ def test_whatsapp_ai_tag_prompt_has_no_empty_section_when_no_tags(
     assert "Tags disponíveis para classificação automática" not in system_content
 
 
-def test_update_lead_stage_tool_schema_keeps_fixed_stage_keys() -> None:
-    schema = whatsapp_ai_agent._update_lead_stage_tool_schema()
+def test_whatsapp_ai_default_funnel_stage_enum_keeps_original_keys(db_session: Session) -> None:
+    ids = seed_lead_and_instance(db_session)
+    get_default_crm_funnel(db_session)
+    get_or_create_crm_lead(db_session, ids["lead_id"])
+    conversation = seed_conversation(db_session, lead_id=ids["lead_id"], instance_id=ids["instance_id"])
+    enable_ai(db_session)
+    settings = db_session.get(WhatsAppAiSettings, 1)
+    assert settings is not None
+
+    payload = whatsapp_ai_agent._openai_payload(db_session, conversation, settings, include_tools=True)
+    schema = payload["tools"][0]
 
     assert schema["name"] == "update_lead_stage"
     assert schema["parameters"]["required"] == ["stage", "reason"]

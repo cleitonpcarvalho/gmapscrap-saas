@@ -44,7 +44,7 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     lead_tag_columns = {column["name"] for column in inspector.get_columns("lead_tags")}
 
     assert {"id", "name", "description", "is_default", "created_at"}.issubset(crm_funnel_columns)
-    assert {"id", "funnel_id", "key", "label", "color", "position", "is_won", "is_lost"}.issubset(
+    assert {"id", "funnel_id", "key", "label", "color", "description", "position", "is_won", "is_lost"}.issubset(
         crm_funnel_stage_columns
     )
     assert {"funnel_id", "stage_id", "position"}.issubset(crm_lead_columns)
@@ -167,3 +167,51 @@ def test_ensure_tag_tables_adds_and_backfills_lead_tag_origin(monkeypatch) -> No
 
     assert "origin" in lead_tag_columns
     assert origin == "manual"
+
+
+def test_ensure_crm_funnel_tables_adds_stage_description(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE crm_funnels (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    name VARCHAR(120) NOT NULL,
+                    description VARCHAR(500),
+                    is_default BOOLEAN NOT NULL DEFAULT 0,
+                    created_at DATETIME
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE crm_funnel_stages (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    funnel_id INTEGER NOT NULL,
+                    key VARCHAR(60) NOT NULL,
+                    label VARCHAR(120) NOT NULL,
+                    color VARCHAR(7) NOT NULL,
+                    position INTEGER NOT NULL,
+                    is_won BOOLEAN NOT NULL DEFAULT 0,
+                    is_lost BOOLEAN NOT NULL DEFAULT 0
+                )
+                """
+            )
+        )
+
+    monkeypatch.setattr(database, "engine", engine)
+
+    database._ensure_crm_funnel_tables()
+
+    inspector = inspect(engine)
+    stage_columns = {column["name"] for column in inspector.get_columns("crm_funnel_stages")}
+    with engine.connect() as connection:
+        default_description = connection.execute(
+            text("SELECT description FROM crm_funnel_stages WHERE key = 'qualified'")
+        ).scalar_one()
+
+    assert "description" in stage_columns
+    assert default_description == "Lead demonstrou dor, necessidade ou encaixe claro com a oferta."
