@@ -59,3 +59,7 @@ jobs:
             ./frontend
           docker push "${FRONTEND_IMAGE}:latest"
           docker push "${FRONTEND_IMAGE}:${GITHUB_SHA}"
+      - name: Trigger Portainer deploy
+        run: |
+          curl -s -X POST "${{ secrets.PORTAINER_WEBHOOK }}"
+          echo "Deploy triggered"
