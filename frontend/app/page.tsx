@@ -872,7 +872,7 @@ function leadPayload(lead: Lead) {
 
 function PhoneCell({ lead }: { lead: Lead }) {
   const phone = safeText(lead.phone).trim();
-  const url = lead.validate_whatsapp ? lead.whatsapp_url : "";
+  const url = safeText(lead.whatsapp_url).trim();
 
   if (!phone) return <>-</>;
   if (!url) return <>{phone}</>;

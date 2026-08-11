@@ -45,6 +45,21 @@ def test_lead_read_omits_whatsapp_url_when_run_did_not_validate_whatsapp() -> No
     assert result.whatsapp_url == ""
 
 
+def test_lead_read_includes_whatsapp_url_when_batch_validation_marked_lead_valid() -> None:
+    lead = _lead_for_run(validate_whatsapp=False)
+    lead.phone = "+34 600 123 456"
+    lead.address = "Calle Mayor, 1 - Madrid, España"
+    lead.whatsapp_validated = True
+    lead.whatsapp_validation_status = "valid"
+    lead.whatsapp_validated_at = datetime.now(timezone.utc)
+
+    result = LeadRead.model_validate(lead)
+
+    assert result.validate_whatsapp is False
+    assert result.whatsapp_validated is True
+    assert result.whatsapp_url == "https://wa.me/34600123456"
+
+
 def test_lead_read_allows_null_website() -> None:
     lead = _lead_for_run(validate_whatsapp=False)
     lead.website = None
