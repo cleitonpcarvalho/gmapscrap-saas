@@ -89,7 +89,9 @@ def test_add_tags_to_lead_is_idempotent(db_session: Session) -> None:
 
     associations = db_session.scalars(select(LeadTag)).all()
     assert len(associations) == 1
+    assert associations[0].origin == "manual"
     assert [item.name for item in result.tags] == ["Usa Bling"]
+    assert [item.origin for item in result.tags] == ["manual"]
 
 
 def test_bulk_add_and_remove_tags(db_session: Session) -> None:

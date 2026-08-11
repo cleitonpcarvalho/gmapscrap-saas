@@ -3,17 +3,20 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from backend.config import get_settings
 from backend.models import (
     Lead,
+    LeadTag,
+    Tag,
     WhatsAppAiSettings,
     WhatsAppConversation,
     WhatsAppInstance,
@@ -26,6 +29,8 @@ from backend.services.whatsapp_providers.evolution import EvolutionProvider
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 RECENT_AI_REPLY_SECONDS = 10
+AI_TAG_PROMPT_LIMIT = 30
+AI_TOOL_NAMES = {"update_lead_stage", "apply_lead_tags"}
 DEFAULT_SYSTEM_PROMPT = (
     "Você é um assistente comercial da Automa Soluct no WhatsApp. "
     "Converse de forma natural, educada e consultiva. "
@@ -69,6 +74,7 @@ def get_or_create_ai_settings(db: Session) -> WhatsAppAiSettings:
         system_prompt=DEFAULT_SYSTEM_PROMPT,
         services_description="",
         enabled=False,
+        auto_apply_tags_enabled=False,
     )
     db.add(settings)
     db.flush()
@@ -112,7 +118,7 @@ def handle_inbound_message(
             len(ai_response.text or ""),
             len(ai_response.tool_calls),
         )
-        _apply_tool_calls(db, conversation, ai_response.tool_calls)
+        _apply_tool_calls(db, conversation, ai_response.tool_calls, ai_settings=ai_settings)
         response_text = ai_response.text.strip()
         if not response_text:
             logger.warning(
@@ -204,12 +210,9 @@ def _openai_payload(
     portfolio_context = _portfolio_context(db)
     lead_context = _lead_context(conversation.lead)
     history = _conversation_history(db, conversation.id)
-    tool_instruction = (
-        "Se identificar interesse, desinteresse ou avanço no funil, chame a function update_lead_stage. "
-        "Mesmo quando chamar a function, também escreva a resposta que deve ser enviada ao usuário."
-        if include_tools
-        else "Nesta chamada, não use ferramentas. Escreva apenas a resposta final que será enviada ao usuário."
-    )
+    available_tags, tags_truncated = _available_ai_tags_for_prompt(db) if include_tools and ai_settings.auto_apply_tags_enabled else ([], False)
+    tag_context = _ai_tag_context(available_tags, tags_truncated)
+    tool_instruction = _tool_instruction(include_tools, has_tag_tool=bool(available_tags))
 
     payload: dict[str, Any] = {
         "model": settings.openai_model,
@@ -218,7 +221,7 @@ def _openai_payload(
                 "role": "system",
                 "content": (
                     f"{system_prompt}\n\n{SYSTEM_GUARDRAILS}\n\n{SALES_CONVERSATION_STRATEGY}\n\n"
-                    f"{services_context}\n\n{portfolio_context}\n\n{tool_instruction}\n\n"
+                    f"{services_context}\n\n{portfolio_context}\n\n{tag_context}{tool_instruction}\n\n"
                     f"Contexto do lead:\n{lead_context}"
                 ),
             },
@@ -227,7 +230,10 @@ def _openai_payload(
         "max_output_tokens": 450,
     }
     if include_tools:
-        payload["tools"] = [_update_lead_stage_tool_schema()]
+        tools = [_update_lead_stage_tool_schema()]
+        if available_tags:
+            tools.append(_apply_lead_tags_tool_schema(available_tags))
+        payload["tools"] = tools
         payload["tool_choice"] = "auto"
     return payload
 
@@ -296,6 +302,57 @@ def _portfolio_context(db: Session) -> str:
     )
 
 
+def _tool_instruction(include_tools: bool, *, has_tag_tool: bool) -> str:
+    if not include_tools:
+        return "Nesta chamada, não use ferramentas. Escreva apenas a resposta final que será enviada ao usuário."
+
+    instruction = (
+        "Se identificar interesse, desinteresse ou avanço no funil, chame a function update_lead_stage. "
+        "Mesmo quando chamar uma function, também escreva a resposta que deve ser enviada ao usuário."
+    )
+    if has_tag_tool:
+        instruction += (
+            " Se a conversa trouxer evidência concreta de uma classificação disponível, chame apply_lead_tags "
+            "usando somente os nomes listados em Tags disponíveis. Não crie tags, não chute categorias e não aplique "
+            "tags por inferência fraca."
+        )
+    return instruction
+
+
+def _available_ai_tags_for_prompt(db: Session) -> tuple[list[Tag], bool]:
+    tags = list(
+        db.scalars(
+            select(Tag)
+            .order_by(func.lower(Tag.name), Tag.id)
+            .limit(AI_TAG_PROMPT_LIMIT + 1)
+        ).all()
+    )
+    return tags[:AI_TAG_PROMPT_LIMIT], len(tags) > AI_TAG_PROMPT_LIMIT
+
+
+def _ai_tag_context(tags: list[Tag], truncated: bool) -> str:
+    if not tags:
+        return ""
+
+    tag_lines = []
+    for tag in tags:
+        description = (tag.description or "").strip()
+        tag_lines.append(f"- {tag.name}: {description}" if description else f"- {tag.name}")
+    tag_lines_text = "\n".join(tag_lines)
+
+    suffix = (
+        f"\nHá mais tags cadastradas, mas apenas as primeiras {AI_TAG_PROMPT_LIMIT} por ordem alfabética "
+        "foram disponibilizadas nesta conversa; use somente as listadas abaixo."
+        if truncated
+        else ""
+    )
+    return (
+        "Tags disponíveis para classificação automática:\n"
+        f"{tag_lines_text}"
+        f"{suffix}\n\n"
+    )
+
+
 def _update_lead_stage_tool_schema() -> dict[str, Any]:
     return {
         "type": "function",
@@ -314,6 +371,38 @@ def _update_lead_stage_tool_schema() -> dict[str, Any]:
                 "reason": {
                     "type": "string",
                     "description": "Motivo curto para registrar nas notas de qualificação.",
+                },
+            },
+        },
+    }
+
+
+def _apply_lead_tags_tool_schema(tags: list[Tag]) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "name": "apply_lead_tags",
+        "description": (
+            "Aplica tags já existentes ao lead quando a conversa trouxer evidência concreta. "
+            "Não cria tags novas."
+        ),
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["tags"],
+            "properties": {
+                "tags": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "items": {
+                        "type": "string",
+                        "enum": [tag.name for tag in tags],
+                    },
+                    "description": "Nomes exatos das tags disponíveis que devem ser aplicadas.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Evidência curta na conversa que justifica as tags.",
                 },
             },
         },
@@ -342,40 +431,137 @@ def _extract_tool_calls(response_payload: dict[str, Any]) -> list[dict[str, Any]
     for item in response_payload.get("output", []):
         if not isinstance(item, dict):
             continue
-        if item.get("type") == "function_call" and item.get("name") == "update_lead_stage":
+        if item.get("type") == "function_call" and item.get("name") in AI_TOOL_NAMES:
             calls.append(item)
         for tool_call in item.get("tool_calls", []) if isinstance(item.get("tool_calls"), list) else []:
-            if isinstance(tool_call, dict) and tool_call.get("name") == "update_lead_stage":
+            if isinstance(tool_call, dict) and tool_call.get("name") in AI_TOOL_NAMES:
                 calls.append(tool_call)
     return calls
 
 
-def _apply_tool_calls(db: Session, conversation: WhatsAppConversation, tool_calls: list[dict[str, Any]]) -> None:
+def _apply_tool_calls(
+    db: Session,
+    conversation: WhatsAppConversation,
+    tool_calls: list[dict[str, Any]],
+    *,
+    ai_settings: WhatsAppAiSettings | None = None,
+) -> None:
     if not tool_calls:
         return
     if not conversation.lead_id:
-        logger.warning("IA solicitou atualização de CRM, mas conversa %s não possui lead vinculado.", conversation.id)
+        logger.warning("IA solicitou ferramenta, mas conversa %s não possui lead vinculado.", conversation.id)
         return
 
+    settings = ai_settings or get_or_create_ai_settings(db)
     for tool_call in tool_calls:
+        tool_name = _tool_name(tool_call)
         arguments = _tool_arguments(tool_call)
-        stage = str(arguments.get("stage") or "").strip()
-        reason = str(arguments.get("reason") or "").strip()
-        if stage not in CRM_STAGES:
-            logger.warning("IA solicitou estágio de CRM inválido para conversa %s: %s", conversation.id, stage)
+        if tool_name == "update_lead_stage":
+            _apply_update_lead_stage_tool(db, conversation, arguments)
             continue
-        update_crm_stage(db, conversation.lead_id, stage, changed_by="ai", reason=reason)
+        if tool_name == "apply_lead_tags":
+            if not settings.auto_apply_tags_enabled:
+                logger.warning("IA solicitou tags, mas aplicação automática está desativada para conversa %s.", conversation.id)
+                continue
+            _apply_lead_tags_tool(db, conversation, arguments)
+            continue
+        logger.warning("IA solicitou ferramenta desconhecida para conversa %s: %s", conversation.id, tool_name)
+
+
+def _apply_update_lead_stage_tool(db: Session, conversation: WhatsAppConversation, arguments: dict[str, Any]) -> None:
+    stage = str(arguments.get("stage") or "").strip()
+    reason = str(arguments.get("reason") or "").strip()
+    if stage not in CRM_STAGES:
+        logger.warning("IA solicitou estágio de CRM inválido para conversa %s: %s", conversation.id, stage)
+        return
+    update_crm_stage(db, conversation.lead_id, stage, changed_by="ai", reason=reason)
+
+
+def _apply_lead_tags_tool(db: Session, conversation: WhatsAppConversation, arguments: dict[str, Any]) -> None:
+    tag_names = _requested_tag_names(arguments)
+    if not tag_names:
+        return
+
+    try:
+        _apply_lead_tags(db, conversation.lead_id, tag_names)
+    except Exception:
+        logger.exception("Falha ao aplicar tags por IA para lead %s na conversa %s.", conversation.lead_id, conversation.id)
+
+
+def _requested_tag_names(arguments: dict[str, Any]) -> list[str]:
+    raw_tags = arguments.get("tags") or arguments.get("tag_names") or []
+    if isinstance(raw_tags, str):
+        raw_tags = [raw_tags]
+    if not isinstance(raw_tags, list):
+        return []
+
+    tag_names: list[str] = []
+    seen: set[str] = set()
+    for item in raw_tags:
+        name = str(item or "").strip()
+        normalized = _normalize_tag_name(name)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        tag_names.append(name)
+    return tag_names
+
+
+def _apply_lead_tags(db: Session, lead_id: int, tag_names: list[str]) -> None:
+    available_tags, _ = _available_ai_tags_for_prompt(db)
+    tags_by_normalized_name = {_normalize_tag_name(tag.name): tag for tag in available_tags}
+    requested_tags: list[Tag] = []
+    seen_tag_ids: set[int] = set()
+
+    for tag_name in tag_names:
+        tag = tags_by_normalized_name.get(_normalize_tag_name(tag_name))
+        if not tag:
+            logger.warning("IA solicitou tag inexistente ou indisponível para lead %s: %s", lead_id, tag_name)
+            continue
+        if tag.id in seen_tag_ids:
+            continue
+        seen_tag_ids.add(tag.id)
+        requested_tags.append(tag)
+
+    if not requested_tags:
+        return
+
+    existing_tag_ids = set(
+        db.scalars(
+            select(LeadTag.tag_id).where(
+                LeadTag.lead_id == lead_id,
+                LeadTag.tag_id.in_([tag.id for tag in requested_tags]),
+            )
+        ).all()
+    )
+    for tag in requested_tags:
+        if tag.id in existing_tag_ids:
+            continue
+        db.add(LeadTag(lead_id=lead_id, tag_id=tag.id, origin="ai"))
+    db.flush()
+
+
+def _normalize_tag_name(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.strip().lower())
+    ascii_only = "".join(character for character in normalized if not unicodedata.combining(character))
+    return " ".join(ascii_only.split())
+
+
+def _tool_name(tool_call: dict[str, Any]) -> str:
+    function_payload = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+    return str(tool_call.get("name") or function_payload.get("name") or "").strip()
 
 
 def _tool_arguments(tool_call: dict[str, Any]) -> dict[str, Any]:
-    raw_arguments = tool_call.get("arguments") or tool_call.get("function", {}).get("arguments") or {}
+    function_payload = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+    raw_arguments = tool_call.get("arguments") or function_payload.get("arguments") or {}
     if isinstance(raw_arguments, dict):
         return raw_arguments
     if isinstance(raw_arguments, str) and raw_arguments.strip():
         try:
             data = json.loads(raw_arguments)
         except json.JSONDecodeError:
-            logger.warning("OpenAI retornou argumentos inválidos para update_lead_stage: %s", raw_arguments[:300])
+            logger.warning("OpenAI retornou argumentos inválidos para ferramenta de IA: %s", raw_arguments[:300])
             return {}
         return data if isinstance(data, dict) else {}
     return {}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Generator
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -18,7 +19,9 @@ from backend.models import (
     CrmLead,
     CrmStageHistory,
     Lead,
+    LeadTag,
     SearchRun,
+    Tag,
     WhatsAppAiSettings,
     WhatsAppConversation,
     WhatsAppInstance,
@@ -113,6 +116,7 @@ def enable_ai(
     *,
     system_prompt: str = "Atenda leads de forma breve.",
     services_description: str = "",
+    auto_apply_tags_enabled: bool = False,
 ) -> None:
     db.add(
         WhatsAppAiSettings(
@@ -120,6 +124,7 @@ def enable_ai(
             system_prompt=system_prompt,
             services_description=services_description,
             enabled=True,
+            auto_apply_tags_enabled=auto_apply_tags_enabled,
         )
     )
     db.commit()
@@ -282,6 +287,204 @@ def test_whatsapp_ai_function_call_updates_crm_stage_and_history(
     assert history.from_stage == "new"
     assert history.to_stage == "qualified"
     assert history.changed_by == "ai"
+
+
+def test_whatsapp_ai_applies_existing_tag_with_ai_origin(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = seed_lead_and_instance(db_session)
+    db_session.add(Tag(name="Usa ERP", color="#dff7f1", description="Lead mencionou uso de ERP."))
+    db_session.commit()
+    enable_ai(db_session, auto_apply_tags_enabled=True)
+    captured: dict[str, Any] = {}
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
+        captured["openai_payload"] = kwargs["json"]
+        return FakeOpenAIResponse(
+            {
+                "output_text": "Entendi. Essa integração com ERP faz sentido para o seu cenário.",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "apply_lead_tags",
+                        "arguments": json.dumps(
+                            {
+                                "tags": ["usa erp"],
+                                "reason": "Lead informou que usa ERP.",
+                            }
+                        ),
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(whatsapp_ai_agent.requests, "post", fake_openai_post)
+    monkeypatch.setattr(
+        whatsapp_ai_agent.EvolutionProvider,
+        "send_text_message",
+        lambda self, instance_id, phone, text: {"key": {"id": "OUTBOUND_TAGGED"}},
+    )
+
+    main.receive_evolution_webhook(
+        evolution_text_payload(text="Hoje usamos um ERP e queremos automatizar o atendimento."),
+        request=webhook_request(),
+        db=db_session,
+    )
+
+    association = db_session.scalars(select(LeadTag)).one()
+    tools = captured["openai_payload"]["tools"]
+    system_content = captured["openai_payload"]["input"][0]["content"]
+
+    assert association.lead_id == ids["lead_id"]
+    assert association.origin == "ai"
+    assert [tool["name"] for tool in tools] == ["update_lead_stage", "apply_lead_tags"]
+    assert tools[1]["parameters"]["properties"]["tags"]["items"]["enum"] == ["Usa ERP"]
+    assert "Tags disponíveis para classificação automática" in system_content
+    assert "- Usa ERP: Lead mencionou uso de ERP." in system_content
+
+
+def test_whatsapp_ai_ignores_missing_tag_and_continues_service(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    seed_lead_and_instance(db_session)
+    db_session.add(Tag(name="Usa ERP", color="#dff7f1"))
+    db_session.commit()
+    enable_ai(db_session, auto_apply_tags_enabled=True)
+    captured: dict[str, Any] = {}
+    caplog.set_level(logging.WARNING, logger=whatsapp_ai_agent.__name__)
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
+        return FakeOpenAIResponse(
+            {
+                "output_text": "Certo, obrigado pelo contexto.",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "name": "apply_lead_tags",
+                        "arguments": json.dumps({"tags": ["Tag Fantasma"]}),
+                    }
+                ],
+            }
+        )
+
+    def fake_send_text_message(self, instance_id: str, phone: str, text: str) -> dict[str, Any]:
+        captured["send"] = {"instance_id": instance_id, "phone": phone, "text": text}
+        return {"key": {"id": "OUTBOUND_MISSING_TAG"}}
+
+    monkeypatch.setattr(whatsapp_ai_agent.requests, "post", fake_openai_post)
+    monkeypatch.setattr(whatsapp_ai_agent.EvolutionProvider, "send_text_message", fake_send_text_message)
+
+    response = main.receive_evolution_webhook(evolution_text_payload(), request=webhook_request(), db=db_session)
+
+    assert response["status"] == "ok"
+    assert captured["send"]["text"] == "Certo, obrigado pelo contexto."
+    assert db_session.scalars(select(LeadTag)).all() == []
+    assert "IA solicitou tag inexistente ou indisponível" in caplog.text
+
+
+def test_whatsapp_ai_tag_application_is_idempotent(db_session: Session) -> None:
+    ids = seed_lead_and_instance(db_session)
+    tag = Tag(name="Usa ERP", color="#dff7f1")
+    db_session.add(tag)
+    db_session.commit()
+    enable_ai(db_session, auto_apply_tags_enabled=True)
+    conversation = WhatsAppConversation(
+        lead_id=ids["lead_id"],
+        instance_id=ids["instance_id"],
+        status="open",
+        last_message_at=datetime.now(timezone.utc),
+    )
+    db_session.add(conversation)
+    db_session.commit()
+    settings = db_session.get(WhatsAppAiSettings, 1)
+    assert settings is not None
+    tool_call = {
+        "type": "function_call",
+        "name": "apply_lead_tags",
+        "arguments": json.dumps({"tags": ["Usa ERP"]}),
+    }
+
+    whatsapp_ai_agent._apply_tool_calls(db_session, conversation, [tool_call], ai_settings=settings)
+    whatsapp_ai_agent._apply_tool_calls(db_session, conversation, [tool_call], ai_settings=settings)
+    db_session.commit()
+
+    associations = db_session.scalars(select(LeadTag)).all()
+    assert len(associations) == 1
+    assert associations[0].lead_id == ids["lead_id"]
+    assert associations[0].tag_id == tag.id
+    assert associations[0].origin == "ai"
+
+
+def test_whatsapp_ai_tag_tool_disabled_when_setting_is_off(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_lead_and_instance(db_session)
+    db_session.add(Tag(name="Usa ERP", color="#dff7f1", description="Lead mencionou ERP."))
+    db_session.commit()
+    enable_ai(db_session, auto_apply_tags_enabled=False)
+    captured: dict[str, Any] = {}
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
+        captured["openai_payload"] = kwargs["json"]
+        return FakeOpenAIResponse({"output_text": "Perfeito, obrigado por explicar."})
+
+    monkeypatch.setattr(whatsapp_ai_agent.requests, "post", fake_openai_post)
+    monkeypatch.setattr(
+        whatsapp_ai_agent.EvolutionProvider,
+        "send_text_message",
+        lambda self, instance_id, phone, text: {"key": {"id": "OUTBOUND_TAGS_OFF"}},
+    )
+
+    main.receive_evolution_webhook(evolution_text_payload(), request=webhook_request(), db=db_session)
+
+    system_content = captured["openai_payload"]["input"][0]["content"]
+    assert [tool["name"] for tool in captured["openai_payload"]["tools"]] == ["update_lead_stage"]
+    assert "Tags disponíveis para classificação automática" not in system_content
+    assert "apply_lead_tags" not in system_content
+
+
+def test_whatsapp_ai_tag_prompt_has_no_empty_section_when_no_tags(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_lead_and_instance(db_session)
+    enable_ai(db_session, auto_apply_tags_enabled=True)
+    captured: dict[str, Any] = {}
+
+    def fake_openai_post(*args: Any, **kwargs: Any) -> FakeOpenAIResponse:
+        captured["openai_payload"] = kwargs["json"]
+        return FakeOpenAIResponse({"output_text": "Oi! Posso ajudar."})
+
+    monkeypatch.setattr(whatsapp_ai_agent.requests, "post", fake_openai_post)
+    monkeypatch.setattr(
+        whatsapp_ai_agent.EvolutionProvider,
+        "send_text_message",
+        lambda self, instance_id, phone, text: {"key": {"id": "OUTBOUND_NO_TAGS"}},
+    )
+
+    main.receive_evolution_webhook(evolution_text_payload(text="oi"), request=webhook_request(), db=db_session)
+
+    system_content = captured["openai_payload"]["input"][0]["content"]
+    assert [tool["name"] for tool in captured["openai_payload"]["tools"]] == ["update_lead_stage"]
+    assert "Tags disponíveis para classificação automática" not in system_content
+
+
+def test_update_lead_stage_tool_schema_keeps_fixed_stage_keys() -> None:
+    schema = whatsapp_ai_agent._update_lead_stage_tool_schema()
+
+    assert schema["name"] == "update_lead_stage"
+    assert schema["parameters"]["required"] == ["stage", "reason"]
+    assert schema["parameters"]["properties"]["stage"]["enum"] == [
+        "new",
+        "responded",
+        "qualified",
+        "not_interested",
+        "converted",
+    ]
 
 
 def test_whatsapp_ai_marks_converted_when_lead_accepts_meeting(

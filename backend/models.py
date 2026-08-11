@@ -55,10 +55,14 @@ class Tag(Base):
 
 class LeadTag(Base):
     __tablename__ = "lead_tags"
-    __table_args__ = (UniqueConstraint("lead_id", "tag_id", name="uq_lead_tags_lead_tag"),)
+    __table_args__ = (
+        UniqueConstraint("lead_id", "tag_id", name="uq_lead_tags_lead_tag"),
+        CheckConstraint("origin IN ('manual', 'ai')", name="ck_lead_tags_origin"),
+    )
 
     lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), primary_key=True)
     tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
+    origin: Mapped[str] = mapped_column(String(20), default="manual", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -572,6 +576,7 @@ class WhatsAppAiSettings(Base):
     system_prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
     services_description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    auto_apply_tags_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 

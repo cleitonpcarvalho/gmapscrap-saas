@@ -99,6 +99,7 @@ type LeadTagSummary = {
   id: number;
   name: string;
   color: string;
+  origin?: "manual" | "ai";
 };
 
 type LeadTag = LeadTagSummary & {
@@ -416,6 +417,7 @@ type WhatsAppAiSettings = {
   system_prompt: string;
   services_description: string;
   enabled: boolean;
+  auto_apply_tags_enabled: boolean;
   updated_at: string;
 };
 
@@ -718,7 +720,8 @@ const defaultStageForm: CrmStageForm = {
 const defaultWhatsappAiForm = {
   system_prompt: "",
   services_description: "",
-  enabled: false
+  enabled: false,
+  auto_apply_tags_enabled: false
 };
 
 const defaultWhatsappPortfolioForm = {
@@ -1084,7 +1087,13 @@ function TagPills({
   return (
     <div className="lead-tag-list">
       {visibleTags.map((tag) => (
-        <span className="lead-tag-pill" key={tag.id} style={tagStyle(tag)} title={tag.name}>
+        <span
+          className={`lead-tag-pill${tag.origin === "ai" ? " ai-tag" : ""}`}
+          key={tag.id}
+          style={tagStyle(tag)}
+          title={tag.origin === "ai" ? `${tag.name} · aplicada pela IA` : tag.name}
+        >
+          {tag.origin === "ai" ? <Sparkles aria-hidden="true" size={11} /> : null}
           {tag.name}
         </span>
       ))}
@@ -2438,7 +2447,8 @@ export default function Home() {
     setWhatsappAiForm({
       system_prompt: nextAiSettings.system_prompt,
       services_description: nextAiSettings.services_description || "",
-      enabled: nextAiSettings.enabled
+      enabled: nextAiSettings.enabled,
+      auto_apply_tags_enabled: nextAiSettings.auto_apply_tags_enabled
     });
     setWhatsappPortfolioItems(nextPortfolioItems);
     setCrmLeads(nextCrmLeads);
@@ -4446,14 +4456,16 @@ export default function Home() {
         body: JSON.stringify({
           system_prompt: whatsappAiForm.system_prompt,
           services_description: whatsappAiForm.services_description,
-          enabled: whatsappAiForm.enabled
+          enabled: whatsappAiForm.enabled,
+          auto_apply_tags_enabled: whatsappAiForm.auto_apply_tags_enabled
         })
       });
       setWhatsappAiSettings(updatedSettings);
       setWhatsappAiForm({
         system_prompt: updatedSettings.system_prompt,
         services_description: updatedSettings.services_description || "",
-        enabled: updatedSettings.enabled
+        enabled: updatedSettings.enabled,
+        auto_apply_tags_enabled: updatedSettings.auto_apply_tags_enabled
       });
       setWhatsappMessage("Configuração de IA salva.");
     } catch (error) {
@@ -6253,6 +6265,17 @@ export default function Home() {
                   type="checkbox"
                 />
                 Ativar resposta automática
+              </label>
+
+              <label className="checkbox-label whatsapp-ai-toggle">
+                <input
+                  checked={whatsappAiForm.auto_apply_tags_enabled}
+                  onChange={(event) =>
+                    setWhatsappAiForm({ ...whatsappAiForm, auto_apply_tags_enabled: event.target.checked })
+                  }
+                  type="checkbox"
+                />
+                IA pode aplicar tags automaticamente
               </label>
 
               <label>

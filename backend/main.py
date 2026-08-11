@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, contains_eager, selectinload
 
 from backend.auth import clear_session_cookie, create_session_token, get_current_username, set_session_cookie
 from backend.config import get_settings
@@ -95,6 +95,7 @@ from backend.schemas import (
     TagCreate,
     TagDeleteResponse,
     TagRead,
+    TagSummary,
     TagUpdate,
     LeadTagsBulkRequest,
     LeadTagsBulkResponse,
@@ -432,11 +433,62 @@ def _sorted_tags(tags: list[Tag] | None) -> list[Tag]:
     return sorted(tags or [], key=lambda tag: tag.name.lower())
 
 
+def _lead_tag_summaries_by_lead_id(db: Session, lead_ids: list[int]) -> dict[int, list[TagSummary]]:
+    normalized_lead_ids = _unique_positive_ids(lead_ids)
+    if not normalized_lead_ids:
+        return {}
+
+    rows = db.execute(
+        select(LeadTag.lead_id, LeadTag.origin, Tag.id, Tag.name, Tag.color)
+        .join(Tag, Tag.id == LeadTag.tag_id)
+        .where(LeadTag.lead_id.in_(normalized_lead_ids))
+        .order_by(func.lower(Tag.name), Tag.id)
+    ).all()
+    summaries_by_lead_id: dict[int, list[TagSummary]] = {lead_id: [] for lead_id in normalized_lead_ids}
+    for lead_id, origin, tag_id, name, color in rows:
+        summaries_by_lead_id.setdefault(int(lead_id), []).append(
+            TagSummary(
+                id=int(tag_id),
+                name=name,
+                color=color,
+                origin="ai" if origin == "ai" else "manual",
+            )
+        )
+    return summaries_by_lead_id
+
+
+def _lead_tag_summaries(db: Session, lead_id: int) -> list[TagSummary]:
+    return _lead_tag_summaries_by_lead_id(db, [lead_id]).get(lead_id, [])
+
+
+def _lead_read(db: Session, lead: Lead, tags: list[TagSummary] | None = None) -> LeadRead:
+    return LeadRead(
+        id=lead.id,
+        run_id=lead.run_id,
+        niche=lead.niche,
+        location=lead.location,
+        name=lead.name,
+        address=lead.address,
+        phone=lead.phone,
+        website=lead.website,
+        email=lead.email,
+        site_insights=lead.site_insights,
+        whatsapp_validated=lead.whatsapp_validated,
+        whatsapp_validated_at=lead.whatsapp_validated_at,
+        whatsapp_validation_status=lead.whatsapp_validation_status,
+        validate_whatsapp=lead.validate_whatsapp,
+        whatsapp_url=lead.whatsapp_url,
+        tags=tags if tags is not None else _lead_tag_summaries(db, lead.id),
+        created_at=lead.created_at,
+    )
+
+
 def _tag_read(tag: Tag, lead_count: int = 0) -> TagRead:
     return TagRead(
         id=tag.id,
         name=tag.name,
         color=tag.color,
+        origin="manual",
         description=tag.description,
         created_at=tag.created_at,
         lead_count=lead_count,
@@ -462,7 +514,7 @@ def _apply_tag_filter(query, tag_ids: list[int], tag_filter_mode: str):
 def _load_lead_for_read(db: Session, lead_id: int) -> Lead | None:
     return db.scalar(
         select(Lead)
-        .options(selectinload(Lead.search_run), selectinload(Lead.tags))
+        .options(selectinload(Lead.search_run))
         .where(Lead.id == lead_id)
     )
 
@@ -567,7 +619,11 @@ def _crm_other_funnels(db: Session, crm_lead: CrmLead) -> list[CrmLeadFunnelSumm
     ]
 
 
-def _crm_lead_read(db: Session, crm_lead: CrmLead) -> CrmLeadRead:
+def _crm_lead_read(
+    db: Session,
+    crm_lead: CrmLead,
+    tag_summaries_by_lead_id: dict[int, list[TagSummary]] | None = None,
+) -> CrmLeadRead:
     lead = crm_lead.lead
     conversation, latest_message = _latest_whatsapp_context_for_lead(db, crm_lead.lead_id)
     stage_ref = crm_lead.stage_ref
@@ -593,7 +649,9 @@ def _crm_lead_read(db: Session, crm_lead: CrmLead) -> CrmLeadRead:
         email=lead.email if lead else "",
         niche=lead.search_run.niche if lead and lead.search_run else "",
         location=lead.search_run.location if lead and lead.search_run else "",
-        tags=_sorted_tags(lead.tags) if lead else [],
+        tags=tag_summaries_by_lead_id.get(lead.id, []) if lead and tag_summaries_by_lead_id is not None else (
+            _lead_tag_summaries(db, lead.id) if lead else []
+        ),
         last_message=latest_message.content if latest_message else None,
         last_message_at=conversation.last_message_at if conversation else None,
         conversation_id=conversation.id if conversation else None,
@@ -893,7 +951,7 @@ def list_leads(
     response: Response = None,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
-) -> list[Lead]:
+) -> list[LeadRead]:
     _ = username
     allowed_whatsapp_statuses = {"valid", "invalid", "unknown", "never"}
     if whatsapp_status is not None and whatsapp_status not in allowed_whatsapp_statuses:
@@ -967,7 +1025,7 @@ def list_leads(
 
     stmt = apply_filters(
         select(Lead)
-        .options(selectinload(Lead.search_run), selectinload(Lead.tags))
+        .options(contains_eager(Lead.search_run))
         .join(SearchRun)
         .order_by(desc(Lead.created_at))
     )
@@ -976,7 +1034,9 @@ def list_leads(
         response.headers["X-Total-Count"] = str(total_count)
         response.headers["X-Result-Limit"] = "500"
 
-    return list(db.scalars(stmt.limit(500)).all())
+    leads = list(db.scalars(stmt.limit(500)).all())
+    tag_summaries_by_lead_id = _lead_tag_summaries_by_lead_id(db, [lead.id for lead in leads])
+    return [_lead_read(db, lead, tag_summaries_by_lead_id.get(lead.id, [])) for lead in leads]
 
 
 @app.post("/api/leads/enrich-site-insights", response_model=LeadSiteInsightsEnrichmentResponse)
@@ -1154,7 +1214,7 @@ def create_manual_lead(
     payload: LeadCreate,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
-) -> Lead:
+) -> LeadRead:
     _ = username
     raw_website = payload.website.strip()
     website = normalize_site_url(raw_website) if raw_website else ""
@@ -1222,7 +1282,7 @@ def create_manual_lead(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Lead duplicado") from None
 
     db.refresh(lead)
-    return lead
+    return _lead_read(db, lead, [])
 
 
 @app.patch("/api/leads/{lead_id}", response_model=LeadRead)
@@ -1231,7 +1291,7 @@ def update_lead(
     payload: LeadUpdate,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
-) -> Lead:
+) -> LeadRead:
     _ = username
     lead = db.get(Lead, lead_id)
     if not lead:
@@ -1313,7 +1373,8 @@ def update_lead(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Lead duplicado") from None
 
     db.refresh(lead)
-    return lead
+    loaded_lead = _load_lead_for_read(db, lead.id) or lead
+    return _lead_read(db, loaded_lead)
 
 
 @app.delete("/api/leads/{lead_id}")
@@ -1442,7 +1503,7 @@ def add_tags_to_lead(
     payload: LeadTagsRequest,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
-) -> Lead:
+) -> LeadRead:
     _ = username
     lead = db.get(Lead, lead_id)
     if not lead:
@@ -1469,7 +1530,7 @@ def add_tags_to_lead(
     updated_lead = _load_lead_for_read(db, lead_id)
     if not updated_lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
-    return updated_lead
+    return _lead_read(db, updated_lead)
 
 
 @app.delete("/api/leads/{lead_id}/tags/{tag_id}", response_model=LeadRead)
@@ -1478,7 +1539,7 @@ def remove_tag_from_lead(
     tag_id: int,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
-) -> Lead:
+) -> LeadRead:
     _ = username
     if not db.get(Lead, lead_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
@@ -1490,7 +1551,7 @@ def remove_tag_from_lead(
     updated_lead = _load_lead_for_read(db, lead_id)
     if not updated_lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
-    return updated_lead
+    return _lead_read(db, updated_lead)
 
 
 @app.post("/api/leads/tags/bulk", response_model=LeadTagsBulkResponse)
@@ -1759,6 +1820,8 @@ def update_whatsapp_ai_settings(
         )
     if "enabled" in payload_data and payload_data["enabled"] is not None:
         settings_row.enabled = bool(payload_data["enabled"])
+    if "auto_apply_tags_enabled" in payload_data and payload_data["auto_apply_tags_enabled"] is not None:
+        settings_row.auto_apply_tags_enabled = bool(payload_data["auto_apply_tags_enabled"])
 
     db.commit()
     db.refresh(settings_row)
@@ -2193,7 +2256,6 @@ def list_crm_leads(
             selectinload(CrmLead.funnel),
             selectinload(CrmLead.stage_ref),
             selectinload(CrmLead.lead).selectinload(Lead.search_run),
-            selectinload(CrmLead.lead).selectinload(Lead.tags),
         )
         .where(CrmLead.funnel_id == funnel.id)
         .order_by(
@@ -2219,7 +2281,8 @@ def list_crm_leads(
             stmt = stmt.where(CrmLead.lead_id.in_(select(LeadTag.lead_id).where(LeadTag.tag_id.in_(normalized_tag_ids))))
 
     crm_leads = list(db.scalars(stmt).all())
-    return [_crm_lead_read(db, crm_lead) for crm_lead in crm_leads]
+    tag_summaries_by_lead_id = _lead_tag_summaries_by_lead_id(db, [crm_lead.lead_id for crm_lead in crm_leads])
+    return [_crm_lead_read(db, crm_lead, tag_summaries_by_lead_id) for crm_lead in crm_leads]
 
 
 @app.patch("/api/crm/leads/{lead_id}", response_model=CrmLeadRead)
@@ -2269,7 +2332,6 @@ def update_crm_lead(
             selectinload(CrmLead.funnel),
             selectinload(CrmLead.stage_ref),
             selectinload(CrmLead.lead).selectinload(Lead.search_run),
-            selectinload(CrmLead.lead).selectinload(Lead.tags),
         )
         .where(CrmLead.id == crm_lead.id)
     )

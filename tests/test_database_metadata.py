@@ -51,7 +51,7 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     assert {"from_stage_id", "to_stage_id"}.issubset(crm_stage_history_columns)
     assert "position" in crm_lead_columns
     assert {"id", "name", "color", "description", "created_at"}.issubset(tag_columns)
-    assert {"lead_id", "tag_id", "created_at"}.issubset(lead_tag_columns)
+    assert {"lead_id", "tag_id", "origin", "created_at"}.issubset(lead_tag_columns)
     assert "whatsapp_validated" in lead_columns
     assert "whatsapp_validated_at" in lead_columns
     assert "whatsapp_validation_status" in lead_columns
@@ -69,6 +69,7 @@ def test_create_all_creates_whatsapp_and_crm_tables() -> None:
     assert "language" in email_campaign_columns
     assert "language" in whatsapp_campaign_columns
     assert "funnel_id" in whatsapp_campaign_columns
+    assert "auto_apply_tags_enabled" in {column["name"] for column in inspector.get_columns("whatsapp_ai_settings")}
     assert "generated_content" in email_send_columns
 
 
@@ -122,3 +123,47 @@ def test_ensure_crm_lead_columns_backfills_position_by_current_order(monkeypatch
         (202, "qualified", 0),
         (201, "qualified", 1),
     ]
+
+
+def test_ensure_tag_tables_adds_and_backfills_lead_tag_origin(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE tags (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR(120) NOT NULL,
+                    color VARCHAR(7) NOT NULL DEFAULT '#e0f2fe',
+                    description VARCHAR(500),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE lead_tags (
+                    lead_id INTEGER NOT NULL,
+                    tag_id INTEGER NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (lead_id, tag_id)
+                )
+                """
+            )
+        )
+        connection.execute(text("INSERT INTO tags (id, name, color) VALUES (1, 'Manual', '#e0f2fe')"))
+        connection.execute(text("INSERT INTO lead_tags (lead_id, tag_id) VALUES (10, 1)"))
+
+    monkeypatch.setattr(database, "engine", engine)
+
+    database._ensure_tag_tables()
+
+    inspector = inspect(engine)
+    lead_tag_columns = {column["name"] for column in inspector.get_columns("lead_tags")}
+    with engine.connect() as connection:
+        origin = connection.execute(text("SELECT origin FROM lead_tags WHERE lead_id = 10 AND tag_id = 1")).scalar_one()
+
+    assert "origin" in lead_tag_columns
+    assert origin == "manual"

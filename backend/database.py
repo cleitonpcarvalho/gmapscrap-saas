@@ -130,12 +130,37 @@ def _ensure_tag_tables() -> None:
     Base.metadata.create_all(bind=engine, tables=[Tag.__table__, LeadTag.__table__])
 
     inspector = inspect(engine)
-    if "tags" not in inspector.get_table_names():
+    table_names = inspector.get_table_names()
+    if "tags" not in table_names:
         return
 
-    with engine.begin() as connection:
-        _set_schema_timeouts(connection)
-        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_lower_name ON tags (lower(name))"))
+    lead_tag_columns = {column["name"]: column for column in inspector.get_columns("lead_tags")} if "lead_tags" in table_names else {}
+
+    _run_schema_statement("CREATE UNIQUE INDEX IF NOT EXISTS uq_tags_lower_name ON tags (lower(name))")
+
+    if "lead_tags" not in table_names:
+        return
+
+    origin_column = lead_tag_columns.get("origin")
+    if origin_column is None:
+        _run_schema_statement("ALTER TABLE lead_tags ADD COLUMN origin VARCHAR(20) NOT NULL DEFAULT 'manual'")
+    else:
+        _run_schema_statement("UPDATE lead_tags SET origin = 'manual' WHERE origin IS NULL OR origin = ''")
+
+    if origin_column is not None and engine.dialect.name == "postgresql":
+        _run_schema_statement("ALTER TABLE lead_tags ALTER COLUMN origin SET DEFAULT 'manual'")
+        if origin_column.get("nullable", True):
+            _run_schema_statement("ALTER TABLE lead_tags ALTER COLUMN origin SET NOT NULL")
+
+    if engine.dialect.name == "postgresql":
+        _run_schema_operation(
+            lambda connection: _ensure_pg_constraint(
+                connection,
+                "lead_tags",
+                "ck_lead_tags_origin",
+                "CHECK (origin IN ('manual', 'ai'))",
+            )
+        )
 
 
 DEFAULT_CRM_FUNNEL_NAME = "Funil padrão"
@@ -724,6 +749,10 @@ def _ensure_whatsapp_ai_settings_columns() -> None:
         "services_description": (
             "ALTER TABLE whatsapp_ai_settings "
             "ADD COLUMN services_description TEXT NOT NULL DEFAULT ''"
+        ),
+        "auto_apply_tags_enabled": (
+            "ALTER TABLE whatsapp_ai_settings "
+            "ADD COLUMN auto_apply_tags_enabled BOOLEAN NOT NULL DEFAULT FALSE"
         ),
     }
     missing_migrations = {

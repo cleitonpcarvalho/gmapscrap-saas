@@ -1599,6 +1599,7 @@ td span {
   min-height: 24px;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
   padding: 3px 8px;
   border: 1px solid rgba(23, 33, 29, 0.08);
   border-radius: 999px;
@@ -1610,6 +1611,10 @@ td span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.lead-tag-pill svg {
+  flex: 0 0 auto;
 }
 
 .lead-tag-pill.more-tag,

@@ -49,6 +49,7 @@ class TagSummary(BaseModel):
     id: int
     name: str
     color: str
+    origin: Literal["manual", "ai"] = "manual"
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -582,6 +583,7 @@ class WhatsAppAiSettingsUpdate(BaseModel):
     system_prompt: str | None = Field(default=None, max_length=8000)
     services_description: str | None = Field(default=None, max_length=12000)
     enabled: bool | None = None
+    auto_apply_tags_enabled: bool | None = None
 
 
 class WhatsAppAiSettingsRead(BaseModel):
@@ -589,6 +591,7 @@ class WhatsAppAiSettingsRead(BaseModel):
     system_prompt: str
     services_description: str
     enabled: bool
+    auto_apply_tags_enabled: bool
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
