@@ -59,7 +59,12 @@ jobs:
             ./frontend
           docker push "${FRONTEND_IMAGE}:latest"
           docker push "${FRONTEND_IMAGE}:${GITHUB_SHA}"
-      - name: Trigger Portainer deploy
-        run: |
-          curl -s -X POST "${{ secrets.PORTAINER_WEBHOOK }}"
-          echo "Deploy triggered"
+      - name: Deploy na VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            docker service update --with-registry-auth --force --image ${{ env.BACKEND_IMAGE }}:latest gmapscrap_backend
+            docker service update --with-registry-auth --force --image ${{ env.FRONTEND_IMAGE }}:latest gmapscrap_frontend
