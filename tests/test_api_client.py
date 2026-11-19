@@ -67,3 +67,20 @@ def test_create_search_sends_only_without_website_flag(monkeypatch) -> None:
     assert captured["method"] == "POST"
     assert captured["path"] == "/api/desktop/searches"
     assert captured["json"]["only_without_website"] is True
+
+
+def test_niche_client_uses_shared_authenticated_api(monkeypatch) -> None:
+    client = GmapScrapApiClient(ApiConfig(base_url="https://api.example.test", username="user", password="pass"))
+    calls = []
+
+    def request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        return [{"id": 1, "name": "Brindes"}] if method == "GET" else {"id": 1, "name": "Brindes"}
+
+    monkeypatch.setattr(client, "_request", request)
+    assert client.list_niches("brin")[0]["name"] == "Brindes"
+    assert client.create_niche("Brindes")["id"] == 1
+    assert calls == [
+        ("GET", "/api/niches", {"params": {"q": "brin"}, "timeout": 20}),
+        ("POST", "/api/niches", {"json": {"name": "Brindes"}, "timeout": 20}),
+    ]

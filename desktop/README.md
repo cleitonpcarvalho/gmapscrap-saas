@@ -2,6 +2,12 @@
 
 App local para rodar a busca do Google Maps no computador e salvar os resultados pela API de produção.
 
+O campo **Nicho** sugere os nichos cadastrados na aplicação web e permite buscar
+por parte do nome. Use **Atualizar nichos** para recarregar ou **Cadastrar nicho**
+para salvar um novo nome. O cadastro é independente do histórico e as buscas
+continuam aceitando texto livre. Veja [gestão de nichos](../docs/niche-management.md)
+para os endpoints e a migração necessária no backend.
+
 ## Rodar no Mac
 
 Crie um ambiente Python e instale as dependências:

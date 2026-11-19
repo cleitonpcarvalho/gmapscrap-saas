@@ -45,6 +45,29 @@ class SearchCreate(BaseModel):
         return self
 
 
+class NicheWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=2, max_length=255)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("O nome não pode conter caracteres de controle.")
+        return normalize_label(value)
+
+
+class NicheRead(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class TagSummary(BaseModel):
     id: int
     name: str

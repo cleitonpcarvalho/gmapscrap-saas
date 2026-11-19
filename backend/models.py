@@ -1,9 +1,10 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
+from backend.niche_schema import protect_niche_table
 
 
 class SearchRun(Base):
@@ -33,6 +34,21 @@ class SearchRun(Base):
         cascade="all, delete-orphan",
         lazy="selectin",
     )
+
+
+class Niche(Base):
+    __tablename__ = "niches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    __table_args__ = (
+        Index("uq_niches_lower_name", func.lower(name), unique=True),
+        CheckConstraint("length(trim(name)) BETWEEN 2 AND 255 AND name = trim(name)", name="ck_niches_name"),
+    )
+
+
+event.listen(Niche.__table__, "after_create", protect_niche_table)
 
 
 class Tag(Base):

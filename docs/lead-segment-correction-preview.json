@@ -1,0 +1,183 @@
+{
+  "generated_at": "2026-11-19T18:01:24.170203+00:00",
+  "read_only": true,
+  "affected_record_count": 6,
+  "lead_ids": [
+    768,
+    769,
+    770,
+    771,
+    772,
+    773
+  ],
+  "search_run_ids": [
+    39,
+    40
+  ],
+  "before": {
+    "niche": "São José do Rio Preto",
+    "location": "Brindes"
+  },
+  "after": {
+    "niche": "Brindes",
+    "location": "São José do Rio Preto"
+  },
+  "storage_note": "Lead niche/locality are inherited from search_runs.niche/location; no lead fields need changing.",
+  "schema": [
+    {
+      "table_name": "leads",
+      "column_name": "id",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "run_id",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "name",
+      "data_type": "character varying"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "address",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "phone",
+      "data_type": "character varying"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "website",
+      "data_type": "character varying"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "email",
+      "data_type": "character varying"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "whatsapp_validated",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "site_insights",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "whatsapp_validated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "whatsapp_validation_status",
+      "data_type": "character varying"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "whatsapp_validation_reason",
+      "data_type": "character varying"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "id",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "niche",
+      "data_type": "character varying"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "location",
+      "data_type": "character varying"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "target_quantity",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "max_results",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "status",
+      "data_type": "character varying"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "message",
+      "data_type": "text"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "scanned_count",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "saved_count",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "skipped_count",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "error",
+      "data_type": "text"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "started_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "finished_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "skip_without_website",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "validate_whatsapp",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "enrich_site_insights",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "search_runs",
+      "column_name": "only_without_website",
+      "data_type": "boolean"
+    }
+  ]
+}

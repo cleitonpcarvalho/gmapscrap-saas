@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, contains_eager, selectinload
 from backend.auth import clear_session_cookie, create_session_token, get_current_username, set_session_cookie
 from backend.config import get_settings
 from backend.database import get_db, init_db
+from backend.niches import router as niches_router
 from backend.models import (
     CrmFunnel,
     CrmFunnelStage,
@@ -174,6 +175,7 @@ from backend.scrapers.maps_scraper import MapLead
 
 settings = get_settings()
 app = FastAPI(title="GmapScrap Web", version="0.1.0")
+app.include_router(niches_router)
 logger = logging.getLogger(__name__)
 STARTUP_MIGRATION_TIMEOUT_SECONDS = 60
 

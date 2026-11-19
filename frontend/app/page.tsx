@@ -60,6 +60,7 @@ import {
 } from "lucide-react";
 import type { CSSProperties, FormEvent, MouseEvent, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { NicheManager, type Niche } from "./components/NicheManager";
 
 type User = { username: string };
 
@@ -1882,6 +1883,9 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [activeView, setActiveView] = useState<AppView>("search");
   const [niche, setNiche] = useState("");
+  const [registeredNiches, setRegisteredNiches] = useState<Niche[]>([]);
+  const [nicheManagerOpen, setNicheManagerOpen] = useState(false);
+  const [nicheLoadError, setNicheLoadError] = useState("");
   const [location, setLocation] = useState("");
   const [quantity, setQuantity] = useState("10");
   const [maxResults, setMaxResults] = useState(false);
@@ -2399,6 +2403,15 @@ export default function Home() {
     setTags(nextTags);
     return nextTags;
   }
+
+  useEffect(() => {
+    if (!user) { setRegisteredNiches([]); return; }
+    let cancelled = false;
+    apiFetch<Niche[]>("/api/niches")
+      .then((items) => { if (!cancelled) { setRegisteredNiches(items); setNicheLoadError(""); } })
+      .catch(() => { if (!cancelled) setNicheLoadError("Sugestões indisponíveis. Abra Gerenciar nichos para tentar novamente."); });
+    return () => { cancelled = true; };
+  }, [user]);
 
   async function refreshData() {
     const [nextStats, nextSearches, nextLeadsResponse, nextTags] = await Promise.all([
@@ -4857,6 +4870,17 @@ export default function Home() {
 
   return (
     <main className="app-shell">
+      <datalist id="registered-niches">
+        {registeredNiches.map((item) => <option key={item.id} value={item.name} />)}
+      </datalist>
+      {nicheManagerOpen ? <NicheManager
+        niches={registeredNiches}
+        initialName={registeredNiches.some((item) => item.name.toLocaleLowerCase() === niche.trim().toLocaleLowerCase()) ? "" : niche.trim()}
+        request={apiFetch}
+        onChange={(items) => { setRegisteredNiches(items); setNicheLoadError(""); }}
+        onSelect={setNiche}
+        onClose={() => setNicheManagerOpen(false)}
+      /> : null}
       <aside className="sidebar">
         <div className="brand-lockup compact sidebar-brand">
           <img className="brand-logo sidebar-logo" src="/gmapscrap-logo.png" alt="GmapScrap Leads Web" />
@@ -5101,10 +5125,17 @@ export default function Home() {
                   Nicho
                   <input
                     placeholder="Ex.: pressure washing"
+                    list="registered-niches"
+                    minLength={2}
+                    maxLength={255}
                     value={niche}
                     onChange={(event) => setNiche(event.target.value)}
                   />
                 </label>
+                <button className="secondary-button" onClick={() => setNicheManagerOpen(true)} type="button">
+                  Gerenciar nichos / cadastrar novo
+                </button>
+                {nicheLoadError ? <p role="status">{nicheLoadError}</p> : null}
                 <label>
                   Cidade, estado ou país
                   <input
@@ -8800,6 +8831,7 @@ export default function Home() {
                 <input
                   required
                   value={manualLeadForm.niche}
+                  list="registered-niches"
                   onChange={(event) => setManualLeadForm({ ...manualLeadForm, niche: event.target.value })}
                 />
               </label>
@@ -8891,6 +8923,7 @@ export default function Home() {
                 Nicho
                 <input
                   value={editingLead.niche}
+                  list="registered-niches"
                   onChange={(event) => setEditingLead({ ...editingLead, niche: event.target.value })}
                 />
               </label>

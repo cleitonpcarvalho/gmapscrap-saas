@@ -171,6 +171,13 @@ class GmapScrapApiClient:
     def list_searches(self) -> list[dict[str, Any]]:
         return self._request("GET", "/api/searches", timeout=20)
 
+    def list_niches(self, query: str = "") -> list[dict[str, Any]]:
+        return self._request("GET", "/api/niches", params={"q": query}, timeout=20)
+
+    def create_niche(self, name: str) -> dict[str, Any]:
+        # Creating a registry entry is explicit and separate from starting a search.
+        return self._request("POST", "/api/niches", json={"name": name}, timeout=20)
+
     def _request(self, method: str, path: str, *, timeout: int = 30, retry: bool = True, **kwargs: Any) -> Any:
         if not self._authenticated:
             self.login()

@@ -1,5 +1,9 @@
 # Supabase database
 
+For the niche registry migration and the pending lead correction preview, see
+[niche-management.md](niche-management.md). The niche migration was applied and
+verified in production on 19 November 2026. The lead correction remains unapplied.
+
 GmapScrap now uses Supabase Postgres as the primary database for local and production environments.
 
 ## Environment variables

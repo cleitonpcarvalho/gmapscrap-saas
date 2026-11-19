@@ -4,12 +4,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QThread, QTimer, Qt
+from PySide6.QtCore import QStringListModel, QThread, QTimer, Qt
 from PySide6.QtGui import QBrush, QColor, QCloseEvent, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QCompleter,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -30,6 +31,8 @@ from PySide6.QtWidgets import (
 
 from desktop.api_client import ApiClientError, GmapScrapApiClient
 from desktop.worker import SearchWorker
+from desktop.niches import NicheWorker
+from backend.services.text_normalization import normalize_label
 
 
 def asset_path(filename: str) -> str:
@@ -46,6 +49,8 @@ class MainWindow(QMainWindow):
         self.thread: QThread | None = None
         self.worker: SearchWorker | None = None
         self.current_run: dict | None = None
+        self.niche_thread: NicheWorker | None = None
+        self.registered_niches: list[dict] = []
 
         self.setWindowTitle("GmapScrap Desktop")
         self.setWindowIcon(QIcon(asset_path("gmapscrap-favicon.png")))
@@ -55,6 +60,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_style()
         QTimer.singleShot(300, self.refresh_history)
+        QTimer.singleShot(350, self.refresh_niches)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -117,6 +123,14 @@ class MainWindow(QMainWindow):
 
         self.niche_input = QLineEdit()
         self.niche_input.setPlaceholderText("Ex.: pressure washing")
+        self.niche_input.setMaxLength(255)
+        self.niche_model = QStringListModel(self)
+        self.niche_completer = QCompleter(self.niche_model, self)
+        self.niche_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.niche_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.niche_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.niche_input.setCompleter(self.niche_completer)
+        self.niche_input.textChanged.connect(self._sync_niche_actions)
         self.location_input = QLineEdit()
         self.location_input.setPlaceholderText("Ex.: Anchorage, AK")
         self.quantity_input = QSpinBox()
@@ -136,6 +150,15 @@ class MainWindow(QMainWindow):
         self.enrich_site_insights_checkbox.setToolTip("Quando marcado, a API analisa o site salvo com IA em background.")
 
         form_layout.addWidget(self._field("Nicho", self.niche_input))
+        niche_actions = QHBoxLayout()
+        self.create_niche_button = QPushButton("Cadastrar nicho")
+        self.create_niche_button.setEnabled(False)
+        self.create_niche_button.clicked.connect(self.create_niche)
+        self.refresh_niches_button = QPushButton("Atualizar nichos")
+        self.refresh_niches_button.clicked.connect(self.refresh_niches)
+        niche_actions.addWidget(self.create_niche_button)
+        niche_actions.addWidget(self.refresh_niches_button)
+        form_layout.addLayout(niche_actions)
         form_layout.addWidget(self._field("Cidade, estado ou país", self.location_input))
 
         quantity_row = QHBoxLayout()
@@ -622,6 +645,51 @@ class MainWindow(QMainWindow):
             start_index=start_index,
         )
 
+    def _sync_niche_actions(self) -> None:
+        name = normalize_label(self.niche_input.text())
+        exists = any(item["name"].casefold() == name.casefold() for item in self.registered_niches)
+        busy = self.niche_thread is not None
+        if hasattr(self, "create_niche_button"):
+            self.create_niche_button.setEnabled(2 <= len(name) <= 255 and not exists and not busy)
+            self.refresh_niches_button.setEnabled(not busy)
+
+    def _load_niche_suggestions(self, items: list[dict]) -> None:
+        self.registered_niches = sorted(items, key=lambda item: item["name"].casefold())
+        self.niche_model.setStringList([item["name"] for item in self.registered_niches])
+        self._sync_niche_actions()
+
+    def _niche_created(self, item: dict) -> None:
+        self._load_niche_suggestions([entry for entry in self.registered_niches if entry["id"] != item["id"]] + [item])
+        self.niche_input.setText(item["name"])
+        self._append_log(f"Nicho cadastrado: {item['name']}")
+
+    def _niche_request_finished(self) -> None:
+        self.niche_thread = None
+        self._sync_niche_actions()
+
+    def _start_niche_request(self, *, name: str | None = None) -> None:
+        if self.niche_thread is not None:
+            return
+        worker = NicheWorker(self, name=name)
+        self.niche_thread = worker
+        worker.loaded.connect(self._load_niche_suggestions)
+        worker.created.connect(self._niche_created)
+        worker.failed.connect(lambda message: self._append_log(f"Cadastro de nichos indisponível: {message}"))
+        worker.finished.connect(self._niche_request_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._sync_niche_actions()
+        worker.start()
+
+    def refresh_niches(self) -> None:
+        self._start_niche_request()
+
+    def create_niche(self) -> None:
+        name = normalize_label(self.niche_input.text())
+        if not 2 <= len(name) <= 255:
+            self._append_log("Informe um nicho com 2 a 255 caracteres.")
+            return
+        self._start_niche_request(name=name)
+
     def refresh_history(self) -> None:
         try:
             client = GmapScrapApiClient.from_environment()
@@ -753,6 +821,10 @@ class MainWindow(QMainWindow):
         self.worker = None
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self.niche_thread is not None and self.niche_thread.isRunning():
+            self._append_log("Aguarde a consulta de nichos terminar antes de fechar.")
+            event.ignore()
+            return
         if self.worker and self.thread and self.thread.isRunning():
             self.worker.stop()
             self.thread.quit()
