@@ -353,6 +353,7 @@ input:disabled {
   border-right: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.82);
   backdrop-filter: blur(14px);
+  overflow-y: auto;
 }
 
 .nav-list {
@@ -1773,6 +1774,122 @@ td a {
   width: min(920px, 100%);
 }
 
+.niche-manager-modal {
+  width: min(1080px, 100%);
+}
+
+.niche-management-page {
+  margin-top: 24px;
+}
+
+.niche-intro {
+  max-width: 780px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.niche-manager-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.7fr) minmax(0, 1.5fr);
+  align-items: start;
+  gap: 20px;
+  margin-top: 22px;
+}
+
+.niche-editor,
+.niche-list-panel {
+  min-width: 0;
+}
+
+.niche-editor .search-form {
+  margin-top: 22px;
+}
+
+.niche-helper,
+.niche-list-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.niche-form-actions,
+.niche-list {
+  display: grid;
+  gap: 12px;
+}
+
+.niche-search {
+  margin: 22px 0 12px;
+}
+
+.niche-search span {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.niche-search svg {
+  position: absolute;
+  left: 13px;
+  pointer-events: none;
+}
+
+.niche-search input {
+  padding-left: 39px;
+}
+
+.niche-list {
+  margin-top: 16px;
+}
+
+.niche-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.niche-row > strong {
+  overflow-wrap: anywhere;
+}
+
+.niche-row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.niche-delete-confirmation {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.niche-delete-confirmation p {
+  line-height: 1.5;
+}
+
+.niche-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 42px 18px;
+  color: var(--muted);
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+.niche-empty p {
+  margin: 0;
+  line-height: 1.5;
+}
+
 .funnel-manager-modal {
   width: min(1040px, 100%);
 }
@@ -2118,6 +2235,7 @@ td a {
     height: auto;
     flex-direction: row;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .logout {
@@ -2126,7 +2244,18 @@ td a {
   }
 
   .nav-list {
-    grid-auto-flow: column;
+    flex: 1;
+    min-width: 0;
+    grid-auto-flow: row;
+    grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  }
+
+  .nav-section-label {
+    grid-column: 1 / -1;
+  }
+
+  .niche-manager-grid {
+    grid-template-columns: 1fr;
   }
 
   .content-grid,
@@ -2176,6 +2305,14 @@ td a {
   .inline-tag-form {
     width: 100%;
     grid-template-columns: 1fr;
+  }
+
+  .niche-row {
+    grid-template-columns: 1fr;
+  }
+
+  .niche-row-actions > .secondary-button {
+    flex: 1;
   }
 
   .send-day-picker {

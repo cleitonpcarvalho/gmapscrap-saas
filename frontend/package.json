@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "test": "vitest run",
     "dev": "next dev --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start --hostname 0.0.0.0"
@@ -11,17 +12,21 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "lucide-react": "^0.468.0",
-    "next": "^16.2.10",
+    "next": "16.4.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "overrides": {
-    "postcss": "^8.5.10"
+    "postcss": "8.5.23"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.13",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.7.0"
+    "jsdom": "^31.0.1",
+    "typescript": "^5.7.0",
+    "vitest": "^5.1.1"
   }
 }

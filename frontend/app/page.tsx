@@ -59,7 +59,7 @@ import {
   X
 } from "lucide-react";
 import type { CSSProperties, FormEvent, MouseEvent, ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { NicheManager, type Niche } from "./components/NicheManager";
 
 type User = { username: string };
@@ -163,6 +163,7 @@ type AppView =
   | "whatsappAi"
   | "templates"
   | "lists"
+  | "niches"
   | "campaigns"
   | "history"
   | "settings";
@@ -2404,14 +2405,28 @@ export default function Home() {
     return nextTags;
   }
 
+  const handleNichesChange = useCallback((items: Niche[]) => {
+    setRegisteredNiches(items);
+    setNicheLoadError("");
+  }, []);
+
+  const refreshNiches = useCallback(async () => {
+    const items = await apiFetch<Niche[]>("/api/niches");
+    handleNichesChange(items);
+  }, [handleNichesChange]);
+
   useEffect(() => {
-    if (!user) { setRegisteredNiches([]); return; }
+    if (!user) { setRegisteredNiches([]); setNicheLoadError(""); return; }
     let cancelled = false;
-    apiFetch<Niche[]>("/api/niches")
-      .then((items) => { if (!cancelled) { setRegisteredNiches(items); setNicheLoadError(""); } })
-      .catch(() => { if (!cancelled) setNicheLoadError("Sugestões indisponíveis. Abra Gerenciar nichos para tentar novamente."); });
-    return () => { cancelled = true; };
-  }, [user]);
+    function load() {
+      apiFetch<Niche[]>("/api/niches")
+        .then((items) => { if (!cancelled) handleNichesChange(items); })
+        .catch(() => { if (!cancelled) setNicheLoadError("Sugestões indisponíveis. Abra Nichos para tentar novamente."); });
+    }
+    load();
+    window.addEventListener("focus", load);
+    return () => { cancelled = true; window.removeEventListener("focus", load); };
+  }, [user, handleNichesChange]);
 
   async function refreshData() {
     const [nextStats, nextSearches, nextLeadsResponse, nextTags] = await Promise.all([
@@ -2494,7 +2509,9 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (window.location.pathname === "/whatsapp/instancias") {
+    if (window.location.pathname === "/nichos" || window.location.hash === "#nichos") {
+      setActiveView("niches");
+    } else if (window.location.pathname === "/whatsapp/instancias") {
       setActiveView("whatsappInstances");
     } else if (window.location.pathname === "/whatsapp/templates") {
       setActiveView("whatsappTemplates");
@@ -2819,6 +2836,7 @@ export default function Home() {
 
   function switchView(view: AppView) {
     setActiveView(view);
+    if (view === "search") refreshNiches().catch(() => setNicheLoadError("Sugestões indisponíveis. Abra Nichos para tentar novamente."));
     const routes: Record<AppView, string> = {
       dashboard: "#dashboard",
       search: "#busca",
@@ -2831,6 +2849,7 @@ export default function Home() {
       whatsappAi: "/whatsapp/ia",
       templates: "#templates",
       lists: "#listas",
+      niches: "/nichos",
       campaigns: "#campanhas",
       history: "#historico",
       settings: "#settings"
@@ -4877,7 +4896,7 @@ export default function Home() {
         niches={registeredNiches}
         initialName={registeredNiches.some((item) => item.name.toLocaleLowerCase() === niche.trim().toLocaleLowerCase()) ? "" : niche.trim()}
         request={apiFetch}
-        onChange={(items) => { setRegisteredNiches(items); setNicheLoadError(""); }}
+        onChange={handleNichesChange}
         onSelect={setNiche}
         onClose={() => setNicheManagerOpen(false)}
       /> : null}
@@ -4926,6 +4945,15 @@ export default function Home() {
           >
             <ListFilter size={18} />
             Listas
+          </button>
+          <button
+            className={`nav-item ${activeView === "niches" ? "active" : ""}`}
+            aria-current={activeView === "niches" ? "page" : undefined}
+            onClick={() => switchView("niches")}
+            type="button"
+          >
+            <Tags size={18} />
+            Nichos
           </button>
 
           <div className="nav-section-label">WhatsApp</div>
@@ -5016,7 +5044,9 @@ export default function Home() {
           <div>
             <p className="eyebrow">Painel</p>
             <h1>
-              {activeView === "search"
+              {activeView === "niches"
+                ? "Nichos"
+                : activeView === "search"
                 ? "Coleta de leads com site e e-mail"
                 : activeView === "leads"
                   ? "Base de leads"
@@ -5045,7 +5075,7 @@ export default function Home() {
                                           : "Histórico de envios"}
             </h1>
           </div>
-          {activeView === "search" || activeView === "leads" ? (
+          {activeView === "niches" ? null : activeView === "search" || activeView === "leads" ? (
             <a className="secondary-button" href={`${API_BASE}/api/leads/export.csv`} target="_blank" rel="noreferrer">
               <ArrowDownToLine size={18} />
               CSV
@@ -5103,7 +5133,15 @@ export default function Home() {
           </section>
         ) : null}
 
-        {activeView === "search" ? (
+        {activeView === "niches" ? (
+          <NicheManager
+            variant="page"
+            niches={registeredNiches}
+            request={apiFetch}
+            onChange={handleNichesChange}
+            onSelect={(name) => { setNiche(name); switchView("search"); }}
+          />
+        ) : activeView === "search" ? (
           <>
             <section className="content-grid">
               <section className="panel">
