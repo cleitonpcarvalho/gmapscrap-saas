@@ -68,7 +68,12 @@ def init_db() -> None:
     from backend import models  # noqa: F401
 
     _wait_for_database()
-    Base.metadata.create_all(bind=engine)
+    # Manual CRM additions are installed only by the reviewed versioned SQL
+    # migration. Never silently create their tables during application startup.
+    Base.metadata.create_all(bind=engine, tables=[
+        table for table in Base.metadata.sorted_tables
+        if table.name not in {"crm_activities", "crm_follow_ups"}
+    ])
     _ensure_tag_tables()
     _ensure_crm_funnel_tables()
     _ensure_whatsapp_crm_tables()
@@ -271,6 +276,8 @@ def _ensure_default_crm_funnel(connection) -> int:
 
 
 def _ensure_default_crm_funnel_stages(connection, funnel_id: int) -> None:
+    if connection.execute(text("SELECT 1 FROM crm_funnel_stages WHERE funnel_id = :funnel_id LIMIT 1"), {"funnel_id": funnel_id}).first():
+        return
     for stage in DEFAULT_CRM_STAGES:
         existing = connection.execute(
             text("SELECT id FROM crm_funnel_stages WHERE funnel_id = :funnel_id AND key = :key"),
@@ -278,15 +285,6 @@ def _ensure_default_crm_funnel_stages(connection, funnel_id: int) -> None:
         ).first()
         params = {**stage, "funnel_id": funnel_id}
         if existing:
-            connection.execute(
-                text(
-                    "UPDATE crm_funnel_stages "
-                    "SET label = :label, color = :color, description = :description, "
-                    "position = :position, is_won = :is_won, is_lost = :is_lost "
-                    "WHERE id = :id"
-                ),
-                {**params, "id": existing[0]},
-            )
             continue
         connection.execute(
             text(

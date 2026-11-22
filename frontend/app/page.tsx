@@ -61,6 +61,8 @@ import {
 import type { CSSProperties, FormEvent, MouseEvent, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { NicheManager, type Niche } from "./components/NicheManager";
+import { AddToCrmDialog } from "./components/crm/AddToCrmDialog";
+import { ManualCrmWorkspace } from "./components/crm/ManualCrmWorkspace";
 
 type User = { username: string };
 
@@ -160,6 +162,7 @@ type AppView =
   | "whatsappTemplates"
   | "whatsappCampaigns"
   | "whatsappCrm"
+  | "manualCrm"
   | "whatsappAi"
   | "templates"
   | "lists"
@@ -1906,6 +1909,7 @@ export default function Home() {
   const [leadTotalCount, setLeadTotalCount] = useState(0);
   const [leadResultLimit, setLeadResultLimit] = useState(500);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [addToCrmOpen, setAddToCrmOpen] = useState(false);
   const [leadNameQuery, setLeadNameQuery] = useState("");
   const [selectedLeadNiches, setSelectedLeadNiches] = useState<string[]>([]);
   const [selectedLeadLocations, setSelectedLeadLocations] = useState<string[]>([]);
@@ -2002,6 +2006,7 @@ export default function Home() {
   const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsAppMessageTemplate[]>([]);
   const [whatsappCampaigns, setWhatsappCampaigns] = useState<WhatsAppCampaign[]>([]);
   const [crmFunnels, setCrmFunnels] = useState<CrmFunnel[]>([]);
+  const [crmConfigVersion, setCrmConfigVersion] = useState(0);
   const [selectedCrmFunnelId, setSelectedCrmFunnelId] = useState<number | null>(null);
   const [crmLeads, setCrmLeads] = useState<CrmLead[]>([]);
   const [crmNoteDrafts, setCrmNoteDrafts] = useState<Record<number, string>>({});
@@ -2460,13 +2465,23 @@ export default function Home() {
     setEmailSends(nextSends);
   }
 
+  async function refreshCrmData() {
+    const [nextFunnels, nextCrmLeads] = await Promise.all([
+      apiFetch<CrmFunnel[]>("/api/crm/funnels"), apiFetch<CrmLead[]>(crmApiPath)
+    ]);
+    setCrmFunnels(nextFunnels);
+    setCrmConfigVersion(value => value + 1);
+    setCrmLeads(nextCrmLeads);
+    setCrmNoteDrafts((current) => Object.fromEntries(
+      nextCrmLeads.map((lead) => [lead.id, current[lead.id] ?? lead.qualification_notes ?? ""])
+    ));
+  }
+
   async function refreshWhatsappData() {
-    const [nextInstances, nextTemplates, nextCampaigns, nextFunnels, nextCrmLeads, nextAiSettings, nextPortfolioItems, nextTags] = await Promise.all([
+    const [nextInstances, nextTemplates, nextCampaigns, nextAiSettings, nextPortfolioItems, nextTags] = await Promise.all([
       apiFetch<WhatsAppInstance[]>("/api/whatsapp/instances"),
       apiFetch<WhatsAppMessageTemplate[]>("/api/whatsapp/templates"),
       apiFetch<WhatsAppCampaign[]>("/api/whatsapp/campaigns"),
-      apiFetch<CrmFunnel[]>("/api/crm/funnels"),
-      apiFetch<CrmLead[]>(crmApiPath),
       apiFetch<WhatsAppAiSettings>("/api/whatsapp/ai-settings"),
       apiFetch<WhatsAppPortfolioItem[]>("/api/whatsapp/portfolio"),
       apiFetch<LeadTag[]>("/api/tags")
@@ -2475,7 +2490,6 @@ export default function Home() {
     setWhatsappInstances(nextInstances);
     setWhatsappTemplates(nextTemplates);
     setWhatsappCampaigns(nextCampaigns);
-    setCrmFunnels(nextFunnels);
     setWhatsappAiSettings(nextAiSettings);
     setWhatsappAiForm({
       system_prompt: nextAiSettings.system_prompt,
@@ -2484,13 +2498,8 @@ export default function Home() {
       auto_apply_tags_enabled: nextAiSettings.auto_apply_tags_enabled
     });
     setWhatsappPortfolioItems(nextPortfolioItems);
-    setCrmLeads(nextCrmLeads);
     setTags(nextTags);
-    setCrmNoteDrafts((current) =>
-      Object.fromEntries(
-        nextCrmLeads.map((lead) => [lead.id, current[lead.id] ?? lead.qualification_notes ?? ""])
-      )
-    );
+    await refreshCrmData();
   }
 
   async function handleRefreshWhatsappData() {
@@ -2517,7 +2526,9 @@ export default function Home() {
       setActiveView("whatsappTemplates");
     } else if (window.location.pathname === "/whatsapp/campanhas") {
       setActiveView("whatsappCampaigns");
-    } else if (window.location.pathname === "/crm" || window.location.pathname === "/whatsapp/crm") {
+    } else if (window.location.pathname === "/crm") {
+      setActiveView("manualCrm");
+    } else if (window.location.pathname === "/whatsapp/crm") {
       setActiveView("whatsappCrm");
     } else if (window.location.pathname === "/whatsapp/ia") {
       setActiveView("whatsappAi");
@@ -2543,9 +2554,8 @@ export default function Home() {
       .then(async (session) => {
         if (session.authenticated && session.username) {
           setUser({ username: session.username });
-          await refreshData();
-          await refreshEmailData();
-          await refreshWhatsappData();
+          // Auth success must not depend on marketing/provider data loading.
+          refreshData().catch(() => undefined);
         } else {
           setUser(null);
         }
@@ -2845,7 +2855,8 @@ export default function Home() {
       whatsappInstances: "/whatsapp/instancias",
       whatsappTemplates: "/whatsapp/templates",
       whatsappCampaigns: "/whatsapp/campanhas",
-      whatsappCrm: "/crm",
+      whatsappCrm: "/whatsapp/crm",
+      manualCrm: "/crm",
       whatsappAi: "/whatsapp/ia",
       templates: "#templates",
       lists: "#listas",
@@ -2869,9 +2880,7 @@ export default function Home() {
       });
       setUser(me);
       setPassword("");
-      await refreshData();
-      await refreshEmailData();
-      await refreshWhatsappData();
+      refreshData().catch(() => undefined);
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : "Login inválido.");
     }
@@ -4027,6 +4036,7 @@ export default function Home() {
   async function refreshCrmFunnels() {
     const nextFunnels = await apiFetch<CrmFunnel[]>("/api/crm/funnels");
     setCrmFunnels(nextFunnels);
+    setCrmConfigVersion(value => value + 1);
     return nextFunnels;
   }
 
@@ -4098,7 +4108,7 @@ export default function Home() {
       setFunnelForm(defaultFunnelForm);
       setEditingFunnelId(null);
       setFunnelMessage(editingFunnelId ? "Funil atualizado." : "Funil criado.");
-      await refreshWhatsappData();
+      await refreshCrmData();
     } catch (error) {
       setFunnelError(error instanceof Error ? error.message : "Não foi possível salvar o funil.");
     } finally {
@@ -4136,7 +4146,7 @@ export default function Home() {
       setFunnelDeleteDialog(null);
       setFunnelDeleteMoveToId("");
       setFunnelMessage("Funil excluído.");
-      await refreshWhatsappData();
+      await refreshCrmData();
     } catch (error) {
       setFunnelError(error instanceof Error ? error.message : "Não foi possível excluir o funil.");
     } finally {
@@ -4188,7 +4198,7 @@ export default function Home() {
       setEditingStageId(null);
       setStageForm(defaultStageForm);
       setFunnelMessage(editingStageId ? "Estágio atualizado." : "Estágio criado.");
-      await refreshWhatsappData();
+      await refreshCrmData();
     } catch (error) {
       setFunnelError(error instanceof Error ? error.message : "Não foi possível salvar o estágio.");
     } finally {
@@ -4230,7 +4240,7 @@ export default function Home() {
       setStageForm((current) => (editingStageId === stageDeleteDialog.id ? defaultStageForm : current));
       setEditingStageId((current) => (current === stageDeleteDialog.id ? null : current));
       setFunnelMessage("Estágio excluído.");
-      await refreshWhatsappData();
+      await refreshCrmData();
     } catch (error) {
       setFunnelError(error instanceof Error ? error.message : "Não foi possível excluir o estágio.");
     } finally {
@@ -4264,7 +4274,7 @@ export default function Home() {
         body: JSON.stringify({ stage_ids: stageIds })
       });
       setFunnelMessage("Ordem dos estágios atualizada.");
-      await refreshWhatsappData();
+      await refreshCrmData();
     } catch (error) {
       setFunnelError(error instanceof Error ? error.message : "Não foi possível reordenar os estágios.");
     } finally {
@@ -4892,6 +4902,7 @@ export default function Home() {
       <datalist id="registered-niches">
         {registeredNiches.map((item) => <option key={item.id} value={item.name} />)}
       </datalist>
+      {addToCrmOpen && <AddToCrmDialog request={apiFetch} initialIds={selectedIds} onClose={() => setAddToCrmOpen(false)} />}
       {nicheManagerOpen ? <NicheManager
         niches={registeredNiches}
         initialName={registeredNiches.some((item) => item.name.toLocaleLowerCase() === niche.trim().toLocaleLowerCase()) ? "" : niche.trim()}
@@ -4931,8 +4942,8 @@ export default function Home() {
             Dashboard
           </button>
           <button
-            className={`nav-item ${activeView === "whatsappCrm" ? "active" : ""}`}
-            onClick={() => switchView("whatsappCrm")}
+            className={`nav-item ${activeView === "manualCrm" ? "active" : ""}`}
+            onClick={() => switchView("manualCrm")}
             type="button"
           >
             <Users size={18} />
@@ -5046,6 +5057,8 @@ export default function Home() {
             <h1>
               {activeView === "niches"
                 ? "Nichos"
+                : activeView === "manualCrm"
+                  ? "CRM comercial"
                 : activeView === "search"
                 ? "Coleta de leads com site e e-mail"
                 : activeView === "leads"
@@ -5075,7 +5088,7 @@ export default function Home() {
                                           : "Histórico de envios"}
             </h1>
           </div>
-          {activeView === "niches" ? null : activeView === "search" || activeView === "leads" ? (
+          {activeView === "niches" || activeView === "manualCrm" ? null : activeView === "search" || activeView === "leads" ? (
             <a className="secondary-button" href={`${API_BASE}/api/leads/export.csv`} target="_blank" rel="noreferrer">
               <ArrowDownToLine size={18} />
               CSV
@@ -5133,7 +5146,9 @@ export default function Home() {
           </section>
         ) : null}
 
-        {activeView === "niches" ? (
+        {activeView === "manualCrm" ? (
+          <ManualCrmWorkspace request={apiFetch} configVersion={crmConfigVersion} onManageFunnels={openFunnelManager} />
+        ) : activeView === "niches" ? (
           <NicheManager
             variant="page"
             niches={registeredNiches}
@@ -5447,6 +5462,9 @@ export default function Home() {
                 <button className="primary-button compact-button" onClick={openManualLeadModal} type="button">
                   <Plus size={16} />
                   Adicionar lead
+                </button>
+                <button className="secondary-button compact-button" type="button" onClick={() => setAddToCrmOpen(true)}>
+                  <Users size={16} /> Adicionar ao CRM{selectedIds.length ? ` (${selectedIds.length})` : ""}
                 </button>
                 <span className="muted-count">{filteredLeads.length} visíveis</span>
                 {hasMoreLeadsThanLoaded ? (

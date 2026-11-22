@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event, func
+from decimal import Decimal
+
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, event, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -616,7 +618,14 @@ class WhatsAppWebhookSettings(Base):
 
 class CrmLead(Base):
     __tablename__ = "crm_leads"
-    __table_args__ = (UniqueConstraint("lead_id", "funnel_id", name="uq_crm_leads_lead_funnel"),)
+    __table_args__ = (
+        UniqueConstraint("lead_id", "funnel_id", name="uq_crm_leads_lead_funnel"),
+        CheckConstraint("estimated_value IS NULL OR estimated_value >= 0", name="ck_crm_leads_value"),
+        CheckConstraint("sales_outcome IS NULL OR sales_outcome IN ('open','won','lost')", name="ck_crm_leads_outcome"),
+        CheckConstraint("sales_outcome IS NULL OR sales_outcome <> 'lost' OR length(trim(lost_reason)) > 0 AND lost_reason IS NOT NULL", name="ck_crm_leads_lost_reason"),
+        CheckConstraint("sales_outcome IS NULL OR sales_outcome <> 'won' OR estimated_value IS NOT NULL", name="ck_crm_leads_won_value"),
+        CheckConstraint("currency IN ('BRL','USD','EUR','GBP','CAD','AUD')", name="ck_crm_leads_currency"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), nullable=False)
@@ -627,6 +636,15 @@ class CrmLead(Base):
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    managed_manually: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    estimated_value: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), default="BRL", server_default="BRL", nullable=False)
+    sales_outcome: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    lost_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+
+    __mapper_args__ = {"version_id_col": version}
 
     lead: Mapped[Lead] = relationship(lazy="selectin")
     funnel: Mapped[CrmFunnel] = relationship(back_populates="crm_leads", lazy="selectin")
@@ -654,3 +672,45 @@ class CrmStageHistory(Base):
     changed_by: Mapped[str] = mapped_column(String(20), nullable=False)
 
     crm_lead: Mapped[CrmLead] = relationship(back_populates="stage_history")
+
+
+class CrmActivity(Base):
+    """Immutable manual timeline; PostgreSQL also rejects UPDATE and DELETE."""
+    __tablename__ = "crm_activities"
+    __table_args__ = (
+        CheckConstraint("kind IN ('note','call','whatsapp','meeting','system')", name="ck_crm_activities_kind"),
+        Index("ix_crm_activities_card_created", "crm_lead_id", "created_at", "id"),
+    )
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    crm_lead_id: Mapped[int] = mapped_column(ForeignKey("crm_leads.id", ondelete="RESTRICT"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class CrmFollowUp(Base):
+    __tablename__ = "crm_follow_ups"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','completed','cancelled')", name="ck_crm_follow_ups_status"),
+        Index("ix_crm_follow_ups_status_due", "status", "due_at"),
+        Index("ix_crm_follow_ups_card", "crm_lead_id"),
+    )
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True)
+    crm_lead_id: Mapped[int] = mapped_column(ForeignKey("crm_leads.id", ondelete="RESTRICT"), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="pending", server_default="pending", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    __mapper_args__ = {"version_id_col": version}
+
+
+def _immutable_activity(*args):
+    raise ValueError("CRM activity records are append-only")
+
+
+event.listen(CrmActivity, "before_update", _immutable_activity)
+event.listen(CrmActivity, "before_delete", _immutable_activity)

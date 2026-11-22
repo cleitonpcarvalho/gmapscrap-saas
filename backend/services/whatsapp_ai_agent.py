@@ -698,6 +698,8 @@ def _apply_update_lead_stage_tool(
     arguments: dict[str, Any],
     stage_context: AiCrmStageContext | None,
 ) -> None:
+    if db.scalar(select(CrmLead.id).where(CrmLead.lead_id == conversation.lead_id, CrmLead.managed_manually.is_(True)).limit(1)):
+        return
     if not stage_context or not stage_context.available_stages:
         logger.warning("IA solicitou mudança de estágio, mas não há contexto de funil para conversa %s.", conversation.id)
         return
@@ -763,6 +765,8 @@ def _requested_tag_names(arguments: dict[str, Any]) -> list[str]:
 
 
 def _apply_lead_tags(db: Session, lead_id: int, tag_names: list[str]) -> None:
+    if db.scalar(select(CrmLead.id).where(CrmLead.lead_id == lead_id, CrmLead.managed_manually.is_(True)).limit(1)):
+        return
     available_tags, _ = _available_ai_tags_for_prompt(db)
     tags_by_normalized_name = {_normalize_tag_name(tag.name): tag for tag in available_tags}
     requested_tags: list[Tag] = []

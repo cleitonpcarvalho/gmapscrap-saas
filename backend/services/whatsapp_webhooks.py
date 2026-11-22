@@ -10,7 +10,7 @@ from typing import Any, Callable
 from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from backend.models import Lead, WhatsAppCampaign, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage, WhatsAppSend
+from backend.models import CrmLead, Lead, WhatsAppCampaign, WhatsAppConversation, WhatsAppInstance, WhatsAppMessage, WhatsAppSend
 from backend.services.whatsapp_ai_agent import handle_inbound_message
 from backend.services.crm import get_or_create_crm_lead
 from backend.services.openai_audio import transcribe_audio_bytes
@@ -66,7 +66,7 @@ def ingest_evolution_messages_upsert(
         sender_phone = _phone_from_jid(remote_jid)
         lead = _find_lead_by_phone(db, sender_phone)
         conversation = _get_or_create_conversation(db, instance, lead)
-        if lead:
+        if lead and not db.scalar(select(CrmLead.id).where(CrmLead.lead_id == lead.id, CrmLead.managed_manually.is_(True)).limit(1)):
             campaign = _latest_whatsapp_campaign_for_lead(db, lead.id)
             get_or_create_crm_lead(db, lead.id, funnel_id=campaign.funnel_id if campaign else None)
         message_type = _message_type(data)

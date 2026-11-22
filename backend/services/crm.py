@@ -100,16 +100,13 @@ def get_default_crm_funnel(db: Session) -> CrmFunnel:
 
 
 def _ensure_default_stages(db: Session, funnel: CrmFunnel) -> None:
+    # Seed an empty pipeline once. A deliberately deleted stage must stay deleted.
+    if funnel.stages:
+        return
     existing_by_key = {stage.key: stage for stage in funnel.stages}
     for definition in DEFAULT_CRM_STAGE_DEFINITIONS:
         stage = existing_by_key.get(definition["key"])
         if stage:
-            stage.label = definition["label"]
-            stage.color = definition["color"]
-            stage.description = definition["description"]
-            stage.position = definition["position"]
-            stage.is_won = definition["is_won"]
-            stage.is_lost = definition["is_lost"]
             continue
         db.add(CrmFunnelStage(funnel_id=funnel.id, **definition))
     db.flush()
@@ -236,6 +233,7 @@ def _normalize_stage_positions(
     *,
     moving_lead: CrmLead | None = None,
     insert_at: int | None = None,
+    preserve_manual: bool = True,
 ) -> None:
     stage_leads = _ordered_crm_leads_for_stage(db, funnel_id, stage_id)
     if moving_lead is not None:
@@ -244,8 +242,15 @@ def _normalize_stage_positions(
             target_index = max(0, min(insert_at, len(stage_leads)))
             stage_leads.insert(target_index, moving_lead)
 
-    for index, lead in enumerate(stage_leads):
-        lead.position = index
+    occupied = {lead.position for lead in stage_leads if lead.managed_manually and lead.position is not None} if preserve_manual else set()
+    next_position = 0
+    for lead in stage_leads:
+        if preserve_manual and lead.managed_manually:
+            continue
+        while next_position in occupied:
+            next_position += 1
+        lead.position = next_position
+        next_position += 1
 
 
 def _existing_cards_for_lead(db: Session, lead_id: int) -> list[CrmLead]:
@@ -277,6 +282,8 @@ def get_or_create_crm_lead(db: Session, lead_id: int, *, funnel_id: int | None =
 
     crm_lead = db.scalar(select(CrmLead).where(CrmLead.lead_id == lead_id, CrmLead.funnel_id == funnel.id))
     if crm_lead:
+        if crm_lead.managed_manually:
+            return crm_lead
         if crm_lead.position is None or crm_lead.stage_id is None:
             _sync_crm_lead_stage(db, crm_lead)
             _normalize_stage_positions(db, crm_lead.funnel_id, crm_lead.stage_id)
@@ -314,6 +321,8 @@ def move_crm_lead(
         raise ValueError(f"Origem de alteração inválida: {changed_by}")
 
     crm_lead = get_or_create_crm_lead(db, lead_id, funnel_id=funnel_id)
+    if changed_by == "ai" and crm_lead.managed_manually:
+        return crm_lead
     crm_lead = _sync_crm_lead_stage(db, crm_lead)
     previous_stage_id = crm_lead.stage_id
     previous_stage_key = crm_lead.stage
@@ -354,8 +363,8 @@ def move_crm_lead(
     if should_reposition:
         target_position = 0 if position is None else position
         if stage_changed:
-            _normalize_stage_positions(db, crm_lead.funnel_id, previous_stage_id)
-        _normalize_stage_positions(db, crm_lead.funnel_id, next_stage_ref.id, moving_lead=crm_lead, insert_at=target_position)
+            _normalize_stage_positions(db, crm_lead.funnel_id, previous_stage_id, preserve_manual=changed_by != "manual")
+        _normalize_stage_positions(db, crm_lead.funnel_id, next_stage_ref.id, moving_lead=crm_lead, insert_at=target_position, preserve_manual=changed_by != "manual")
 
     return crm_lead
 

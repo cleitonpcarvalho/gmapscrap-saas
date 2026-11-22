@@ -2381,3 +2381,32 @@ td a {
     height: 520px;
   }
 }
+/* Manual sales CRM: independent from provider status and campaign layouts. */
+.manual-crm-workspace { display: grid; gap: 24px; min-width: 0; }
+.manual-crm-toolbar, .manual-crm-actions, .manual-crm-follow-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.manual-crm-toolbar, .manual-crm-follow-row { justify-content: space-between; }
+.manual-crm-actions label, .manual-crm-fields label { display: grid; gap: 8px; min-width: 0; }
+.manual-crm-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 16px; align-items: end; margin: 16px 0; }
+.manual-crm-fields input, .manual-crm-fields select, .manual-crm-fields textarea { width: 100%; }
+.manual-crm-picker, .manual-crm-details { width: min(1080px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow-y: auto; }
+.manual-crm-company-list { max-height: 38vh; overflow-y: auto; border: 1px solid var(--line, #dce5e4); border-radius: 12px; }
+.manual-crm-company-list label { display: flex; gap: 12px; align-items: center; padding: 12px; border-bottom: 1px solid #edf1f0; cursor: pointer; }
+.manual-crm-company-list span { display: grid; gap: 4px; }
+.manual-crm-company-list input[type=checkbox] { width: auto; }
+.manual-crm-details-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 20px; }
+.manual-crm-section { padding: 20px 0; border-bottom: 1px solid #dce5e4; }
+.manual-crm-section h3 { margin-bottom: 14px; }
+.manual-crm-section p { margin: 10px 0; overflow-wrap: anywhere; }
+.manual-crm-section details { margin-top: 16px; }
+.manual-crm-prewrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.manual-crm-timeline { padding-left: 24px; }
+.manual-crm-timeline li { padding: 16px 8px; border-bottom: 1px solid #edf1f0; }
+.manual-crm-follow-list { display: grid; gap: 10px; }
+.manual-crm-follow-list button { display: grid; justify-content: start; text-align: left; gap: 6px; white-space: normal; }
+.manual-crm-overdue { color: #ae2531; }
+.manual-crm-workspace .crm-lead-card { display: grid; gap: 8px; width: 100%; text-align: left; margin-bottom: 12px; }
+@media (max-width: 720px) {
+  .manual-crm-details-grid { grid-template-columns: 1fr; }
+  .manual-crm-actions { align-items: stretch; }
+  .manual-crm-picker, .manual-crm-details { padding: 18px; }
+}
