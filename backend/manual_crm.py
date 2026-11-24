@@ -42,6 +42,7 @@ class CardUpdate(Input):
     version: int = Field(ge=1)
     managed_manually: Literal[True] | None = None
     stage_id: int | None = Field(default=None, gt=0)
+    position: int = Field(default=0, ge=0)
     estimated_value: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2, allow_inf_nan=False)
     currency: Currency | None = None
     sales_outcome: Literal["open", "won", "lost"] | None = None
@@ -227,24 +228,41 @@ def get_card(card_id: int, db: Session = Depends(get_db)):
 
 @router.patch("/cards/{card_id}")
 def update_card(card_id: int, payload: CardUpdate, db: Session = Depends(get_db), actor: str = Depends(get_current_username)):
+    values = payload.model_dump(exclude_unset=True)
+    moving = "stage_id" in values or "position" in values
+    if moving:
+        # Match additions/transfers: pipeline first, then cards. Keep neighbor
+        # position normalization and the version check in one transaction.
+        pipeline_id = db.scalar(select(CrmLead.funnel_id).where(CrmLead.id == card_id))
+        pipeline = db.scalar(select(CrmFunnel).where(CrmFunnel.id == pipeline_id).with_for_update()) if pipeline_id else None
+        if pipeline is None:
+            raise HTTPException(404, "Card ou funil não encontrado.")
     item = card(db, card_id, lock=True)
+    if moving and item.funnel_id != pipeline_id:
+        raise HTTPException(409, "O card mudou de funil. Atualize o CRM antes de mover.")
     if item.version != payload.version:
         raise HTTPException(409, "O card foi alterado. Atualize antes de salvar.")
-    values = payload.model_dump(exclude_unset=True)
     if not item.managed_manually:
-        if values.get("managed_manually") is not True:
+        if values.get("managed_manually") is True:
+            item.managed_manually = True
+            item.sales_outcome = "open"
+            event(db, item, "Gestão manual assumida. O estágio legado não confirma uma venda.", actor)
+        elif set(values) - {"version", "stage_id", "position"}:
             require_manual(item)
-        item.managed_manually = True
-        item.sales_outcome = "open"
-        event(db, item, "Gestão manual assumida. O estágio legado não confirma uma venda.", actor)
-    if "stage_id" in values:
-        stage = db.get(CrmFunnelStage, values["stage_id"])
+        elif not moving:
+            require_manual(item)
+    if moving:
+        stage = db.get(CrmFunnelStage, values.get("stage_id", item.stage_id))
         if not stage or stage.funnel_id != item.funnel_id:
             raise HTTPException(422, "Estágio inválido para este funil.")
-        if stage.id != item.stage_id:
-            previous = item.stage_ref.label
-            move_crm_lead(db, item.lead_id, stage=stage.key, funnel_id=item.funnel_id, changed_by="manual")
+        previous = item.stage_ref.label
+        previous_stage_id, previous_position = item.stage_id, item.position
+        move_crm_lead(db, item.lead_id, stage=stage.key, position=values.get("position"),
+                      funnel_id=item.funnel_id, changed_by="manual")
+        if stage.id != previous_stage_id:
             event(db, item, f"Estágio alterado: {previous} → {stage.label}.", actor)
+        elif item.position != previous_position:
+            event(db, item, f"Ordem alterada no estágio {stage.label}.", actor)
     for field in ["estimated_value", "currency"]:
         if field in values:
             if field == "currency" and values[field] is None:

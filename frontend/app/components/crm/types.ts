@@ -15,6 +15,7 @@ export type Card = {
   id: number; lead: Company; funnel_id: number; funnel_name: string; stage_id: number; stage_label: string; stage_color: string;
   managed_manually: boolean; qualification_notes: string | null; estimated_value: string | null; currency: string;
   sales_outcome: "open" | "won" | "lost" | null; lost_reason: string | null; closed_at: string | null; version: number;
+  position?: number | null;
   next_follow_up: FollowUp | null; activities?: Activity[]; follow_ups?: FollowUp[];
   stage_history?: { id: number; from_stage: string; to_stage: string; changed_by: string; changed_at: string }[];
 };

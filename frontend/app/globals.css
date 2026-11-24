@@ -2405,6 +2405,17 @@ td a {
 .manual-crm-follow-list button { display: grid; justify-content: start; text-align: left; gap: 6px; white-space: normal; }
 .manual-crm-overdue { color: #ae2531; }
 .manual-crm-workspace .crm-lead-card { display: grid; gap: 8px; width: 100%; text-align: left; margin-bottom: 12px; }
+
+/* Commercial board: existing dnd-kit sensors and horizontal scrolling. */
+.manual-crm-board { overscroll-behavior-x: contain; scroll-padding-inline: 32px; padding: 4px 4px 16px; }
+.manual-crm-board .crm-column { align-content: start; min-height: 220px; }
+.manual-crm-board .crm-card-list { min-height: 130px; }
+.manual-crm-board .manual-crm-drop-ready { border-style: dashed; }
+.manual-crm-board .drag-over { border-style: solid; outline: 2px solid var(--accent, #147457); outline-offset: -2px; }
+.manual-crm-board .crm-lead-card { margin-bottom: 0; user-select: none; }
+.manual-crm-board .crm-lead-card:disabled { cursor: wait; }
+.manual-crm-board .manual-crm-card-target { border-color: var(--accent, #147457); box-shadow: 0 -3px 0 var(--accent, #147457); }
+.manual-crm-drag-overlay { display: grid; gap: 8px; pointer-events: none; }
 @media (max-width: 720px) {
   .manual-crm-details-grid { grid-template-columns: 1fr; }
   .manual-crm-actions { align-items: stretch; }

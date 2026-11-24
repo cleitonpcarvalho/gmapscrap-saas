@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AddToCrmDialog } from "./AddToCrmDialog";
 import { ROOT, localDate, money, outcomeLabel, type Card, type FollowUp, type Funnel, type Request, type Stage } from "./types";
 import { useDialog } from "./useDialog";
+import { ManualCrmBoard } from "./ManualCrmBoard";
+import { moveCard, validatePipeline } from "./board";
 
 export function ManualCrmWorkspace({ request, onManageFunnels, configVersion = 0 }: { request: Request; onManageFunnels: () => void; configVersion?: number }) {
   const [funnels, setFunnels] = useState<Funnel[]>([]);
@@ -12,11 +14,17 @@ export function ManualCrmWorkspace({ request, onManageFunnels, configVersion = 0
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [needsRefresh, setNeedsRefresh] = useState(false);
+  const [message, setMessage] = useState("");
   const [bucket, setBucket] = useState("overdue");
   const [follows, setFollows] = useState<FollowUp[]>([]);
   const refreshSequence = useRef(0);
+  const busy = useRef(false);
+  const dragging = useRef(false);
   const funnel = funnels.find(item => item.id === funnelId);
   const refresh = useCallback(async () => {
+    if (busy.current || dragging.current) return;
     const sequence = ++refreshSequence.current;
     try {
       setError("");
@@ -28,10 +36,50 @@ export function ManualCrmWorkspace({ request, onManageFunnels, configVersion = 0
       ]);
       if (sequence !== refreshSequence.current) return;
       setFunnels(meta); setFunnelId(current => meta.some(item => item.id === current) ? current : meta[0]?.id || 0);
-      setCards(nextCards); setFollows(nextFollows);
-    } catch (err) { if (sequence === refreshSequence.current) setError(err instanceof Error ? err.message : "Falha ao carregar CRM."); }
+      const selected = meta.find(item => item.id === funnelId);
+      setCards(selected ? validatePipeline(nextCards, selected) : []); setFollows(nextFollows);
+      setNeedsRefresh(false);
+    } catch (err) { if (sequence === refreshSequence.current) { setNeedsRefresh(true); setError(err instanceof Error ? err.message : "Falha ao carregar CRM."); } }
     finally { if (sequence === refreshSequence.current) setLoading(false); }
   }, [request, funnelId, bucket]);
+  const onDraggingChange = useCallback((active: boolean) => {
+    dragging.current = active;
+    // Discard a poll that started before the gesture.
+    if (active) refreshSequence.current += 1;
+  }, []);
+  async function move(cardId: number, stageId: number, position: number) {
+    if (busy.current || needsRefresh || !funnel) return;
+    const item = cards.find(card => card.id === cardId && card.funnel_id === funnel.id);
+    const stage = funnel.stages.find(stage => stage.id === stageId);
+    const planned = item && stage ? moveCard(cards, cardId, stage, position) : null;
+    if (!item || !planned) return;
+    busy.current = true;
+    refreshSequence.current += 1;
+    const previous = cards;
+    setSaving(true); setError(""); setMessage(""); setCards(planned.cards);
+    try {
+      const updated = await request<Card>(`${ROOT}/cards/${item.id}`, {
+        method: "PATCH", body: JSON.stringify({ version: item.version, stage_id: stageId, position: planned.position })
+      });
+      // All affected neighbors have new positions/versions; refresh the whole
+      // pipeline before allowing another drag, rather than guessing versions.
+      if (updated.funnel_id === funnel.id && funnel.stages.some(stage => stage.id === updated.stage_id)) {
+        setCards(current => current.map(card => card.id === updated.id ? { ...card, ...updated } : card));
+      }
+      try {
+        const confirmed = await request<Card[]>(`${ROOT}/cards?funnel_id=${funnel.id}`);
+        setCards(validatePipeline(confirmed, funnel));
+        setMessage("Card atualizado.");
+      } catch {
+        setNeedsRefresh(true);
+        setError("Movimento salvo, mas não foi possível confirmar a ordem atual. Atualize o CRM antes de mover novamente.");
+      }
+    } catch (err) {
+      setCards(previous);
+      setNeedsRefresh(true);
+      setError((err instanceof Error ? err.message : "Não foi possível mover o card.") + " A posição anterior foi restaurada. Atualize o CRM antes de tentar novamente.");
+    } finally { busy.current = false; setSaving(false); }
+  }
   useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => { void refresh(); }, 60000);
@@ -39,22 +87,19 @@ export function ManualCrmWorkspace({ request, onManageFunnels, configVersion = 0
   }, [refresh, configVersion]);
   return <section className="manual-crm-workspace">
     <div className="panel manual-crm-toolbar"><div><p className="eyebrow">Prospecção B2B</p><h2>CRM comercial</h2><p>Contatos e follow-ups manuais. A conexão com WhatsApp não é necessária.</p></div>
-      <div className="manual-crm-actions"><label>Funil<select value={funnelId} onChange={e => { setCards([]); setFunnelId(Number(e.target.value)); }}>{funnels.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <button className="secondary-button" type="button" onClick={onManageFunnels}>Gerenciar funis</button><button className="secondary-button" type="button" onClick={() => void refresh()}>Atualizar CRM</button>
-        <button className="primary-button" type="button" onClick={() => setAdding(true)}>Adicionar ao CRM</button></div></div>
+      <div className="manual-crm-actions"><label>Funil<select disabled={saving} value={funnelId} onChange={e => { if (dragging.current) return; refreshSequence.current += 1; setCards([]); setMessage(""); setLoading(true); setNeedsRefresh(false); setFunnelId(Number(e.target.value)); }}>{funnels.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <button className="secondary-button" type="button" disabled={saving} onClick={() => { if (!dragging.current) onManageFunnels(); }}>Gerenciar funis</button><button className="secondary-button" type="button" disabled={saving} onClick={() => void refresh()}>Atualizar CRM</button>
+        <button className="primary-button" type="button" disabled={saving} onClick={() => { if (!dragging.current) setAdding(true); }}>Adicionar ao CRM</button></div></div>
     {error && <div className="notice danger" role="alert">{error}</div>}
     {loading && <p role="status">Carregando CRM…</p>}
+    {saving ? <p role="status">Salvando movimento…</p> : message && <p role="status">{message}</p>}
     <section className="panel"><div className="panel-heading"><h2>Follow-ups</h2><label>Período<select value={bucket} onChange={e => setBucket(e.target.value)}><option value="overdue">Atrasados</option><option value="today">Hoje</option><option value="upcoming">Próximos</option></select></label></div>
       <p className="helper-text">Datas no seu fuso local. “Hoje” mostra os horários restantes; horários vencidos aparecem em “Atrasados”.</p>
       <div className="manual-crm-follow-list">{follows.map(item => <button className="secondary-button" type="button" key={item.id} onClick={() => setCardId(item.card_id)}><strong>{item.lead_name} · {item.title}</strong><span>{localDate(item.due_at)} · {item.funnel_name}</span></button>)}{!follows.length && <p>Nenhum follow-up neste período.</p>}</div>
     </section>
-    <div className="crm-board" aria-label="Pipeline comercial">{funnel?.stages.map(stage => <section className="crm-column" key={stage.id}><div className="crm-column-heading"><h2>{stage.label}</h2><span>{cards.filter(item => item.stage_id === stage.id).length}</span></div>
-      {cards.filter(item => item.stage_id === stage.id).map(item => <button className="crm-lead-card crm-lead-card-button" key={item.id} type="button" onClick={() => setCardId(item.id)}>
-        <strong>{item.lead.name}</strong><span>{item.lead.niche} · {item.lead.location}</span><span>{item.lead.tags.map(tag => tag.name).join(" · ")}</span>
-        <span>{money(item)}</span><span>{item.sales_outcome ? outcomeLabel(item.sales_outcome) : "Legado · venda não confirmada"}</span>
-        {item.next_follow_up && <small className={Date.parse(item.next_follow_up.due_at) < Date.now() ? "manual-crm-overdue" : ""}>Próximo: {item.next_follow_up.title} · {localDate(item.next_follow_up.due_at)}</small>}
-      </button>)}
-    </section>)}</div>
+    {funnel && <><p className="helper-text">Arraste os cards entre estágios ou para reordenar. Com o teclado, use espaço e as setas; Escape cancela. O resultado comercial continua sendo confirmado nos detalhes.</p>
+      <ManualCrmBoard key={funnel.id} funnel={funnel} cards={cards} disabled={saving || loading || needsRefresh}
+        onOpen={setCardId} onMove={move} onDraggingChange={onDraggingChange} /></>}
     {!loading && !funnels.length && <p className="empty-state">Nenhum funil disponível. Cadastre um funil para começar.</p>}
     {adding && <AddToCrmDialog request={request} onClose={() => setAdding(false)} onAdded={() => void refresh()} />}
     {cardId !== null && <CrmLeadDetails cardId={cardId} request={request} stages={funnels.flatMap(item => item.stages)} onClose={() => setCardId(null)} onChanged={() => void refresh()} />}
