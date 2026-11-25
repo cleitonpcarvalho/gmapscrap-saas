@@ -61,7 +61,7 @@ jobs:
       DB_HOST: ''
       DB_NAME: ''
       DB_USER: ''
-      QT_QPA_PLATFORM: offscreen
+      QT_QPA_PLATFORM: xcb
       GMAPSCRAP_TEST_POSTGRES_URL: postgresql+psycopg://test_admin:isolated-test-only@127.0.0.1:55488/postgres
       GMAPSCRAP_TEST_LEAD_SECURITY_URL: postgresql+psycopg://security_admin:isolated-security-test-only@127.0.0.1:55489/postgres
     steps:
@@ -87,7 +87,9 @@ jobs:
           printf 'Types: deb\nURIs: https://apt.postgresql.org/pub/repos/apt\nSuites: %s-pgdg\nComponents: main\nSigned-By: /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc\n' "$VERSION_CODENAME" \
             | sudo tee /etc/apt/sources.list.d/pgdg.sources >/dev/null
           sudo apt-get update
-          sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 postgresql-17
+          sudo apt-get install -y libegl1 libopengl0 postgresql-17 xvfb xauth openbox \
+            libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 \
+            libxcb-image0 libxcb-render-util0 libxcb-xinerama0 libxcb-shape0
           echo '/usr/lib/postgresql/17/bin' >> "$GITHUB_PATH"
           python -m pip install poetry==2.2.1
           poetry config virtualenvs.create false
@@ -95,7 +97,7 @@ jobs:
           python -m pip install 'PySide6>=6.7,<7.0'
           npm ci --prefix frontend
       - name: Backend, PostgreSQL, CRM drag-and-drop and desktop regressions
-        run: python -m pytest -q
+        run: xvfb-run -a sh -c 'openbox >/dev/null 2>&1 & python -m pytest -q'
       - name: Frontend tests and types
         working-directory: frontend
         run: |
