@@ -1,10 +1,12 @@
 # Production deployment gate
 
-Production deployment is **blocked pending ownership review** of paused searches
-**29, 38 and 40**, as explicitly requested on November 25, 2026. Do not infer their
-execution source from messages, change their status, classify them automatically,
-merge this release to main, or invoke production preparation until review is done.
-No production backup, migration, or service update was performed in this task.
+On November 25, 2026 deployment was initially blocked for ownership review of
+paused searches **29, 38 and 40**. The user subsequently authorized resuming the
+release while preserving these searches without restarting, reclassifying,
+canceling, or changing their existing fields/statuses. Paused rows are excluded
+from startup's resume selector; the migration/startup guards now match its
+`queued`/`running` states. No source ownership is inferred or recorded for paused
+rows. Original row fingerprints and paused statuses must match after deployment.
 
 The unchanged production release is `0a4e4826e40f1b2261849e7979b656b349c4fa77`.
 Both running image configuration IDs occur in the build logs of its
@@ -33,7 +35,7 @@ desktop runtime. It runs backend, PostgreSQL, CRM drag-and-drop, desktop, fronte
 and TypeScript checks. Production images are built only after tests pass. The
 frontend image build also checks the production Next.js build.
 
-After ownership review and authorization to resume, push the release branch and
+After safety checks and authorization to resume, push the release branch and
 wait for tests/builds to pass. Before merging, dispatch this workflow on that
 exact branch with `mode=prepare`. **Preparation changes production schema** after
 its backup and rehearsal pass; it does not update either service. If specific
@@ -112,8 +114,9 @@ ledger may be added. No lead backfill, lead rewrite, status rewrite, old-securit
 reapplication, or global privilege change is performed.
 
 Verified server IDs are retained as review metadata in the desktop ledger entry.
-While the legacy backend is still running, any additional active server-default
-search without verified ownership blocks deployment, even after preparation.
+While the legacy backend is still running, any additional queued/running
+server-default search without verified ownership blocks deployment, even after
+preparation. Paused searches remain unchanged and are never submitted by startup.
 
 ## Deployment and verification
 

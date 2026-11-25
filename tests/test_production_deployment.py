@@ -82,29 +82,30 @@ def test_second_migration_failure_rolls_back_first_and_ledger(pending, monkeypat
 
 
 @pytest.mark.postgres
-def test_legacy_active_ownership_blocks_without_any_mutation(pending):
+@pytest.mark.parametrize("status", ["queued", "running"])
+def test_legacy_active_ownership_blocks_without_any_mutation(pending, status):
     c, engine = pending
-    c.execute("UPDATE public.search_runs SET status='paused'")
+    c.execute("UPDATE public.search_runs SET status=%s", (status,))
     before = data_snapshot(engine)
     with pytest.raises(migration.GateError, match="Unreviewed legacy"):
         migration.apply_pending(c, RELEASE, BACKUP, set())
     assert data_snapshot(engine) == before
     ids = {r[0] for r in c.execute("SELECT id FROM public.search_runs")}
     migration.apply_pending(c, RELEASE, BACKUP, ids)
-    assert c.execute("SELECT DISTINCT status,execution_source FROM public.search_runs").fetchall() == [("paused", "server")]
+    assert c.execute("SELECT DISTINCT status,execution_source FROM public.search_runs").fetchall() == [(status, "server")]
 
 
 @pytest.mark.postgres
 def test_legacy_backend_cannot_create_unreviewed_work_after_preparation(pending, monkeypatch):
     c, engine = pending
     monkeypatch.setenv("GMAPSCRAP_LEGACY_BACKEND", "1")
-    c.execute("UPDATE public.search_runs SET status='paused'")
+    c.execute("UPDATE public.search_runs SET status='running'")
     ids = {r[0] for r in c.execute("SELECT id FROM public.search_runs")}
     migration.apply_pending(c, RELEASE, BACKUP, ids)
     migration.apply_pending(c, RELEASE, BACKUP, set())  # retained verified IDs
     from backend.models import SearchRun
     with Session(engine) as session:
-        session.add(SearchRun(niche="Synthetic", location="Local", status="paused"))
+        session.add(SearchRun(niche="Synthetic", location="Local", status="queued"))
         session.commit()
     before = data_snapshot(engine)
     with pytest.raises(migration.GateError, match="Unreviewed legacy"):
@@ -121,7 +122,7 @@ def test_startup_closes_legacy_handoff_race_without_changing_searches(pending, m
     from backend import deployment_schema
     c, engine = pending
     migration.apply_pending(c, RELEASE, BACKUP, set())
-    c.execute("UPDATE public.search_runs SET status='paused'")  # Legacy request after gate commit.
+    c.execute("UPDATE public.search_runs SET status='running'")  # Legacy request after gate commit.
     before = data_snapshot(engine)
     monkeypatch.setattr(deployment_schema, "engine", engine)
     with pytest.raises(RuntimeError, match="Unreviewed legacy"):
@@ -135,6 +136,38 @@ def test_startup_closes_legacy_handoff_race_without_changing_searches(pending, m
     # Subsequent restarts allow correctly classified work created by the new backend.
     c.execute(f"UPDATE public.{migration.LEDGER} SET verified_server_search_ids='{{}}'")
     deployment_schema.validate_deployment_schema()
+
+
+@pytest.mark.postgres
+def test_paused_searches_survive_migration_and_real_startup_without_submission(pending, monkeypatch):
+    from psycopg import sql
+    from backend import deployment_schema
+    from backend.services import jobs
+
+    c, engine = pending
+    names = list(migration.columns(c, "search_runs"))
+    for run_id in (29, 38, 40):
+        expressions = [sql.SQL("%s") if name == "id" else sql.SQL("'paused'") if name == "status" else sql.Identifier(name) for name in names]
+        c.execute(sql.SQL("INSERT INTO public.search_runs ({}) SELECT {} FROM public.search_runs ORDER BY id LIMIT 1").format(
+            sql.SQL(",").join(map(sql.Identifier, names)), sql.SQL(",").join(expressions)), (run_id,))
+    with c.transaction():
+        layout, before = migration.snapshot(c)
+    monkeypatch.setenv("GMAPSCRAP_LEGACY_BACKEND", "1")
+    migration.apply_pending(c, RELEASE, BACKUP, set())
+    monkeypatch.setattr(deployment_schema, "engine", engine)
+    monkeypatch.setattr(jobs, "SessionLocal", lambda: Session(engine))
+    monkeypatch.setattr(jobs, "submit_search_job", lambda *args: pytest.fail("Paused searches must not restart"))
+    monkeypatch.setenv("GMAPSCRAP_SCHEMA_MANAGED", "1")
+    # Execute the actual startup schema/handoff check AND actual resume selector.
+    # Unrelated campaign schedulers remain isolated from this regression.
+    monkeypatch.setattr(main, "resume_unfinished_search_runs", jobs.resume_unfinished_search_runs)
+    for name in ("resume_running_email_campaigns", "start_email_campaign_scheduler", "resume_running_whatsapp_campaigns", "start_whatsapp_campaign_scheduler"):
+        monkeypatch.setattr(main, name, lambda: None)
+    main.on_startup()
+    with c.transaction():
+        assert migration.snapshot(c, layout)[1] == before
+    assert c.execute("SELECT id,status FROM public.search_runs WHERE id IN (29,38,40) ORDER BY id").fetchall() == [(29,"paused"),(38,"paused"),(40,"paused")]
+    assert c.execute(f"SELECT verified_server_search_ids FROM public.{migration.LEDGER} WHERE filename=%s", (migration.MIGRATIONS[1],)).fetchone() == ([],)
 
 
 @pytest.mark.postgres

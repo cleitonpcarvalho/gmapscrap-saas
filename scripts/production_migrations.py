@@ -165,13 +165,14 @@ def preflight(connection, verified_server_ids):
         assert_security(connection, table)
     require({"managed_manually", "estimated_value", "currency", "sales_outcome", "lost_reason", "closed_at", "version"}.issubset(columns(connection, "crm_leads")), "Manual CRM prerequisite missing")
     state = migration_state(connection)
-    # No inference from mutable messages. Old active rows need verified ownership.
+    # Match startup's runnable states exactly. Paused rows are never submitted
+    # by startup and need no ownership inference or record changes to deploy.
     if state[MIGRATIONS[1]] != "recorded" or os.getenv("GMAPSCRAP_LEGACY_BACKEND") == "1":
         known = set(verified_server_ids)
         if state[MIGRATIONS[1]] == "recorded":
             known.update(scalar(connection, sql.SQL("SELECT verified_server_search_ids FROM public.{} WHERE filename=%s").format(sql.Identifier(LEDGER)), (MIGRATIONS[1],)))
         source_filter = " AND execution_source='server'" if state[MIGRATIONS[1]] != "pending" else ""
-        active = {r[0] for r in connection.execute("SELECT id FROM public.search_runs WHERE status IN ('queued','running','paused')" + source_filter)}
+        active = {r[0] for r in connection.execute("SELECT id FROM public.search_runs WHERE status IN ('queued','running')" + source_filter)}
         require(active.issubset(known), "Unreviewed legacy active searches; deployment stopped")
     return state
 

@@ -26,7 +26,7 @@ def validate_deployment_schema():
             if not state.legacy_handoff_complete:
                 connection.exec_driver_sql("LOCK TABLE public.search_runs IN SHARE MODE")
                 active = set(connection.exec_driver_sql("""SELECT id FROM public.search_runs
-                    WHERE status IN ('queued','running','paused') AND execution_source='server'""").scalars())
+                    WHERE status IN ('queued','running') AND execution_source='server'""").scalars())
                 if not active.issubset(set(state.verified_server_search_ids)):
                     raise RuntimeError("Unreviewed legacy active searches; startup stopped before schedulers")
                 connection.exec_driver_sql("""UPDATE public.gmapscrap_schema_migrations
