@@ -226,3 +226,37 @@ def test_execution_buttons_remain_visible_when_form_needs_scrolling(window):
         assert button.isVisible()
         assert button.height() >= 44
         assert not scroll.isAncestorOf(button)
+
+
+@pytest.mark.parametrize("system_background", ["#ffffff", "#000000"])
+def test_search_form_scroll_background_stays_light_under_system_palettes(monkeypatch, system_background):
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QScrollArea
+
+    application = QApplication.instance() or QApplication([])
+    original_palette = QPalette(application.palette())
+    palette = QPalette(original_palette)
+    for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base):
+        palette.setColor(role, QColor(system_background))
+    application.setPalette(palette)
+    monkeypatch.setattr(MainWindow, "refresh_history", lambda self: None)
+    monkeypatch.setattr(MainWindow, "refresh_niches", lambda self: None)
+    window = MainWindow()
+    try:
+        window.resize(980, 680)
+        window.show()
+        application.processEvents()
+        scroll = window.findChild(QScrollArea)
+        assert scroll is not None
+        assert scroll.verticalScrollBar().maximum() > 0
+        for position in (0, scroll.verticalScrollBar().maximum()):
+            scroll.verticalScrollBar().setValue(position)
+            application.processEvents()
+            # Sample bare margins, away from fields, labels and scrollbars.
+            assert scroll.widget().grab().toImage().pixelColor(5, 5).name() == "#ffffff"
+            assert scroll.viewport().grab().toImage().pixelColor(5, 5).name() == "#ffffff"
+    finally:
+        window.close()
+        window.deleteLater()
+        application.processEvents()
+        application.setPalette(original_palette)

@@ -127,6 +127,7 @@ class MainWindow(QMainWindow):
         form_outer = QVBoxLayout(form_card)
         form_outer.setContentsMargins(0, 0, 0, 0)
         form_content = QWidget()
+        form_content.setObjectName("searchFormContent")
         form_layout = QVBoxLayout(form_content)
         form_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         form_layout.setContentsMargins(24, 22, 24, 24)
@@ -134,7 +135,7 @@ class MainWindow(QMainWindow):
         form_scroll = QScrollArea()
         form_scroll.setWidgetResizable(True)
         form_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        form_scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        form_scroll.setStyleSheet("QScrollArea, QWidget#searchFormContent { background: #ffffff; }")
         form_scroll.setWidget(form_content)
         form_outer.addWidget(form_scroll, 1)
 
