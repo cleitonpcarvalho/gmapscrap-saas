@@ -2,7 +2,7 @@
 
 Runs in Dockerfile.migrations as a non-root user. PG* variables come directly
 from the existing backend, never from new credentials or command-line secrets.
-Only the two explicitly approved migrations can be executed.
+Only the versioned release allowlist can be executed; historical security SQL is excluded.
 """
 import argparse
 from contextlib import contextmanager
@@ -21,7 +21,8 @@ from psycopg import sql
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-MIGRATIONS = ("20261124_crm_company_profiles.sql", "20261124_desktop_execution.sql")
+MIGRATIONS = ("20261124_crm_company_profiles.sql", "20261124_desktop_execution.sql", "20261125_website_qualification.sql")
+QUALIFICATION_TABLES = ("lead_website_qualifications", "website_qualification_jobs", "website_qualification_items")
 LEDGER = "gmapscrap_schema_migrations"
 SECURED = ("leads", "search_runs", "tags", "lead_tags", "niches", "crm_leads",
            "crm_funnels", "crm_funnel_stages", "crm_stage_history", "crm_activities", "crm_follow_ups")
@@ -110,6 +111,47 @@ def assert_security(connection, table):
 
 
 def installed(connection, name):
+    if name == MIGRATIONS[2]:
+        present = [table_exists(connection, table) for table in QUALIFICATION_TABLES]
+        if not any(present): return False
+        require(all(present), "Partially installed website qualification migration")
+        from backend.database import Base
+        from backend import models
+        from sqlalchemy.dialects import postgresql
+        for table in QUALIFICATION_TABLES:
+            model = Base.metadata.tables[table]
+            expected = {}
+            for column in model.columns:
+                kind = str(column.type.compile(dialect=postgresql.dialect())).lower().replace("varchar", "character varying")
+                expected[column.name] = (kind, not column.nullable, str(column.server_default.arg) if column.server_default else None)
+            require(columns(connection, table) == expected, "Website qualification columns/defaults drift")
+            constraints = connection.execute("""SELECT contype,conkey::text,confkey::text,
+                confrelid::regclass::text,confdeltype,convalidated FROM pg_constraint
+                WHERE conrelid=to_regclass(%s) ORDER BY contype,conkey::text""", ("public." + table,)).fetchall()
+            expected_count = {QUALIFICATION_TABLES[0]: 6, QUALIFICATION_TABLES[1]: 2, QUALIFICATION_TABLES[2]: 7}[table]
+            require(len(constraints) == expected_count and all(row[5] for row in constraints), "Website qualification constraints drift")
+            def normalized(definition):
+                definition = re.sub(r"::(?:character varying|text)(?:\[\])?", "", definition)
+                return re.sub(r"[\s()]+", "", definition.replace("public.", ""))
+            expected_definitions = {
+                QUALIFICATION_TABLES[0]: ["PRIMARY KEY (lead_id)", "FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE",
+                    "CHECK (cms = ANY (ARRAY['WordPress','other','unknown']))", "CHECK (priority = ANY (ARRAY['HIGH','MEDIUM','LOW','INCONCLUSIVE']))",
+                    "CHECK (total_posts IS NULL OR total_posts >= 0)", "CHECK (days_since_publication IS NULL OR days_since_publication >= 0)"],
+                QUALIFICATION_TABLES[1]: ["PRIMARY KEY (id)", "CHECK (status = ANY (ARRAY['queued','running','completed']))"],
+                QUALIFICATION_TABLES[2]: ["PRIMARY KEY (job_id,lead_id)", "UNIQUE (active_lead_id)",
+                    "FOREIGN KEY (job_id) REFERENCES website_qualification_jobs(id) ON DELETE CASCADE",
+                    "FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE", "FOREIGN KEY (active_lead_id) REFERENCES leads(id) ON DELETE CASCADE",
+                    "CHECK (status = ANY (ARRAY['queued','running','completed','failed']))", "CHECK (active_lead_id IS NULL OR active_lead_id = lead_id)"]}
+            definitions = [r[0] for r in connection.execute("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid=to_regclass(%s)", ("public."+table,))]
+            require({normalized(d) for d in definitions} == {normalized(d) for d in expected_definitions[table]}, "Website qualification constraint definition drift")
+            require(not scalar(connection, "SELECT EXISTS(SELECT FROM pg_index WHERE indrelid=to_regclass(%s) AND (NOT indisvalid OR NOT indisready))", ("public."+table,)), "Website qualification index invalid")
+            foreign_keys = [row for row in constraints if row[0] == "f"]
+            expected_targets = {QUALIFICATION_TABLES[0]: ["leads"], QUALIFICATION_TABLES[1]: [],
+                                QUALIFICATION_TABLES[2]: ["leads", "leads", "website_qualification_jobs"]}[table]
+            require(sorted(row[3].removeprefix("public.") for row in foreign_keys) == expected_targets
+                    and all(row[4] == "c" for row in foreign_keys), "Website qualification foreign keys drift")
+            assert_security(connection, table)
+        return True
     if name == MIGRATIONS[0]:
         if not table_exists(connection, "crm_company_profiles"):
             return False
@@ -154,6 +196,8 @@ def migration_state(connection):
         if name in entries:
             require(entries[name] == checksum(ROOT / "migrations" / name), "Applied migration checksum changed")
             require(exists, "Ledger disagrees with live schema")
+        if name == MIGRATIONS[2] and exists and name not in entries:
+            raise GateError("Unrecorded qualification tables require review; never silently adopt derived data")
         state[name] = "recorded" if name in entries else "adopt" if exists else "pending"
     return state
 
@@ -255,7 +299,7 @@ def apply_pending(connection, release, backup_sha, verified_server_ids):
                                (name, checksum(ROOT / "migrations" / name), release, backup_sha, sorted(verified_server_ids) if name == MIGRATIONS[1] else []))
         connection.execute("SET LOCAL search_path=public,pg_catalog")
         backend_schema(connection)
-        for table in (*SECURED, "crm_company_profiles", LEDGER):
+        for table in (*SECURED, "crm_company_profiles", *QUALIFICATION_TABLES, LEDGER):
             assert_security(connection, table)
         require(snapshot(connection, layout)[1] == before, "Existing application rows changed; transaction aborted")
         require(security_snapshot(connection, layout) == permissions, "Existing permissions/defaults/sequences changed; transaction aborted")
@@ -315,7 +359,7 @@ def api_compatibility(socket):
     client = TestClient(main.app)
     try:
         client.cookies.set(COOKIE_NAME, create_session_token(main.settings.app_username))
-        for endpoint in ("/api/crm/funnels", "/api/crm/leads", "/api/crm/manual/leads?limit=1", "/api/crm/manual/follow-ups", "/api/niches", "/api/searches"):
+        for endpoint in ("/api/leads?limit=1", "/api/website-qualification/results?limit=1", "/api/crm/funnels", "/api/crm/leads", "/api/crm/manual/leads?limit=1", "/api/crm/manual/follow-ups", "/api/niches", "/api/searches"):
             require(client.get(endpoint).status_code == 200, "Restored backend API compatibility failed")
         funnels = client.get("/api/crm/funnels").json()
         for funnel in funnels:

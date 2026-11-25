@@ -72,7 +72,8 @@ def init_db() -> None:
     # migration. Never silently create their tables during application startup.
     Base.metadata.create_all(bind=engine, tables=[
         table for table in Base.metadata.sorted_tables
-        if table.name not in {"crm_activities", "crm_follow_ups", "crm_company_profiles"}
+        if table.name not in {"crm_activities", "crm_follow_ups", "crm_company_profiles",
+                              "lead_website_qualifications", "website_qualification_jobs", "website_qualification_items"}
     ])
     _ensure_tag_tables()
     _ensure_crm_funnel_tables()

@@ -16,7 +16,7 @@ WORKDIR /app
 COPY pyproject.toml poetry.lock ./
 RUN poetry install --no-root
 COPY backend ./backend
-COPY migrations/20261124_crm_company_profiles.sql migrations/20261124_desktop_execution.sql ./migrations/
+COPY migrations/20261124_crm_company_profiles.sql migrations/20261124_desktop_execution.sql migrations/20261125_website_qualification.sql ./migrations/
 COPY scripts/production_migrations.py ./scripts/
 USER postgres
 RUN python -c "import psycopg, sqlalchemy, fastapi, httpx; import backend.models" \

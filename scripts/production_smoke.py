@@ -17,7 +17,7 @@ def main():
         result = client.post(api + "/api/auth/login", json={"username": settings.app_username, "password": settings.app_password}, timeout=30)
         assert result.status_code == 200
         checks = {}
-        for endpoint in ("/api/auth/me", "/api/crm/funnels", "/api/crm/leads", "/api/crm/manual/leads?limit=1", "/api/crm/manual/follow-ups", "/api/niches", "/api/searches"):
+        for endpoint in ("/api/auth/me", "/api/leads?limit=1", "/api/website-qualification/results?limit=1", "/api/crm/funnels", "/api/crm/leads", "/api/crm/manual/leads?limit=1", "/api/crm/manual/follow-ups", "/api/niches", "/api/searches"):
             result = client.get(api + endpoint, timeout=30)
             assert result.status_code == 200
             checks[endpoint] = result.status_code

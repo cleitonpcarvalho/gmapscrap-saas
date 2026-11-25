@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AddToCrmDialog } from "./AddToCrmDialog";
 import { CompanyEditor } from "./CompanyEditor";
+import { WebsiteQualification } from "../WebsiteQualification";
 import { ROOT, localDate, money, outcomeLabel, type Card, type FollowUp, type Funnel, type Request, type Stage } from "./types";
 import { useDialog } from "./useDialog";
 import { ManualCrmBoard } from "./ManualCrmBoard";
@@ -167,6 +168,7 @@ export function CrmLeadDetails({ cardId, request, stages, onClose, onChanged }: 
         <p>{data.lead.tags.length ? data.lead.tags.map(tag => <span className="lead-tag-pill" style={{ background: tag.color }} key={tag.id}>{tag.name}</span>) : "Sem tags"}</p>
         <div className="manual-crm-actions">{data.lead.call_url && <a className="secondary-button" href={data.lead.call_url}>Ligar</a>}{data.lead.whatsapp_url && <a className="secondary-button" href={data.lead.whatsapp_url} target="_blank" rel="noreferrer">Abrir WhatsApp</a>}{data.lead.email && <a className="secondary-button" href={`mailto:${data.lead.email}`}>Enviar e-mail</a>}{data.lead.website && <a className="secondary-button" href={data.lead.website} target="_blank" rel="noreferrer">Visitar site</a>}</div>
         <p className="helper-text">Abrir um contato não registra envio, ligação ou resposta. Registre a interação após realizá-la.</p>
+        <WebsiteQualification leadId={data.lead.id} request={request} />
         <h4>Representante da empresa</h4>
         <p>{data.lead.commercial_profile?.contact_name || "Contato não informado"}</p>
         <p>{data.lead.commercial_profile?.contact_phone} {data.lead.commercial_profile?.contact_email}</p>

@@ -20,6 +20,8 @@ def pending(postgres):
     run_script(postgres, PHASE1)
     run_script(postgres, SECURITY)
     with postgres.begin() as c:
+        for table in reversed(migration.QUALIFICATION_TABLES):
+            c.exec_driver_sql(f'DROP TABLE public.{table}')
         c.exec_driver_sql("DROP TABLE public.crm_company_profiles")
         c.exec_driver_sql("ALTER TABLE public.search_runs DROP COLUMN execution_source, DROP COLUMN desktop_request_id")
         for table in migration.SECURED:
@@ -48,7 +50,9 @@ def test_pending_only_atomic_idempotent_and_preserves_rows_and_permissions(pendi
     assert executed == list(migration.MIGRATIONS)
     after = data_snapshot(engine)
     assert after.pop("crm_company_profiles") == []
-    assert len(after.pop(migration.LEDGER)) == 2
+    assert len(after.pop(migration.LEDGER)) == len(migration.MIGRATIONS)
+    for table in migration.QUALIFICATION_TABLES:
+        assert after.pop(table) == []
     # Only additive search fields differ; every original value is identical.
     with c.transaction():
         layout = {name: list(migration.columns(c, name)) for name in before}
@@ -79,6 +83,37 @@ def test_second_migration_failure_rolls_back_first_and_ledger(pending, monkeypat
     assert data_snapshot(engine) == before
     assert not migration.table_exists(c, migration.LEDGER)
     assert not migration.table_exists(c, "crm_company_profiles")
+
+
+@pytest.mark.postgres
+def test_current_production_state_applies_only_new_qualification_migration(pending, monkeypatch):
+    c, engine = pending
+    migration.apply_pending(c, RELEASE, BACKUP, set())
+    # Disposable fixture reconstructs the two already-recorded production
+    # migrations. Never run fixture teardown SQL against a remote database.
+    for table in reversed(migration.QUALIFICATION_TABLES): c.execute(f"DROP TABLE public.{table}")
+    c.execute(f"DELETE FROM public.{migration.LEDGER} WHERE filename=%s",(migration.MIGRATIONS[2],))
+    before = data_snapshot(engine)
+    executed=[]; original=migration.migration_body
+    def record(name): executed.append(name); return original(name)
+    monkeypatch.setattr(migration,"migration_body",record)
+    migration.apply_pending(c, RELEASE, BACKUP, set())
+    assert executed == [migration.MIGRATIONS[2]]
+    after=data_snapshot(engine)
+    for table in migration.QUALIFICATION_TABLES: assert after.pop(table) == []
+    after.pop(migration.LEDGER); before.pop(migration.LEDGER)
+    assert after == before
+
+
+@pytest.mark.postgres
+def test_qualification_constraint_drift_stops_before_mutation(pending):
+    c,engine=pending
+    migration.apply_pending(c,RELEASE,BACKUP,set())
+    c.execute("ALTER TABLE public.website_qualification_items DROP CONSTRAINT website_qualification_items_active_lead_id_key")
+    before=data_snapshot(engine)
+    with pytest.raises(migration.GateError,match="constraints drift"):
+        migration.apply_pending(c,RELEASE,BACKUP,set())
+    assert data_snapshot(engine) == before
 
 
 @pytest.mark.postgres

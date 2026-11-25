@@ -2423,3 +2423,11 @@ td a {
 }
 
 fieldset.manual-crm-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+/* Qualification uses existing form, panel and action styles. */
+.website-qualification { margin-block: .5rem; }
+.website-qualification-details { padding: 1rem; background: var(--panel, #fff); border: 1px solid #e2e8f0; border-radius: 10px; min-width: 260px; max-width: 560px; }
+.website-qualification-details dl { display: grid; grid-template-columns: minmax(100px, 1fr) 2fr; gap: .5rem; }
+.website-qualification-details dt { font-weight: 600; }
+.website-qualification-details dd { margin: 0; overflow-wrap: anywhere; }
+.website-qualification-filters { display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; }
+.website-qualification-filters label { display: grid; gap: .35rem; }

@@ -63,6 +63,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { NicheManager, type Niche } from "./components/NicheManager";
 import { AddToCrmDialog } from "./components/crm/AddToCrmDialog";
 import { ManualCrmWorkspace } from "./components/crm/ManualCrmWorkspace";
+import { WebsiteQualification, BulkWebsiteQualification, QualificationFilters, emptyQualificationFilters, type WebsiteResult } from "./components/WebsiteQualification";
 
 type User = { username: string };
 
@@ -131,6 +132,7 @@ type Lead = {
   website: string | null;
   email: string;
   site_insights: string | null;
+  website_qualification?: WebsiteResult | null;
   whatsapp_validated: boolean | null;
   whatsapp_validated_at: string | null;
   whatsapp_validation_status: string | null;
@@ -1880,6 +1882,7 @@ function ColorField({
 }
 
 export default function Home() {
+  const [qualificationFilters, setQualificationFilters] = useState(emptyQualificationFilters);
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [loginError, setLoginError] = useState("");
@@ -2130,6 +2133,7 @@ export default function Home() {
   const leadLocationOptions = useMemo(() => uniqueSortedValues(leads.map((lead) => lead.location)), [leads]);
   const leadApiPath = useMemo(() => {
     const params = new URLSearchParams();
+    Object.entries(qualificationFilters).forEach(([key,value]) => {if (value) params.set(key,value);});
     if (leadWhatsappStatusFilter) params.set("whatsapp_status", leadWhatsappStatusFilter);
     if (selectedLeadEmailCampaignId) params.set("email_campaign_id", selectedLeadEmailCampaignId);
     if (leadEmailOpenedOnly) params.set("email_opened", "true");
@@ -2141,6 +2145,7 @@ export default function Home() {
     const query = params.toString();
     return `/api/leads${query ? `?${query}` : ""}`;
   }, [
+    qualificationFilters,
     leadEmailClickedOnly,
     leadEmailOpenedOnly,
     leadTagFilterMode,
@@ -2678,6 +2683,7 @@ export default function Home() {
   useEffect(() => {
     setLeadPage(1);
   }, [
+    qualificationFilters,
     leadEmailClickedOnly,
     leadEmailOpenedOnly,
     leadNameQuery,
@@ -5089,10 +5095,10 @@ export default function Home() {
             </h1>
           </div>
           {activeView === "niches" || activeView === "manualCrm" ? null : activeView === "search" || activeView === "leads" ? (
-            <a className="secondary-button" href={`${API_BASE}/api/leads/export.csv`} target="_blank" rel="noreferrer">
+            <div className="lead-actions"><a className="secondary-button" href={`${API_BASE}/api/leads/export.csv?${new URLSearchParams(Object.entries(qualificationFilters).filter(([,v]) => Boolean(v)))}`} target="_blank" rel="noreferrer">
               <ArrowDownToLine size={18} />
               CSV
-            </a>
+            </a><a className="secondary-button" href={`${API_BASE}/api/leads/export.xlsx?${new URLSearchParams(Object.entries(qualificationFilters).filter(([,v]) => Boolean(v)))}`} target="_blank" rel="noreferrer">XLSX</a></div>
           ) : whatsappViews.includes(activeView) ? (
             <button className="secondary-button" disabled={Boolean(whatsappBusyAction)} onClick={handleRefreshWhatsappData} type="button">
               {whatsappBusyAction === "refresh-whatsapp" ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
@@ -5411,6 +5417,7 @@ export default function Home() {
                 <h2>Leads salvos</h2>
               </div>
               <div className="lead-actions">
+                <BulkWebsiteQualification ids={selectedIds.length ? selectedIds : filteredLeadIds} request={apiFetch} />
                 <button
                   className="secondary-button compact-button"
                   disabled={leadEnrichmentBusy}
@@ -5484,6 +5491,8 @@ export default function Home() {
               </div>
             </div>
 
+            <QualificationFilters value={qualificationFilters} onChange={setQualificationFilters} />
+            <p className="helper-text">Analisar sites usa os selecionados ou os leads carregados que correspondem aos filtros (até 500).</p>
             {actionError ? <div className="notice danger">{actionError}</div> : null}
             {actionMessage ? <div className="notice success">{actionMessage}</div> : null}
             {leadWhatsappValidationRunning ? (
@@ -5756,6 +5765,7 @@ export default function Home() {
                         </td>
                         <td>
                           <WebsiteCell website={lead.website} />
+                          <WebsiteQualification leadId={lead.id} request={apiFetch} initial={lead.website_qualification} />
                         </td>
                         <td>
                           {lead.site_insights ? (

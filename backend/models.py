@@ -141,6 +141,63 @@ class Lead(Base):
         return f"https://wa.me/{normalized_phone.lstrip('+')}"
 
 
+class LeadWebsiteQualification(Base):
+    """Derived public-site observations; never edits the scraped Lead/SearchRun."""
+    __tablename__ = "lead_website_qualifications"
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), primary_key=True)
+    normalized_website: Mapped[str | None] = mapped_column(String(2048))
+    website_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    site_availability: Mapped[str] = mapped_column(String(30), nullable=False)
+    cms: Mapped[str] = mapped_column(String(30), nullable=False)
+    cms_name: Mapped[str | None] = mapped_column(String(80))
+    wordpress_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    blog_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    blog_url: Mapped[str | None] = mapped_column(String(2048))
+    total_posts: Mapped[int | None] = mapped_column(Integer)
+    last_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_post_title: Mapped[str | None] = mapped_column(String(500))
+    last_post_url: Mapped[str | None] = mapped_column(String(2048))
+    days_since_publication: Mapped[int | None] = mapped_column(Integer)
+    priority: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    validation_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    evidence: Mapped[list] = mapped_column(JSON, nullable=False)
+    errors: Mapped[list] = mapped_column(JSON, nullable=False)
+    __table_args__ = (
+        CheckConstraint("cms IN ('WordPress','other','unknown')", name="ck_website_cms"),
+        CheckConstraint("priority IN ('HIGH','MEDIUM','LOW','INCONCLUSIVE')", name="ck_website_priority"),
+        CheckConstraint("total_posts IS NULL OR total_posts >= 0", name="ck_website_total"),
+        CheckConstraint("days_since_publication IS NULL OR days_since_publication >= 0", name="ck_website_days"),
+    )
+
+
+class WebsiteQualificationJob(Base):
+    __tablename__ = "website_qualification_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    total: Mapped[int] = mapped_column(Integer, nullable=False)
+    processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("status IN ('queued','running','completed')", name="ck_website_job_status"),)
+
+
+class WebsiteQualificationItem(Base):
+    __tablename__ = "website_qualification_items"
+    job_id: Mapped[str] = mapped_column(ForeignKey("website_qualification_jobs.id", ondelete="CASCADE"), primary_key=True)
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), primary_key=True)
+    # Unique while queued/running, NULL on completion. Works on PostgreSQL/SQLite.
+    active_lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), unique=True)
+    source_website: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    error: Mapped[str | None] = mapped_column(String(80))
+    __table_args__ = (
+        CheckConstraint("status IN ('queued','running','completed','failed')", name="ck_website_item_status"),
+        CheckConstraint("active_lead_id IS NULL OR active_lead_id = lead_id", name="ck_website_item_active"),
+    )
+
+
 class CrmCompanyProfile(Base):
     """Commercial data shared by a company's opportunities, never its scrape run."""
     __tablename__ = "crm_company_profiles"

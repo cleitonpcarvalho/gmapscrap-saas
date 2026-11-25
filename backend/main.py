@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from io import StringIO
 from queue import Empty
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +24,9 @@ from backend.config import get_settings
 from backend.database import get_db, init_db
 from backend.niches import router as niches_router
 from backend.manual_crm import router as manual_crm_router
+from backend.website_qualification import router as website_qualification_router
+from backend.services import website_qualification_jobs
+from backend.models import LeadWebsiteQualification
 from backend.search_execution import locked_desktop_run, TERMINAL_SEARCH_STATES
 from backend.models import (
     CrmFunnel,
@@ -185,6 +188,7 @@ settings = get_settings()
 app = FastAPI(title="GmapScrap Web", version="0.1.0")
 app.include_router(niches_router)
 app.include_router(manual_crm_router)
+app.include_router(website_qualification_router)
 logger = logging.getLogger(__name__)
 STARTUP_MIGRATION_TIMEOUT_SECONDS = 60
 
@@ -220,6 +224,7 @@ def on_startup() -> None:
     start_email_campaign_scheduler()
     resume_running_whatsapp_campaigns()
     start_whatsapp_campaign_scheduler()
+    website_qualification_jobs.start_worker()
 
 
 def _startup_migration_timeout_seconds() -> int:
@@ -480,7 +485,7 @@ def _lead_tag_summaries(db: Session, lead_id: int) -> list[TagSummary]:
     return _lead_tag_summaries_by_lead_id(db, [lead_id]).get(lead_id, [])
 
 
-def _lead_read(db: Session, lead: Lead, tags: list[TagSummary] | None = None) -> LeadRead:
+def _lead_read(db: Session, lead: Lead, tags: list[TagSummary] | None = None, qualification: Any = ...) -> LeadRead:
     return LeadRead(
         id=lead.id,
         run_id=lead.run_id,
@@ -492,6 +497,7 @@ def _lead_read(db: Session, lead: Lead, tags: list[TagSummary] | None = None) ->
         website=lead.website,
         email=lead.email,
         site_insights=lead.site_insights,
+        website_qualification=website_qualification_jobs.result_data(db.get(LeadWebsiteQualification, lead.id)) if qualification is ... else qualification,
         whatsapp_validated=lead.whatsapp_validated,
         whatsapp_validated_at=lead.whatsapp_validated_at,
         whatsapp_validation_status=lead.whatsapp_validation_status,
@@ -993,6 +999,12 @@ def list_leads(
     niche: str | None = None,
     location: str | None = None,
     whatsapp_status: str | None = None,
+    cms: str | None = None,
+    blog: str | None = None,
+    priority: str | None = None,
+    inactive_days: Annotated[int | None, Query(ge=0, le=36500)] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 500,
+    offset: Annotated[int, Query(ge=0)] = 0,
     tag_ids: list[int] | None = Query(default=None),
     tag_filter_mode: str = "any",
     email_campaign_id: int | None = None,
@@ -1073,22 +1085,25 @@ def list_leads(
 
         query = _apply_tag_filter(query, normalized_tag_ids, normalized_tag_filter_mode)
 
-        return query
+        return website_qualification_jobs.filter_query(query, cms=cms, blog=blog, priority=priority, inactive_days=inactive_days)
 
     stmt = apply_filters(
-        select(Lead)
+        select(Lead, LeadWebsiteQualification)
         .options(contains_eager(Lead.search_run))
-        .join(SearchRun)
-        .order_by(desc(Lead.created_at))
+        .join(SearchRun, Lead.run_id == SearchRun.id)
+        .outerjoin(LeadWebsiteQualification, LeadWebsiteQualification.lead_id == Lead.id)
+        .order_by(desc(Lead.created_at), Lead.id)
     )
     total_count = db.scalar(select(func.count()).select_from(apply_filters(select(Lead.id).join(SearchRun)).subquery())) or 0
     if response is not None:
         response.headers["X-Total-Count"] = str(total_count)
-        response.headers["X-Result-Limit"] = "500"
+        response.headers["X-Result-Limit"] = str(limit)
 
-    leads = list(db.scalars(stmt.limit(500)).all())
+    rows = db.execute(stmt.offset(offset).limit(limit)).all()
+    leads = [row[0] for row in rows]
     tag_summaries_by_lead_id = _lead_tag_summaries_by_lead_id(db, [lead.id for lead in leads])
-    return [_lead_read(db, lead, tag_summaries_by_lead_id.get(lead.id, [])) for lead in leads]
+    qualifications = {row[0].id: website_qualification_jobs.result_data(row[1]) for row in rows}
+    return [_lead_read(db, lead, tag_summaries_by_lead_id.get(lead.id, []), qualifications.get(lead.id)) for lead in leads]
 
 
 @app.post("/api/leads/enrich-site-insights", response_model=LeadSiteInsightsEnrichmentResponse)
@@ -3028,27 +3043,23 @@ def stats(
 
 @app.get("/api/leads/export.csv")
 def export_leads(
+    cms: str | None = None, blog: str | None = None, priority: str | None = None,
+    inactive_days: Annotated[int | None, Query(ge=0, le=36500)] = None,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
 ) -> StreamingResponse:
     _ = username
-    output = StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Nicho", "Localidade", "Nome", "Endereço", "Telefone", "Site", "Email", "Insights do site"])
-
-    stmt = select(Lead).options(selectinload(Lead.search_run)).order_by(desc(Lead.created_at))
-    for lead in db.scalars(stmt).all():
-        writer.writerow([
-            lead.niche,
-            lead.location,
-            lead.name,
-            lead.address,
-            lead.phone,
-            lead.website or "",
-            lead.email,
-            lead.site_insights or "",
-        ])
-
-    output.seek(0)
+    from backend.services.qualification_exports import csv_bytes
+    output = csv_bytes(db, cms=cms, blog=blog, priority=priority, inactive_days=inactive_days)
     headers = {"Content-Disposition": "attachment; filename=leads.csv"}
-    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers=headers)
+    return StreamingResponse(iter([output]), media_type="text/csv", headers=headers)
+
+
+@app.get("/api/leads/export.xlsx")
+def export_leads_xlsx(cms: str | None = None, blog: str | None = None, priority: str | None = None,
+                     inactive_days: Annotated[int | None, Query(ge=0, le=36500)] = None,
+                     db: Session = Depends(get_db), username: str = Depends(require_user)):
+    from backend.services.qualification_exports import xlsx_bytes
+    return Response(xlsx_bytes(db, cms=cms, blog=blog, priority=priority, inactive_days=inactive_days),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=leads.xlsx"})

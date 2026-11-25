@@ -88,6 +88,7 @@ class LeadRead(BaseModel):
     website: str | None = None
     email: str
     site_insights: str | None = None
+    website_qualification: dict[str, Any] | None = None
     whatsapp_validated: bool | None = None
     whatsapp_validated_at: datetime | None = None
     whatsapp_validation_status: str | None = None
