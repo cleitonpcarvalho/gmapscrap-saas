@@ -166,7 +166,10 @@ def test_mouse_selection_and_outside_click_close_popup(window):
         assert QTest.qWaitForWindowActive(window, 5000)
     QApplication.processEvents()
     QTest.mouseClick(window.niche_input, Qt.MouseButton.LeftButton)
-    QTest.mouseClick(window.location_input, Qt.MouseButton.LeftButton)
+    # Route through the native window so Qt's popup mouse grab sees the outside
+    # click. Sending directly to QLineEdit bypasses that routing on Linux.
+    QTest.mouseClick(window.windowHandle(), Qt.MouseButton.LeftButton,
+                     pos=window.location_input.mapTo(window, window.location_input.rect().center()))
     QApplication.processEvents()
     assert not popup.isVisible()
 
