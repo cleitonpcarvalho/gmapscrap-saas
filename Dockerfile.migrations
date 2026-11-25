@@ -4,6 +4,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_CREATE=false \
+    VIRTUAL_ENV=/opt/migration \
     PATH=/opt/migration/bin:$PATH
 
 RUN apt-get update \
@@ -18,4 +19,6 @@ COPY backend ./backend
 COPY migrations/20261124_crm_company_profiles.sql migrations/20261124_desktop_execution.sql ./migrations/
 COPY scripts/production_migrations.py ./scripts/
 USER postgres
+RUN python -c "import psycopg, sqlalchemy, fastapi, httpx; import backend.models" \
+    && pg_dump --version && pg_restore --version
 ENTRYPOINT ["python", "/app/scripts/production_migrations.py"]
