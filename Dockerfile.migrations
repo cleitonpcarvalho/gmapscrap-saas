@@ -1,0 +1,21 @@
+FROM postgres:17-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    PATH=/opt/migration/bin:$PATH
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/migration \
+    && pip install --no-cache-dir poetry==2.2.1
+WORKDIR /app
+COPY pyproject.toml poetry.lock ./
+RUN poetry install --no-root
+COPY backend ./backend
+COPY migrations/20261124_crm_company_profiles.sql migrations/20261124_desktop_execution.sql ./migrations/
+COPY scripts/production_migrations.py ./scripts/
+USER postgres
+ENTRYPOINT ["python", "/app/scripts/production_migrations.py"]

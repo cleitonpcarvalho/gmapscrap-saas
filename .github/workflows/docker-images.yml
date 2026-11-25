@@ -2,9 +2,24 @@ name: Build and publish Docker images
 
 on:
   push:
-    branches:
-      - main
+    branches: [main, deploy-whatsapp-crm]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Prepare runs backup, restore rehearsal and migrations without deployment
+        type: choice
+        options: [prepare, deploy]
+        default: prepare
+      verified_server_search_ids:
+        description: Legacy active IDs explicitly verified as SERVER searches; comma-separated or empty
+        type: string
+        default: ''
+
+concurrency:
+  group: gmapscrap-production-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -14,10 +29,74 @@ env:
   REGISTRY: ghcr.io
   BACKEND_IMAGE: ghcr.io/cleitonpcarvalho/gmapscrap-saas-backend
   FRONTEND_IMAGE: ghcr.io/cleitonpcarvalho/gmapscrap-saas-frontend
+  MIGRATIONS_IMAGE: ghcr.io/cleitonpcarvalho/gmapscrap-saas-migrations
   NEXT_PUBLIC_API_BASE_URL: https://api.automasoluct.com.br
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test_admin
+          POSTGRES_PASSWORD: isolated-test-only
+          POSTGRES_DB: postgres
+        ports: ['55488:5432']
+        options: >-
+          --health-cmd "pg_isready -U test_admin -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      lead-security-postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: security_admin
+          POSTGRES_PASSWORD: isolated-security-test-only
+          POSTGRES_DB: postgres
+        ports: ['55489:5432']
+        options: >-
+          --health-cmd "pg_isready -U security_admin -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      DATABASE_URL: sqlite://
+      DB_HOST: ''
+      DB_NAME: ''
+      DB_USER: ''
+      QT_QPA_PLATFORM: offscreen
+      GMAPSCRAP_TEST_POSTGRES_URL: postgresql+psycopg://test_admin:isolated-test-only@127.0.0.1:55488/postgres
+      GMAPSCRAP_TEST_LEAD_SECURITY_URL: postgresql+psycopg://security_admin:isolated-security-test-only@127.0.0.1:55489/postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install locked dependencies and desktop test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libopengl0 libxkbcommon0 postgresql-17
+          echo '/usr/lib/postgresql/17/bin' >> "$GITHUB_PATH"
+          python -m pip install poetry==2.2.1
+          poetry config virtualenvs.create false
+          poetry install --no-root
+          python -m pip install 'PySide6>=6.7,<7.0'
+          npm ci --prefix frontend
+      - name: Backend, PostgreSQL, CRM drag-and-drop and desktop regressions
+        run: python -m pytest -q
+      - name: Frontend tests and types
+        working-directory: frontend
+        run: |
+          npm test
+          npx tsc --noEmit
+
   build-and-publish:
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -39,11 +118,9 @@ jobs:
             --pull \
             --file Dockerfile.backend \
             --label org.opencontainers.image.source=https://github.com/cleitonpcarvalho/gmapscrap-saas \
-            --label org.opencontainers.image.description="GmapScrap SaaS backend" \
-            --tag "${BACKEND_IMAGE}:latest" \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
             --tag "${BACKEND_IMAGE}:${GITHUB_SHA}" \
             .
-          docker push "${BACKEND_IMAGE}:latest"
           docker push "${BACKEND_IMAGE}:${GITHUB_SHA}"
 
       - name: Build and push frontend image
@@ -53,18 +130,50 @@ jobs:
             --file ./frontend/Dockerfile \
             --build-arg NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL}" \
             --label org.opencontainers.image.source=https://github.com/cleitonpcarvalho/gmapscrap-saas \
-            --label org.opencontainers.image.description="GmapScrap SaaS frontend" \
-            --tag "${FRONTEND_IMAGE}:latest" \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
             --tag "${FRONTEND_IMAGE}:${GITHUB_SHA}" \
             ./frontend
-          docker push "${FRONTEND_IMAGE}:latest"
           docker push "${FRONTEND_IMAGE}:${GITHUB_SHA}"
-      - name: Deploy na VPS
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Build and push migration/backup tools
+        run: |
+          set -euo pipefail
+          docker build --pull --file Dockerfile.migrations \
+            --label org.opencontainers.image.source=https://github.com/cleitonpcarvalho/gmapscrap-saas \
+            --label org.opencontainers.image.revision="${GITHUB_SHA}" \
+            --tag "${MIGRATIONS_IMAGE}:${GITHUB_SHA}" .
+          docker push "${MIGRATIONS_IMAGE}:${GITHUB_SHA}"
+
+  migrate-and-deploy:
+    needs: [test, build-and-publish]
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'prepare')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage orchestration (contains no credentials)
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          source: scripts/production_release.py,scripts/production_smoke.py
+          target: /tmp/gmapscrap-release-${{ github.sha }}
+      - name: Backup, restore rehearsal, pending migrations, then deployment
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'prepare' && 'prepare' || 'deploy' }}
+          VERIFIED_SERVER_SEARCH_IDS: ${{ inputs.verified_server_search_ids || '' }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: RELEASE_SHA,RELEASE_MODE,VERIFIED_SERVER_SEARCH_IDS
+          command_timeout: 40m
+          script_stop: true
           script: |
-            docker service update --with-registry-auth --force --image ${{ env.BACKEND_IMAGE }}:latest gmapscrap_backend
-            docker service update --with-registry-auth --force --image ${{ env.FRONTEND_IMAGE }}:latest gmapscrap_frontend
+            set -eu
+            python3 "/tmp/gmapscrap-release-${RELEASE_SHA}/scripts/production_release.py" \
+              --release "${RELEASE_SHA}" --mode "${RELEASE_MODE}" \
+              --verified-server-search-ids "${VERIFIED_SERVER_SEARCH_IDS}"

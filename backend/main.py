@@ -200,7 +200,15 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
-    migration_ok = _run_startup_migration_with_timeout(_startup_migration_timeout_seconds())
+    if os.getenv("GMAPSCRAP_SCHEMA_MANAGED") == "1":
+        from backend.deployment_schema import validate_deployment_schema
+
+        # Production DDL belongs to the backup/restore-tested release gate.
+        # Failure here aborts startup instead of serving in degraded mode.
+        validate_deployment_schema()
+        migration_ok = True
+    else:
+        migration_ok = _run_startup_migration_with_timeout(_startup_migration_timeout_seconds())
     if not migration_ok:
         logger.error(
             "Aplicação iniciada em modo degradado: migração inicial do banco falhou ou excedeu o tempo limite. "
@@ -701,7 +709,10 @@ def _find_existing_desktop_lead(db: Session, run_id: int, lead: MapLead) -> Lead
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    result = {"status": "ok"}
+    if os.getenv("GMAPSCRAP_RELEASE_SHA"):
+        result["version"] = os.environ["GMAPSCRAP_RELEASE_SHA"]
+    return result
 
 
 @app.get("/api/email/open/{send_id}.png")
