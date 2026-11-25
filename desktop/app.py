@@ -4,7 +4,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QStringListModel, QThread, QTimer, Qt
+from PySide6.QtCore import QLockFile, QStandardPaths, QStringListModel, QThread, QTimer, Qt
 from PySide6.QtGui import QBrush, QColor, QCloseEvent, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -16,11 +16,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QLineEdit,
     QMainWindow,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QTableWidget,
@@ -29,9 +31,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from desktop.api_client import ApiClientError, GmapScrapApiClient
+from desktop.api_client import search_status
 from desktop.worker import SearchWorker
 from desktop.niches import NicheWorker
+from desktop.widgets import NicheInput
+from desktop.state import pending_search
+from desktop.history import HistoryWorker
 from backend.services.text_normalization import normalize_label
 
 
@@ -50,7 +55,11 @@ class MainWindow(QMainWindow):
         self.worker: SearchWorker | None = None
         self.current_run: dict | None = None
         self.niche_thread: NicheWorker | None = None
+        self.history_thread: HistoryWorker | None = None
         self.registered_niches: list[dict] = []
+        self._command_pending = None
+        self._close_requested = False
+        self._stop_after_finish = False
 
         self.setWindowTitle("GmapScrap Desktop")
         self.setWindowIcon(QIcon(asset_path("gmapscrap-favicon.png")))
@@ -59,6 +68,11 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._apply_style()
+        pending = pending_search()
+        if pending:
+            self._update_run(pending)
+            self._set_running(False)
+            self._append_log("Estado da busca ainda não sincronizado. Use Tentar sincronizar antes de iniciar outra busca.")
         QTimer.singleShot(300, self.refresh_history)
         QTimer.singleShot(350, self.refresh_niches)
 
@@ -110,9 +124,19 @@ class MainWindow(QMainWindow):
         body.setSpacing(18)
 
         form_card = self._card()
-        form_layout = QVBoxLayout(form_card)
+        form_outer = QVBoxLayout(form_card)
+        form_outer.setContentsMargins(0, 0, 0, 0)
+        form_content = QWidget()
+        form_layout = QVBoxLayout(form_content)
+        form_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         form_layout.setContentsMargins(24, 22, 24, 24)
         form_layout.setSpacing(16)
+        form_scroll = QScrollArea()
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        form_scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        form_scroll.setWidget(form_content)
+        form_outer.addWidget(form_scroll, 1)
 
         form_heading = QLabel("Nova busca")
         form_heading.setObjectName("eyebrow")
@@ -121,7 +145,7 @@ class MainWindow(QMainWindow):
         form_layout.addWidget(form_heading)
         form_layout.addWidget(form_title)
 
-        self.niche_input = QLineEdit()
+        self.niche_input = NicheInput()
         self.niche_input.setPlaceholderText("Ex.: pressure washing")
         self.niche_input.setMaxLength(255)
         self.niche_model = QStringListModel(self)
@@ -131,6 +155,7 @@ class MainWindow(QMainWindow):
         self.niche_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         self.niche_input.setCompleter(self.niche_completer)
         self.niche_input.textChanged.connect(self._sync_niche_actions)
+        self.niche_input.textEdited.connect(lambda: self.niche_input.show_suggestions())
         self.location_input = QLineEdit()
         self.location_input.setPlaceholderText("Ex.: Anchorage, AK")
         self.quantity_input = QSpinBox()
@@ -188,13 +213,19 @@ class MainWindow(QMainWindow):
         self.start_button = QPushButton("Iniciar busca")
         self.start_button.setObjectName("primaryButton")
         self.start_button.clicked.connect(self.start_search)
-        self.stop_button = QPushButton("Pausar")
+        self.pause_button = QPushButton("Pausar")
+        self.pause_button.setObjectName("secondaryButton")
+        self.pause_button.setEnabled(False)
+        self.pause_button.clicked.connect(self.handle_secondary_action)
+        button_row.addWidget(self.start_button, 1)
+        button_row.addWidget(self.pause_button)
+        self.stop_button = QPushButton("Parar busca")
         self.stop_button.setObjectName("secondaryButton")
         self.stop_button.setEnabled(False)
-        self.stop_button.clicked.connect(self.handle_secondary_action)
-        button_row.addWidget(self.start_button, 1)
+        self.stop_button.clicked.connect(self.stop_search)
         button_row.addWidget(self.stop_button)
-        form_layout.addLayout(button_row)
+        button_row.setContentsMargins(16, 0, 16, 20)
+        form_outer.addLayout(button_row)
         form_layout.addStretch()
 
         right = QVBoxLayout()
@@ -303,6 +334,7 @@ class MainWindow(QMainWindow):
             }
             QLabel {
                 background: transparent;
+                color: #13201d;
             }
             QFrame#card {
                 background: #ffffff;
@@ -407,6 +439,9 @@ class MainWindow(QMainWindow):
                 padding: 0 18px;
                 font-size: 15px;
                 font-weight: 850;
+                color: #006879;
+                background: #ffffff;
+                border: 1px solid #d8e4df;
             }
             QPushButton#primaryButton {
                 background: #008996;
@@ -527,6 +562,8 @@ class MainWindow(QMainWindow):
         self.enrich_site_insights_checkbox.setEnabled(fields_enabled and not only_without_website)
 
     def start_search(self) -> None:
+        if self.thread is not None or (self.current_run and (search_status(self.current_run) == "paused" or self.current_run.get("sync_pending"))):
+            return
         niche = self.niche_input.text().strip()
         location = self.location_input.text().strip()
         max_results = self.max_checkbox.isChecked()
@@ -571,7 +608,10 @@ class MainWindow(QMainWindow):
         *,
         run_id: int | None = None,
         start_index: int = 1,
+        finalize_only: bool = False,
     ) -> None:
+        if self.thread is not None:
+            return
         self.thread = QThread(self)
         self.worker = SearchWorker(
             niche,
@@ -584,7 +624,11 @@ class MainWindow(QMainWindow):
             enrich_site_insights=enrich_site_insights,
             run_id=run_id,
             start_index=start_index,
+            finalize_only=finalize_only,
+            initial_run=self.current_run if finalize_only else None,
         )
+        if finalize_only:
+            self.worker.control.request(self._command_pending or "stopped")
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.log.connect(self._append_log)
@@ -597,6 +641,9 @@ class MainWindow(QMainWindow):
         self.thread.start()
 
     def handle_secondary_action(self) -> None:
+        if self.current_run and self.current_run.get("sync_pending") and self.thread is None:
+            self._finalize_current(search_status(self.current_run))
+            return
         if self.thread and self.thread.isRunning():
             self.pause_search()
             return
@@ -605,12 +652,32 @@ class MainWindow(QMainWindow):
             self.resume_search()
 
     def pause_search(self) -> None:
-        if self.worker:
-            self.worker.stop()
+        if self.worker and self._command_pending is None:
+            self._command_pending = "paused"
+            self.worker.pause()
+            self.pause_button.setEnabled(False)
+
+    def stop_search(self) -> None:
+        if self._command_pending == "stopped":
+            return
+        if self.worker is not None:
+            self._command_pending = "stopped"
+            if not self.worker.stop():
+                self._stop_after_finish = True
+            self.pause_button.setEnabled(False)
             self.stop_button.setEnabled(False)
+            self.current_message.setText("Parando busca e encerrando o navegador...")
+        elif self.current_run and (search_status(self.current_run) == "paused" or self.current_run.get("sync_pending")):
+            self._finalize_current("stopped")
+
+    def _finalize_current(self, status):
+        self._command_pending = status
+        self._set_running(True)
+        self._start_worker("", "", None, False, True, False, False, False,
+                           run_id=self.current_run.get("id"), finalize_only=True)
 
     def resume_search(self) -> None:
-        if not self.current_run:
+        if self.thread is not None or not self.current_run or search_status(self.current_run) != "paused" or self.current_run.get("sync_pending"):
             return
 
         run_id = int(self.current_run["id"])
@@ -657,6 +724,7 @@ class MainWindow(QMainWindow):
         self.registered_niches = sorted(items, key=lambda item: item["name"].casefold())
         self.niche_model.setStringList([item["name"] for item in self.registered_niches])
         self._sync_niche_actions()
+        self.niche_input.show_suggestions()
 
     def _niche_created(self, item: dict) -> None:
         self._load_niche_suggestions([entry for entry in self.registered_niches if entry["id"] != item["id"]] + [item])
@@ -691,31 +759,42 @@ class MainWindow(QMainWindow):
         self._start_niche_request(name=name)
 
     def refresh_history(self) -> None:
-        try:
-            client = GmapScrapApiClient.from_environment()
-            searches = client.list_searches()
-        except ApiClientError as exc:
-            self.connection_label.setText("Offline")
-            self._append_log(f"Histórico indisponível: {exc}")
+        if self.history_thread is not None:
             return
+        worker = HistoryWorker(self)
+        self.history_thread = worker
+        worker.loaded.connect(self._history_loaded)
+        worker.failed.connect(self._history_failed)
+        worker.finished.connect(self._history_finished)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
 
+    def _history_loaded(self, searches):
         self.connection_label.setText("Online")
         self._fill_history(searches[:8])
 
+    def _history_failed(self, message):
+        self.connection_label.setText("Offline")
+        self._append_log(f"Histórico indisponível: {message}")
+
+    def _history_finished(self):
+        self.history_thread = None
+        if self._close_requested:
+            self.close()
+
     def _set_running(self, running: bool) -> None:
-        paused = bool(self.current_run and self.current_run.get("status") == "paused")
-        self.start_button.setEnabled(not running)
-        self.stop_button.setEnabled(running or paused)
-        self.stop_button.setText("Pausar" if running else ("Retomar" if paused else "Pausar"))
-        if paused and not running:
-            self.start_button.setEnabled(False)
-        fields_enabled = not running and not paused
-        self.niche_input.setEnabled(fields_enabled)
-        self.location_input.setEnabled(fields_enabled)
+        busy = running or self.thread is not None
+        paused = bool(self.current_run and search_status(self.current_run) == "paused")
+        pending = bool(self.current_run and self.current_run.get("sync_pending"))
+        self.start_button.setEnabled(not busy and not paused and not pending)
+        self.pause_button.setEnabled((busy and self._command_pending is None) or (not busy and (paused or pending)))
+        self.pause_button.setText("Tentar sincronizar" if pending and not busy else ("Retomar" if paused and not busy else "Pausar"))
+        self.stop_button.setEnabled((busy or paused or pending) and self._command_pending != "stopped")
+        fields_enabled = not busy and not paused and not pending
+        for field in (self.niche_input, self.location_input, self.max_checkbox,
+                      self.only_without_website_checkbox, self.validate_whatsapp_checkbox):
+            field.setEnabled(fields_enabled)
         self.quantity_input.setEnabled(fields_enabled and not self.max_checkbox.isChecked())
-        self.max_checkbox.setEnabled(fields_enabled)
-        self.only_without_website_checkbox.setEnabled(fields_enabled)
-        self.validate_whatsapp_checkbox.setEnabled(fields_enabled)
         self._sync_website_option_state(fields_enabled=fields_enabled)
 
     def _reset_current(self) -> None:
@@ -743,11 +822,13 @@ class MainWindow(QMainWindow):
         self._set_metric(self.skipped_value, skipped)
         self.current_message.setText(message or "Busca em andamento...")
 
-        status = str(run.get("status") or "running")
+        status = str(search_status(run) or "running")
         if status == "completed":
             self._set_status("Concluída", "#dff8e9", "#16834a")
         elif status == "failed":
             self._set_status("Falhou", "#ffe0df", "#ba2624")
+        elif status == "stopped":
+            self._set_status("Parada", "#eef0f3", "#5f6872")
         elif status == "paused":
             self._set_status("Pausada", "#eef0f3", "#5f6872")
         else:
@@ -762,11 +843,13 @@ class MainWindow(QMainWindow):
                 self.progress_bar.setFormat(f"Concluída: {saved}/{target_value} salvos")
             elif status == "failed":
                 self.progress_bar.setFormat(f"Falhou: {saved}/{target_value} salvos")
+            elif status == "stopped":
+                self.progress_bar.setFormat(f"Parada: {saved}/{target_value} salvos")
             elif status == "paused":
                 self.progress_bar.setFormat(f"Pausada: {saved}/{target_value} salvos")
             else:
                 self.progress_bar.setFormat(f"{saved}/{target_value} salvos")
-        elif status in {"completed", "failed", "paused"}:
+        elif status in {"completed", "failed", "paused", "stopped"}:
             self.progress_bar.setRange(0, 1)
             self.progress_bar.setValue(1)
             self.progress_bar.setFormat(_status_label(status))
@@ -778,7 +861,9 @@ class MainWindow(QMainWindow):
         self._append_log(message)
         self.current_message.setText(message)
         self._set_running(False)
-        if ok:
+        if self.current_run and search_status(self.current_run) == "stopped":
+            self._set_status("Parada", "#eef0f3", "#5f6872")
+        elif ok:
             self._set_status("Concluída", "#dff8e9", "#16834a")
         elif self.current_run and self.current_run.get("status") == "paused":
             self._set_status("Pausada", "#eef0f3", "#5f6872")
@@ -806,7 +891,7 @@ class MainWindow(QMainWindow):
         self.history_table.setRowCount(len(searches))
         for row, item in enumerate(searches):
             query = f"{item.get('niche', '')} · {item.get('location', '')}"
-            status = str(item.get("status") or "")
+            status = str(search_status(item) or "")
             saved = str(item.get("saved_count") or 0)
             created = _format_date(str(item.get("created_at") or ""))
 
@@ -819,16 +904,38 @@ class MainWindow(QMainWindow):
     def _clear_worker_refs(self) -> None:
         self.thread = None
         self.worker = None
+        self._command_pending = None
+        self._set_running(False)
+        if self._stop_after_finish:
+            self._stop_after_finish = False
+            if self.current_run and (search_status(self.current_run) == "paused" or self.current_run.get("sync_pending")):
+                self._finalize_current("stopped")
+                return
+        if self._close_requested and not (self.current_run and self.current_run.get("sync_pending")):
+            self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self.history_thread is not None and self.history_thread.isRunning():
+            self._close_requested = True
+            if self.worker:
+                self.pause_search()
+            event.ignore()
+            return
         if self.niche_thread is not None and self.niche_thread.isRunning():
             self._append_log("Aguarde a consulta de nichos terminar antes de fechar.")
             event.ignore()
             return
         if self.worker and self.thread and self.thread.isRunning():
-            self.worker.stop()
-            self.thread.quit()
-            self.thread.wait(2500)
+            self._close_requested = True
+            if self._command_pending != "stopped":
+                self.pause_search()
+            self._append_log("Aguarde o encerramento seguro da busca antes de fechar.")
+            event.ignore()
+            return
+        if self.current_run and self.current_run.get("sync_pending"):
+            self._append_log("Sincronize o estado da busca antes de fechar.")
+            event.ignore()
+            return
         event.accept()
 
 
@@ -839,6 +946,7 @@ def _status_label(status: str) -> str:
         "paused": "Pausada",
         "completed": "Concluída",
         "failed": "Falhou",
+        "stopped": "Parada",
     }
     return labels.get(status, status or "-")
 
@@ -856,6 +964,10 @@ def _format_date(raw: str) -> str:
 
 def main() -> int:
     app = QApplication(sys.argv)
+    lock = QLockFile(str(Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.TempLocation)) / "br.com.automasoluct.gmapscrap.lock"))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(0):
+        return 0
     app.setApplicationName("GmapScrap")
     app.setApplicationDisplayName("GmapScrap")
     app.setOrganizationName("Automa Soluct")

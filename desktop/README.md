@@ -49,3 +49,12 @@ PYTHON_BIN=/tmp/gmapscrap-macos-build-venv/bin/python desktop/build_macos_app.sh
 ```
 
 O aplicativo fica em `desktop/dist/GmapScrap.app`.
+
+## Controles de busca
+
+Clique no campo **Nicho** para abrir a lista completa; digite para filtrar ou
+informe um nicho livre. **Pausar** mantém a execução para **Retomar**.
+**Parar busca** encerra definitivamente a execução, preservando os leads salvos.
+Se a API estiver indisponível, use **Tentar sincronizar** antes de iniciar outra
+busca. Detalhes de compatibilidade e atualização local do backend estão em
+[controles do desktop](../docs/desktop-search-controls.md).

@@ -84,3 +84,49 @@ def test_niche_client_uses_shared_authenticated_api(monkeypatch) -> None:
         ("GET", "/api/niches", {"params": {"q": "brin"}, "timeout": 20}),
         ("POST", "/api/niches", {"json": {"name": "Brindes"}, "timeout": 20}),
     ]
+
+
+def test_stop_uses_legacy_terminal_fallback_only_for_validation_failure(monkeypatch):
+    from desktop.api_client import ApiClientError, STOPPED_ERROR, search_status
+    client = GmapScrapApiClient(ApiConfig("https://example.test", "u", "p"))
+    calls = []
+    def update(run_id, **kw):
+        calls.append(kw)
+        if kw["status"] == "stopped":
+            raise ApiClientError("unsupported status", 422)
+        return kw
+    monkeypatch.setattr(client, "update_search", update)
+    run = client.stop_search(1, scanned_count=7)
+    assert [call["status"] for call in calls] == ["stopped", "failed"]
+    assert run["error"] == STOPPED_ERROR
+    assert search_status(run) == "stopped"
+    assert run["scanned_count"] == 7
+
+
+def test_stop_does_not_disguise_auth_or_network_errors(monkeypatch):
+    import pytest
+    from desktop.api_client import ApiClientError
+    client = GmapScrapApiClient(ApiConfig("https://example.test", "u", "p"))
+    monkeypatch.setattr(client, "update_search", lambda *a, **k: (_ for _ in ()).throw(ApiClientError("unauthorized", 401)))
+    with pytest.raises(ApiClientError) as exc:
+        client.stop_search(1)
+    assert exc.value.status_code == 401
+
+
+def test_creation_is_never_automatically_retried_on_legacy_api(monkeypatch):
+    import pytest
+    from desktop.api_client import ApiClientError
+    client = GmapScrapApiClient(ApiConfig("https://example.test", "u", "p"))
+    client._authenticated = True
+    class Session:
+        calls = 0
+        def request(self, *a, **kw):
+            self.calls += 1
+            raise requests.ConnectionError("lost reply")
+        def close(self):
+            pass
+    session = Session()
+    client.session = session
+    with pytest.raises(ApiClientError):
+        client.create_search("Livre", "Fortaleza", 5, False, False, False)
+    assert session.calls == 1

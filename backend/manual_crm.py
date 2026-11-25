@@ -13,8 +13,9 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from backend.auth import get_current_username
 from backend.database import get_db
-from backend.models import CrmActivity, CrmFollowUp, CrmFunnel, CrmFunnelStage, CrmLead, CrmStageHistory, Lead, LeadTag, SearchRun
+from backend.models import CrmActivity, CrmCompanyProfile, CrmFollowUp, CrmFunnel, CrmFunnelStage, CrmLead, CrmStageHistory, Lead, LeadTag, SearchRun
 from backend.services.crm import move_crm_lead
+from backend.services.crm_companies import load_profiles, profile_read, profiles_available
 from backend.services.whatsapp_validation import normalize_phone_e164
 
 
@@ -38,10 +39,21 @@ class AddCards(Input):
         return list(dict.fromkeys(value))
 
 
+class LeadEligibility(Input):
+    funnel_id: int = Field(gt=0)
+    lead_ids: list[int] = Field(max_length=1000)
+
+    @field_validator("lead_ids")
+    @classmethod
+    def positive_ids(cls, value):
+        return AddCards.positive_ids(value)
+
+
 class CardUpdate(Input):
     version: int = Field(ge=1)
     managed_manually: Literal[True] | None = None
     stage_id: int | None = Field(default=None, gt=0)
+    position: int = Field(default=0, ge=0)
     estimated_value: Decimal | None = Field(default=None, ge=0, max_digits=14, decimal_places=2, allow_inf_nan=False)
     currency: Currency | None = None
     sales_outcome: Literal["open", "won", "lost"] | None = None
@@ -130,12 +142,15 @@ def follow_read(item):
             "created_at": utc(item.created_at), "completed_at": utc(item.completed_at) if item.completed_at else None}
 
 
-def lead_read(item):
+def lead_read(item, profiles=None):
+    profile = profiles.get(item.id) if profiles is not None else None
     normalized = normalize_phone_e164(item.phone, f"{item.address} {item.location}")
     website = item.website or ""
     website = website if website.startswith(("https://", "http://")) else ("https://" + website if website else "")
     return {"id": item.id, "name": item.name, "address": item.address, "phone": item.phone, "email": item.email,
-            "website": website, "niche": item.niche, "location": item.location,
+            "website": website, "niche": profile.niche_override if profile and profile.niche_override else item.niche,
+            "location": profile.location_override if profile and profile.location_override else item.location,
+            "commercial_profile": profile_read(profile, available=profiles is not None),
             "call_url": "tel:" + normalized if normalized else "",
             "whatsapp_url": "https://wa.me/" + normalized.lstrip("+") if normalized else "",
             "tags": [{"id": tag.id, "name": tag.name, "color": tag.color} for tag in item.tags],
@@ -143,8 +158,12 @@ def lead_read(item):
                            "created_at": utc(item.search_run.created_at), "status": item.search_run.status}}
 
 
-def card_read(item, next_follow=None):
-    return {"id": item.id, "lead": lead_read(item.lead), "funnel_id": item.funnel_id,
+def card_read(item, next_follow=None, profiles=None):
+    # Mutation responses are single-card; list endpoints pass one bulk load.
+    if profiles is None:
+        from sqlalchemy.orm import object_session
+        profiles = load_profiles(object_session(item), [item.lead_id])
+    return {"id": item.id, "lead": lead_read(item.lead, profiles), "funnel_id": item.funnel_id,
             "funnel_name": item.funnel.name, "stage_id": item.stage_id, "stage_label": item.stage_ref.label,
             "stage_color": item.stage_ref.color, "managed_manually": item.managed_manually,
             "qualification_notes": item.qualification_notes, "estimated_value": str(item.estimated_value) if item.estimated_value is not None else None,
@@ -153,22 +172,74 @@ def card_read(item, next_follow=None):
             "position": item.position, "next_follow_up": follow_read(next_follow) if next_follow else None}
 
 
-@router.get("/leads")
-def find_leads(q: str = Query(default="", max_length=255), niche: str = Query(default="", max_length=255),
-               location: str = Query(default="", max_length=255), tag_ids: list[int] | None = Query(default=None),
-               offset: int = Query(default=0, ge=0), limit: int = Query(default=30, ge=1, le=100), db: Session = Depends(get_db)):
+def require_funnel(db, funnel_id):
+    if funnel_id is not None and db.get(CrmFunnel, funnel_id) is None:
+        raise HTTPException(404, "Funil não encontrado. Atualize os funis disponíveis.")
+
+
+def pipeline_membership(funnel_id):
+    return select(CrmLead.id).where(CrmLead.lead_id == Lead.id, CrmLead.funnel_id == funnel_id).correlate(Lead).exists()
+
+
+def filtered_leads(db, q, niche, location, tag_ids, funnel_id=None, show_added=False):
+    """Pagination and bulk selection must always apply identical server filters."""
     query = select(Lead).join(SearchRun)
+    niche_column, location_column = SearchRun.niche, SearchRun.location
+    if profiles_available(db):
+        query = query.outerjoin(CrmCompanyProfile, CrmCompanyProfile.lead_id == Lead.id)
+        niche_column = func.coalesce(CrmCompanyProfile.niche_override, SearchRun.niche)
+        location_column = func.coalesce(CrmCompanyProfile.location_override, SearchRun.location)
     if q.strip():
         query = query.where(Lead.name.icontains(q.strip(), autoescape=True))
     if niche.strip():
-        query = query.where(SearchRun.niche.icontains(niche.strip(), autoescape=True))
+        query = query.where(niche_column.icontains(niche.strip(), autoescape=True))
     if location.strip():
-        query = query.where(SearchRun.location.icontains(location.strip(), autoescape=True))
+        query = query.where(location_column.icontains(location.strip(), autoescape=True))
     if tag_ids:
         query = query.where(Lead.id.in_(select(LeadTag.lead_id).where(LeadTag.tag_id.in_(tag_ids))))
+    if funnel_id is not None and not show_added:
+        query = query.where(~pipeline_membership(funnel_id))
+    return query
+
+
+@router.post("/lead-eligibility")
+def check_lead_eligibility(payload: LeadEligibility, db: Session = Depends(get_db)):
+    """Read-only: revalidate retained selections without URL-length/page limits."""
+    require_funnel(db, payload.funnel_id)
+    eligible = set(db.scalars(select(Lead.id).where(Lead.id.in_(payload.lead_ids), ~pipeline_membership(payload.funnel_id))).all())
+    return {"lead_ids": [lead_id for lead_id in payload.lead_ids if lead_id in eligible]}
+
+
+@router.get("/lead-selection")
+def select_leads(q: str = Query(default="", max_length=255), niche: str = Query(default="", max_length=255),
+                 location: str = Query(default="", max_length=255), tag_ids: list[int] | None = Query(default=None),
+                 funnel_id: int | None = Query(default=None, gt=0),
+                 db: Session = Depends(get_db)):
+    require_funnel(db, funnel_id)
+    query = filtered_leads(db, q, niche, location, tag_ids, funnel_id)
     total = db.scalar(select(func.count()).select_from(query.subquery()))
+    ids = db.scalars(query.with_only_columns(Lead.id).order_by(Lead.id).limit(1000)).all()
+    return {"lead_ids": ids, "total": total, "limit": 1000}
+
+
+@router.get("/leads")
+def find_leads(q: str = Query(default="", max_length=255), niche: str = Query(default="", max_length=255),
+               location: str = Query(default="", max_length=255), tag_ids: list[int] | None = Query(default=None),
+               funnel_id: int | None = Query(default=None, gt=0), show_added: bool = False,
+               offset: int = Query(default=0, ge=0), limit: int = Query(default=30, ge=1, le=100), db: Session = Depends(get_db)):
+    require_funnel(db, funnel_id)
+    matching = filtered_leads(db, q, niche, location, tag_ids, funnel_id, show_added=True)
+    eligible = matching.where(~pipeline_membership(funnel_id)) if funnel_id is not None else matching
+    matching_total = db.scalar(select(func.count()).select_from(matching.subquery()))
+    available_total = db.scalar(select(func.count()).select_from(eligible.subquery())) if funnel_id is not None else matching_total
+    query = matching if show_added else eligible
+    total = matching_total if show_added else available_total
     items = db.scalars(query.options(selectinload(Lead.search_run), selectinload(Lead.tags)).order_by(Lead.id).offset(offset).limit(limit)).all()
-    return {"items": [lead_read(item) for item in items], "total": total, "offset": offset, "limit": limit}
+    profiles = load_profiles(db, [item.id for item in items])
+    imported = set(db.scalars(select(CrmLead.lead_id).where(CrmLead.funnel_id == funnel_id, CrmLead.lead_id.in_([item.id for item in items]))).all()) if funnel_id is not None else set()
+    return {"items": [{**lead_read(item, profiles), "already_in_pipeline": item.id in imported} for item in items],
+            "total": total, "available_total": available_total, "matching_total": matching_total,
+            "already_added_total": matching_total - available_total, "offset": offset, "limit": limit}
 
 
 @router.post("/cards")
@@ -208,7 +279,8 @@ def list_cards(funnel_id: int = Query(gt=0), db: Session = Depends(get_db)):
     next_by_card = {}
     for follow in pending:
         next_by_card.setdefault(follow.crm_lead_id, follow)
-    return [card_read(item, next_by_card.get(item.id)) for item in items]
+    profiles = load_profiles(db, [item.lead_id for item in items])
+    return [card_read(item, next_by_card.get(item.id), profiles) for item in items]
 
 
 @router.get("/cards/{card_id}")
@@ -227,24 +299,41 @@ def get_card(card_id: int, db: Session = Depends(get_db)):
 
 @router.patch("/cards/{card_id}")
 def update_card(card_id: int, payload: CardUpdate, db: Session = Depends(get_db), actor: str = Depends(get_current_username)):
+    values = payload.model_dump(exclude_unset=True)
+    moving = "stage_id" in values or "position" in values
+    if moving:
+        # Match additions/transfers: pipeline first, then cards. Keep neighbor
+        # position normalization and the version check in one transaction.
+        pipeline_id = db.scalar(select(CrmLead.funnel_id).where(CrmLead.id == card_id))
+        pipeline = db.scalar(select(CrmFunnel).where(CrmFunnel.id == pipeline_id).with_for_update()) if pipeline_id else None
+        if pipeline is None:
+            raise HTTPException(404, "Card ou funil não encontrado.")
     item = card(db, card_id, lock=True)
+    if moving and item.funnel_id != pipeline_id:
+        raise HTTPException(409, "O card mudou de funil. Atualize o CRM antes de mover.")
     if item.version != payload.version:
         raise HTTPException(409, "O card foi alterado. Atualize antes de salvar.")
-    values = payload.model_dump(exclude_unset=True)
     if not item.managed_manually:
-        if values.get("managed_manually") is not True:
+        if values.get("managed_manually") is True:
+            item.managed_manually = True
+            item.sales_outcome = "open"
+            event(db, item, "Gestão manual assumida. O estágio legado não confirma uma venda.", actor)
+        elif set(values) - {"version", "stage_id", "position"}:
             require_manual(item)
-        item.managed_manually = True
-        item.sales_outcome = "open"
-        event(db, item, "Gestão manual assumida. O estágio legado não confirma uma venda.", actor)
-    if "stage_id" in values:
-        stage = db.get(CrmFunnelStage, values["stage_id"])
+        elif not moving:
+            require_manual(item)
+    if moving:
+        stage = db.get(CrmFunnelStage, values.get("stage_id", item.stage_id))
         if not stage or stage.funnel_id != item.funnel_id:
             raise HTTPException(422, "Estágio inválido para este funil.")
-        if stage.id != item.stage_id:
-            previous = item.stage_ref.label
-            move_crm_lead(db, item.lead_id, stage=stage.key, funnel_id=item.funnel_id, changed_by="manual")
+        previous = item.stage_ref.label
+        previous_stage_id, previous_position = item.stage_id, item.position
+        move_crm_lead(db, item.lead_id, stage=stage.key, position=values.get("position"),
+                      funnel_id=item.funnel_id, changed_by="manual")
+        if stage.id != previous_stage_id:
             event(db, item, f"Estágio alterado: {previous} → {stage.label}.", actor)
+        elif item.position != previous_position:
+            event(db, item, f"Ordem alterada no estágio {stage.label}.", actor)
     for field in ["estimated_value", "currency"]:
         if field in values:
             if field == "currency" and values[field] is None:

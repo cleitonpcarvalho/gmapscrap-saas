@@ -152,7 +152,7 @@ def resume_unfinished_search_runs() -> None:
 
     try:
         run_ids = list(
-            db.scalars(select(SearchRun.id).where(SearchRun.status.in_(("queued", "running")))).all()
+            db.scalars(select(SearchRun.id).where(SearchRun.status.in_(("queued", "running")), SearchRun.execution_source == "server")).all()
         )
     finally:
         db.close()
@@ -478,6 +478,9 @@ def run_search_job(run_id: int) -> None:
         if not run:
             return
 
+        if run.execution_source == "desktop":
+            return
+
         if run.status not in ("queued", "running", "paused"):
             return
 
@@ -547,7 +550,8 @@ def run_search_job(run_id: int) -> None:
 
         run = db.get(SearchRun, run_id)
         if run:
-            if run.status == "paused":
+            db.refresh(run)
+            if run.status != "running":
                 return
 
             run.status = "completed"
@@ -557,7 +561,7 @@ def run_search_job(run_id: int) -> None:
             db.commit()
     except Exception as exc:
         run = db.get(SearchRun, run_id)
-        if run:
+        if run and run.status not in ("stopped", "completed", "failed"):
             error_message = _format_search_error(exc)
             run.status = "failed"
             run.error = error_message

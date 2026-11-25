@@ -22,6 +22,8 @@ class SearchRun(Base):
     validate_whatsapp: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     enrich_site_insights: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="queued", nullable=False)
+    execution_source: Mapped[str] = mapped_column(String(20), default="server", server_default="server", nullable=False)
+    desktop_request_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     message: Mapped[str] = mapped_column(Text, default="Na fila", nullable=False)
     scanned_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     saved_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -137,6 +139,22 @@ class Lead(Base):
             return ""
 
         return f"https://wa.me/{normalized_phone.lstrip('+')}"
+
+
+class CrmCompanyProfile(Base):
+    """Commercial data shared by a company's opportunities, never its scrape run."""
+    __tablename__ = "crm_company_profiles"
+
+    lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), primary_key=True)
+    niche_override: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    location_override: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    __table_args__ = (CheckConstraint("version >= 1", name="ck_crm_company_profile_version"),)
+    __mapper_args__ = {"version_id_col": version}
 
 
 class SmtpConfig(Base):

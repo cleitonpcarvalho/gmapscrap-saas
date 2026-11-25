@@ -114,7 +114,32 @@ class LeadCreate(BaseModel):
         return normalize_label(value) if isinstance(value, str) else value
 
 
+class CommercialCompanyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    # Zero means that no commercial profile existed when the editor was opened.
+    version: int = Field(ge=0)
+    niche_override: str | None = Field(default=None, min_length=1, max_length=255)
+    location_override: str | None = Field(default=None, min_length=1, max_length=255)
+    contact_name: str | None = Field(default=None, max_length=255)
+    contact_phone: str | None = Field(default=None, max_length=80)
+    contact_email: str | None = Field(default=None, max_length=255)
+
+    @field_validator("contact_name", "contact_phone", "contact_email", "niche_override", "location_override", mode="before")
+    @classmethod
+    def no_control_characters(cls, value):
+        if isinstance(value, str) and any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("Não use caracteres de controle nos dados comerciais.")
+        return value
+
+    @field_validator("niche_override", "location_override", mode="before")
+    @classmethod
+    def normalize_classification(cls, value):
+        return normalize_label(value) if isinstance(value, str) else value
+
+
 class LeadUpdate(BaseModel):
+    commercial_profile: CommercialCompanyUpdate | None = None
     niche: str | None = Field(default=None, min_length=1, max_length=255)
     location: str | None = Field(default=None, min_length=1, max_length=255)
     name: str | None = Field(default=None, min_length=1, max_length=255)
@@ -122,6 +147,18 @@ class LeadUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=80)
     website: str | None = Field(default=None, max_length=500)
     email: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def safe_commercial_edit(self):
+        if self.commercial_profile is not None:
+            if {"niche", "location"} & self.model_fields_set:
+                raise ValueError("Use as classificações comerciais para preservar a busca de origem.")
+            for field in ("name", "address", "phone"):
+                if field in self.model_fields_set and getattr(self, field) is None:
+                    raise ValueError(f"{field} não pode ser nulo.")
+            if self.name is not None and not self.name.strip():
+                raise ValueError("Informe o nome da empresa.")
+        return self
 
     @field_validator("niche", "location", mode="before")
     @classmethod
@@ -225,6 +262,7 @@ class SearchRunRead(BaseModel):
     validate_whatsapp: bool
     enrich_site_insights: bool
     status: str
+    execution_source: str = "server"
     message: str
     scanned_count: int
     saved_count: int
@@ -247,7 +285,7 @@ class DesktopSearchLead(BaseModel):
 
 
 class DesktopSearchUpdate(BaseModel):
-    status: Literal["running", "paused", "completed", "failed"] | None = None
+    status: Literal["running", "paused", "completed", "failed", "stopped"] | None = None
     message: str | None = Field(default=None, max_length=2000)
     scanned_count: int | None = Field(default=None, ge=0)
     skipped_delta: int = Field(default=0, ge=0, le=50)

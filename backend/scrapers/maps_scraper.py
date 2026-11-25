@@ -17,6 +17,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from backend.config import get_settings
 from backend.services.phone_region import infer_phone_region
+from backend.scrapers.control import BrowserLease, CancellableChrome, CancellableWait
 
 
 PHONE_XPATH_FALLBACK = "/html/body/div[1]/div[2]/div[9]/div[9]/div/div/div[1]/div[3]/div/div[1]/div/div/div[2]/div[7]/div[6]/button/div/div[2]/div[1]"
@@ -53,7 +54,7 @@ class ScrapeEvent:
     lead: MapLead | None = None
 
 
-def _create_driver() -> WebDriver:
+def _create_driver(control=None) -> WebDriver:
     settings = get_settings()
     options = Options()
     profile_dir = tempfile.mkdtemp(prefix="gmapscrap-chrome-")
@@ -89,12 +90,18 @@ def _create_driver() -> WebDriver:
 
     service = Service(executable_path=settings.chromedriver_bin) if settings.chromedriver_bin else Service()
     try:
-        driver = webdriver.Chrome(service=service, options=options)
+        driver = CancellableChrome(control, service=service, options=options) if control else webdriver.Chrome(service=service, options=options)
     except Exception:
-        shutil.rmtree(profile_dir, ignore_errors=True)
+        lease = BrowserLease(service, profile_dir)
+        lease.close()
+        lease.closed.wait(8)
         raise
 
     setattr(driver, "_gmapscrap_profile_dir", profile_dir)
+    if control:
+        control.attach(driver, service, profile_dir)
+        driver.set_page_load_timeout(20)
+        driver.set_script_timeout(15)
     return driver
 
 
@@ -109,7 +116,7 @@ def _quit_driver(driver: WebDriver) -> None:
             shutil.rmtree(profile_dir, ignore_errors=True)
 
 
-def _click_google_consent_if_present(driver: WebDriver) -> None:
+def _click_google_consent_if_present(driver: WebDriver, sleep=time.sleep) -> None:
     labels = (
         "Aceitar tudo",
         "Concordo",
@@ -125,7 +132,7 @@ def _click_google_consent_if_present(driver: WebDriver) -> None:
             buttons = driver.find_elements(By.XPATH, xpath)
             if buttons:
                 buttons[0].click()
-                time.sleep(1.5)
+                sleep(1.5)
                 return
         except WebDriverException:
             continue
@@ -357,22 +364,25 @@ def _extract_current_place(driver: WebDriver, wait: WebDriverWait) -> MapLead:
     return MapLead(name=name, address=address, phone=phone, website=website)
 
 
-def scrape_google_maps(niche: str, location: str, start_index: int = 1, *, skip_without_website: bool = True):
-    driver = _create_driver()
-    wait = WebDriverWait(driver, 15)
+def scrape_google_maps(niche: str, location: str, start_index: int = 1, *, skip_without_website: bool = True, control=None):
+    if control:
+        control.checkpoint()
+    driver = _create_driver(control) if control else _create_driver()
+    wait = CancellableWait(driver, 15, control) if control else WebDriverWait(driver, 15)
+    sleep = control.sleep if control else time.sleep
 
     try:
         query = quote_plus(f"{niche} {location}")
         driver.get(f"https://www.google.com/maps/search/{query}?hl=pt-BR")
-        time.sleep(5)
-        _click_google_consent_if_present(driver)
+        sleep(5)
+        _click_google_consent_if_present(driver, sleep)
 
         results_panel = _wait_for_results_panel(driver, wait)
 
         def scroll_list() -> bool:
             previous_height = driver.execute_script("return arguments[0].scrollHeight", results_panel)
             driver.execute_script("arguments[0].scrollTo(0, arguments[0].scrollHeight);", results_panel)
-            time.sleep(2)
+            sleep(2)
             new_height = driver.execute_script("return arguments[0].scrollHeight", results_panel)
             return new_height != previous_height
 
@@ -380,6 +390,8 @@ def scrape_google_maps(niche: str, location: str, start_index: int = 1, *, skip_
             attempts = 0
 
             while attempts < 15:
+                if control:
+                    control.checkpoint()
                 elements = driver.find_elements(By.XPATH, "//a[contains(@href, '/maps/place/')]")
 
                 if len(elements) < index:
@@ -390,7 +402,7 @@ def scrape_google_maps(niche: str, location: str, start_index: int = 1, *, skip_
 
                 element = elements[index - 1]
                 driver.execute_script("arguments[0].scrollIntoView();", element)
-                time.sleep(0.8)
+                sleep(0.8)
                 return element
 
             return None
@@ -398,6 +410,8 @@ def scrape_google_maps(niche: str, location: str, start_index: int = 1, *, skip_
         index = max(1, start_index)
 
         while True:
+            if control:
+                control.checkpoint()
             element = find_result_element(index)
             if element is None:
                 yield ScrapeEvent(kind="done", scanned=index - 1, message="Não há mais resultados.")
@@ -406,7 +420,7 @@ def scrape_google_maps(niche: str, location: str, start_index: int = 1, *, skip_
             try:
                 element.click()
             except ElementClickInterceptedException:
-                time.sleep(1)
+                sleep(1)
                 try:
                     element.click()
                 except ElementClickInterceptedException:
@@ -414,7 +428,7 @@ def scrape_google_maps(niche: str, location: str, start_index: int = 1, *, skip_
                     index += 1
                     continue
 
-            time.sleep(2.5)
+            sleep(2.5)
             lead = _extract_current_place(driver, wait)
 
             if not lead.website and skip_without_website:
@@ -424,4 +438,7 @@ def scrape_google_maps(niche: str, location: str, start_index: int = 1, *, skip_
 
             index += 1
     finally:
-        _quit_driver(driver)
+        if control:
+            control.close_browser()
+        else:
+            _quit_driver(driver)

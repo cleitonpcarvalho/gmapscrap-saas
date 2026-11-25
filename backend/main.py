@@ -11,18 +11,20 @@ from queue import Empty
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, contains_eager, selectinload
+from sqlalchemy.orm.exc import StaleDataError
 
 from backend.auth import clear_session_cookie, create_session_token, get_current_username, set_session_cookie
 from backend.config import get_settings
 from backend.database import get_db, init_db
 from backend.niches import router as niches_router
 from backend.manual_crm import router as manual_crm_router
+from backend.search_execution import locked_desktop_run, TERMINAL_SEARCH_STATES
 from backend.models import (
     CrmFunnel,
     CrmFunnelStage,
@@ -144,6 +146,7 @@ from backend.services.email_campaigns import (
 )
 from backend.services.email_delivery import get_or_create_smtp_config, send_email, send_test_email, update_smtp_config
 from backend.services.email_validation import validate_email_address
+from backend.services.crm_companies import update_profile
 from backend.services.ai_templates import generate_email_templates, generate_whatsapp_template_content
 from backend.services.lead_lists import count_leads_for_list
 from backend.services.jobs import (
@@ -784,8 +787,13 @@ def create_desktop_search(
     payload: SearchCreate,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
+    idempotency_key: str | None = Header(default=None, max_length=64),
 ) -> SearchRun:
     _ = username
+    if idempotency_key:
+        existing = db.scalar(select(SearchRun).where(SearchRun.desktop_request_id == idempotency_key))
+        if existing:
+            return existing
     ensure_whatsapp_validation_available(payload.validate_whatsapp, db)
     run = SearchRun(
         niche=payload.niche.strip(),
@@ -797,13 +805,30 @@ def create_desktop_search(
         validate_whatsapp=payload.validate_whatsapp,
         enrich_site_insights=payload.enrich_site_insights,
         status="running",
+        execution_source="desktop",
+        desktop_request_id=idempotency_key,
         message="Busca local iniciada no aplicativo desktop.",
         started_at=utc_now(),
         finished_at=None,
     )
     db.add(run)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalar(select(SearchRun).where(SearchRun.desktop_request_id == idempotency_key)) if idempotency_key else None
+        if existing is None:
+            raise
+        return existing
     db.refresh(run)
+    return run
+
+
+@app.get("/api/desktop/searches/by-request/{request_key}", response_model=SearchRunRead)
+def desktop_search_by_request(request_key: str, db: Session = Depends(get_db), username: str = Depends(require_user)):
+    run = db.scalar(select(SearchRun).where(SearchRun.desktop_request_id == request_key))
+    if run is None:
+        raise HTTPException(404, "Criação da busca ainda não confirmada")
     return run
 
 
@@ -813,11 +838,13 @@ def update_desktop_search(
     payload: DesktopSearchUpdate,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
+    run: SearchRun = Depends(locked_desktop_run),
 ) -> SearchRun:
     _ = username
-    run = db.get(SearchRun, run_id)
-    if not run:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Busca não encontrada")
+    if run.status in TERMINAL_SEARCH_STATES:
+        if payload.status == run.status:
+            return run
+        raise HTTPException(409, "Esta busca já foi finalizada")
 
     if payload.scanned_count is not None:
         run.scanned_count = max(run.scanned_count, payload.scanned_count)
@@ -833,8 +860,10 @@ def update_desktop_search(
 
     if payload.status is not None:
         run.status = payload.status
-        if payload.status in ("completed", "failed"):
+        if payload.status in TERMINAL_SEARCH_STATES:
             run.finished_at = utc_now()
+        elif payload.status == "running":
+            run.finished_at = None
         if payload.status == "failed" and not run.error:
             run.error = run.message or "Busca local falhou."
 
@@ -849,14 +878,11 @@ def ingest_desktop_lead(
     payload: DesktopSearchLead,
     db: Session = Depends(get_db),
     username: str = Depends(require_user),
+    run: SearchRun = Depends(locked_desktop_run),
 ) -> DesktopLeadIngestResponse:
     _ = username
-    run = db.get(SearchRun, run_id)
-    if not run:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Busca não encontrada")
-
-    if run.status not in ("queued", "running", "paused"):
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta busca já foi finalizada")
+    if run.status != "running":
+        raise HTTPException(409, "Esta busca não está rodando")
 
     lead = MapLead(
         name=payload.name.strip(),
@@ -908,6 +934,9 @@ def pause_search(
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Busca não encontrada")
 
+    if run.execution_source == "desktop":
+        raise HTTPException(409, "Controle esta busca pelo aplicativo desktop")
+
     if run.status == "paused":
         return run
 
@@ -931,6 +960,9 @@ def resume_search(
     run = db.get(SearchRun, run_id)
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Busca não encontrada")
+
+    if run.execution_source == "desktop":
+        raise HTTPException(409, "Retome esta busca pelo aplicativo desktop")
 
     if run.status != "paused":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esta busca não está pausada")
@@ -1302,11 +1334,12 @@ def update_lead(
     username: str = Depends(require_user),
 ) -> LeadRead:
     _ = username
-    lead = db.get(Lead, lead_id)
+    lead = db.scalar(select(Lead).where(Lead.id == lead_id).with_for_update().execution_options(populate_existing=True))
     if not lead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lead não encontrado")
 
     data = payload.model_dump(exclude_unset=True)
+    commercial_profile = data.pop("commercial_profile", None)
     next_niche = data.pop("niche", None)
     next_location = data.pop("location", None)
     if "website" in data:
@@ -1333,6 +1366,8 @@ def update_lead(
             data["email"] = validation.normalized_email
         else:
             data["email"] = ""
+
+    update_profile(db, lead, commercial_profile)
 
     if next_niche is not None or next_location is not None:
         niche = (next_niche if next_niche is not None else lead.niche).strip()
@@ -1377,9 +1412,9 @@ def update_lead(
 
     try:
         db.commit()
-    except IntegrityError:
+    except (IntegrityError, StaleDataError):
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Lead duplicado") from None
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Lead duplicado ou alterado. Atualize os detalhes.") from None
 
     db.refresh(lead)
     loaded_lead = _load_lead_for_read(db, lead.id) or lead

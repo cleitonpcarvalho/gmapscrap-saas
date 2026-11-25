@@ -1,0 +1,183 @@
+{
+  "generated_at": "2026-11-19T20:44:08.579914+00:00",
+  "read_only": true,
+  "import_executed": false,
+  "requires_explicit_approval": true,
+  "source_totals": {
+    "search_runs": 40,
+    "leads": 761,
+    "registered_niches": 0,
+    "distinct_raw_labels": 16,
+    "distinct_valid_names": 16
+  },
+  "new_record_count": 16,
+  "new_names": [
+    "Agência de Marketing",
+    "Brindes",
+    "Cleaning Services",
+    "Clínicas",
+    "Electrician",
+    "HVAC",
+    "Inmobiliarias",
+    "Landscaping",
+    "Loja de Suplementos",
+    "Marketing",
+    "Moving Company",
+    "Plumber",
+    "Pressure Washing",
+    "Sapataria",
+    "Sauna",
+    "Tecnologia"
+  ],
+  "candidates": [
+    {
+      "name": "Agência de Marketing",
+      "source_names": [
+        "Agência de Marketing"
+      ],
+      "search_run_count": 1,
+      "lead_count": 35,
+      "already_registered": false
+    },
+    {
+      "name": "Brindes",
+      "source_names": [
+        "Brindes"
+      ],
+      "search_run_count": 6,
+      "lead_count": 90,
+      "already_registered": false
+    },
+    {
+      "name": "Cleaning Services",
+      "source_names": [
+        "Cleaning Services"
+      ],
+      "search_run_count": 1,
+      "lead_count": 70,
+      "already_registered": false
+    },
+    {
+      "name": "Clínicas",
+      "source_names": [
+        "Clínicas"
+      ],
+      "search_run_count": 4,
+      "lead_count": 93,
+      "already_registered": false
+    },
+    {
+      "name": "Electrician",
+      "source_names": [
+        "Electrician"
+      ],
+      "search_run_count": 5,
+      "lead_count": 18,
+      "already_registered": false
+    },
+    {
+      "name": "HVAC",
+      "source_names": [
+        "HVAC"
+      ],
+      "search_run_count": 3,
+      "lead_count": 121,
+      "already_registered": false
+    },
+    {
+      "name": "Inmobiliarias",
+      "source_names": [
+        "Inmobiliarias"
+      ],
+      "search_run_count": 2,
+      "lead_count": 154,
+      "already_registered": false
+    },
+    {
+      "name": "Landscaping",
+      "source_names": [
+        "Landscaping"
+      ],
+      "search_run_count": 1,
+      "lead_count": 0,
+      "already_registered": false
+    },
+    {
+      "name": "Loja de Suplementos",
+      "source_names": [
+        "Loja de Suplementos"
+      ],
+      "search_run_count": 2,
+      "lead_count": 42,
+      "already_registered": false
+    },
+    {
+      "name": "Marketing",
+      "source_names": [
+        "Marketing"
+      ],
+      "search_run_count": 2,
+      "lead_count": 10,
+      "already_registered": false
+    },
+    {
+      "name": "Moving Company",
+      "source_names": [
+        "Moving Company"
+      ],
+      "search_run_count": 1,
+      "lead_count": 42,
+      "already_registered": false
+    },
+    {
+      "name": "Plumber",
+      "source_names": [
+        "Plumber"
+      ],
+      "search_run_count": 1,
+      "lead_count": 30,
+      "already_registered": false
+    },
+    {
+      "name": "Pressure Washing",
+      "source_names": [
+        "Pressure Washing"
+      ],
+      "search_run_count": 5,
+      "lead_count": 23,
+      "already_registered": false
+    },
+    {
+      "name": "Sapataria",
+      "source_names": [
+        "Sapataria"
+      ],
+      "search_run_count": 3,
+      "lead_count": 23,
+      "already_registered": false
+    },
+    {
+      "name": "Sauna",
+      "source_names": [
+        "Sauna"
+      ],
+      "search_run_count": 1,
+      "lead_count": 10,
+      "already_registered": false
+    },
+    {
+      "name": "Tecnologia",
+      "source_names": [
+        "Tecnologia"
+      ],
+      "search_run_count": 2,
+      "lead_count": 0,
+      "already_registered": false
+    }
+  ],
+  "rejected_source_names": [],
+  "invalid_existing_registry_names": [],
+  "scope": "Leads inherit niche labels from search_runs. All historical runs, including empty runs, are included.",
+  "approved_import_method": "After explicit approval, POST only approved new_names to the existing authenticated /api/niches endpoint; recheck duplicates first. No lead or search updates.",
+  "database_read_only": true
+}

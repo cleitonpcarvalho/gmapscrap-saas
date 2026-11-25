@@ -184,13 +184,17 @@ def find_contact_url(html: str, base_url: str) -> str:
     return urls[0] if urls else ""
 
 
-def extract_email_from_site(site_url: str) -> EmailResult:
+def extract_email_from_site(site_url: str, *, control=None) -> EmailResult:
+    if control:
+        control.checkpoint()
     site = normalize_site_url(site_url)
     if not site:
         return EmailResult()
 
     checked_urls: list[str] = []
     html = fetch_html(site)
+    if control:
+        control.checkpoint()
     checked_urls.append(site)
 
     email = find_email(html, site)
@@ -201,11 +205,15 @@ def extract_email_from_site(site_url: str) -> EmailResult:
     contact_url = support_urls[0] if support_urls else ""
 
     for url in support_urls[:10]:
+        if control:
+            control.checkpoint()
         if url in checked_urls:
             continue
 
         checked_urls.append(url)
         email = find_email(fetch_html(url), site)
+        if control:
+            control.checkpoint()
         if email:
             return EmailResult(email=email, contact_url=url, checked_urls=tuple(checked_urls))
 

@@ -40,6 +40,35 @@ nichos / cadastrar novo** opens the searchable CRUD manager; creating or selecti
 an entry fills the search field. Suggestions also appear when adding/editing a
 lead. Deletion requires confirmation in the manager.
 
+The dedicated **Nichos** page lives at `/nichos`, with its sidebar entry directly
+below **Listas**. It shares the quick manager's CRUD implementation and offers a
+searchable list, add/edit form, explicit deletion confirmation, retryable loading,
+and **Usar na busca**. Page mutations immediately update the web autocomplete.
+Returning to the search view or browser window refreshes the registry without
+changing typed free text. The desktop app reads the same `/api/niches` registry;
+use **Atualizar nichos** after catalog changes in another client.
+
+## Historical niche import — preview only
+
+`scripts/preview_niche_import.py --output docs/niche-import-preview.json` reads
+production in a PostgreSQL-enforced read-only repeatable-read transaction. It has
+no apply mode, does not start the application, and never initializes the schema.
+It includes every historical search, even searches that saved no leads, because
+lead labels are inherited from search runs. Source values use the existing
+`NicheWrite` validation and normalization. Names are deduplicated without regard
+to case and compared with the existing registry; invalid values are reported.
+
+The current proposal contains **16 new niches** from **40 searches and 761 leads**.
+The registry is empty. All exact names and source counts are in
+[niche-import-preview.json](niche-import-preview.json). Landscaping and Tecnologia
+are included from empty historical searches. No niche has been imported.
+
+After explicit approval, refresh the preview and register only approved new
+names through the existing authenticated `POST /api/niches` API. Its unique
+case-insensitive database index handles concurrent duplicates (409); do not
+rename existing entries, update leads/searches, or reapply the niche migration.
+This feature requires no new database migration or production configuration.
+
 On macOS, the niche field supports case-insensitive substring completion.
 **Atualizar nichos** reloads the catalog; **Cadastrar nicho** explicitly saves the
 typed value and selects the result. Registry network calls run in a separate
@@ -69,7 +98,7 @@ hook does not run for an existing table. No API keys are added to either client.
 See [Supabase RLS documentation](https://supabase.com/docs/guides/database/postgres/row-level-security)
 for the default-deny behavior of an RLS table without policies.
 
-## Production correction — awaiting explicit approval
+## Production correction — completed; historical preview retained
 
 The database was inspected in a PostgreSQL-enforced **read-only, repeatable-read**
 transaction. The saved preview is `docs/lead-segment-correction-preview.json`.
@@ -90,9 +119,11 @@ two label fields in search runs 39 and 40. This necessarily corrects the labels
 displayed in those two historical searches, because leads inherit those labels.
 It preserves all search rows, progress, timestamps, options, lead fields and
 relationships. It refuses changed membership and defaults to **ROLLBACK**.
-This correction has not been executed. A refreshed preview and explicit user
-approval are required before a future production
-correction; approval of the feature does not authorize correcting data.
+The separately approved correction was committed on 19 November 2026. Run 39
+(leads 768–772) remains completed; run 40 (lead 773) remains paused. Only the two
+label fields changed. All physical lead rows, other search fields and unrelated
+records were verified unchanged. The original proposal remains a historical
+review artifact with its `ROLLBACK` default; do not execute it again.
 
 ## Validation
 
@@ -103,6 +134,7 @@ unavailable. Set `QT_QPA_PLATFORM=offscreen` for headless desktop checks.
 ```sh
 DB_HOST='' DB_NAME='' DB_USER='' DATABASE_URL='sqlite://' QT_QPA_PLATFORM=offscreen python -m pytest -q
 cd frontend
+npm test
 npm run build
 ```
 
@@ -128,14 +160,26 @@ python -m pytest -q \
   --deselect=tests/test_postgres_niches.py::test_correction_refuses_changed_lead_membership
 ```
 
-The 19 November 2026 application release passed **173 tests**, with only these two
-correction tests deselected. PostgreSQL tests used a fresh local PostgreSQL 17
-database with simulated Supabase API roles; the production niche migration was
-not rerun. The frontend production build and TypeScript check also passed.
+The dedicated page implementation passed **183 Python/API/desktop tests**, with
+only those two correction execution tests deselected, and **8 frontend tests**.
+PostgreSQL tests used a fresh local PostgreSQL 17 database with simulated Supabase
+API roles. Frontend tests cover page navigation, sidebar order, filtering, CRUD,
+confirmation, failed refresh recovery, shared suggestions and free-text input.
+Import preview tests cover normalization, duplicates, invalid names and unchanged
+historical records; their simulated registration uses an isolated SQLite database.
+`npm run build` (including TypeScript validation and `/nichos`) and
+`git diff --check` passed. A browser walkthrough against an isolated local SQLite
+API verified the page, filtering and cancellation of deletion confirmation.
 
-Verified on 19 November 2026: **175 tests passed**, including the PostgreSQL tests
-against a disposable local PostgreSQL 17 instance with simulated Supabase API
-roles. `npm run build`, TypeScript `--noEmit` and `git diff --check` passed.
-The existing uncommitted `docker-compose.prod.yml` diff was preserved byte for
-byte. A live web visual walkthrough was attempted, but the browser connector
-failed before opening the local preview; no browser walkthrough is claimed.
+A final read-only production check matched all lead/search content fingerprints
+against the approved correction audit: **761 leads and 40 searches unchanged**,
+and **0 registered niches**. No production import, migration or deployment was
+performed. Production configuration, including the restart policy, is unchanged.
+
+The subsequent security review upgraded Next.js to 16.4.5 and applied compatible
+dependency security fixes. A clean install now reports zero known npm audit
+vulnerabilities; **185 Python/API/desktop/PostgreSQL tests** and **8 frontend
+tests** passed, as did the frontend production build. Linux Docker image builds
+remain blocked by local disk exhaustion/BuildKit metadata I/O errors. See
+[dependency-security-review.md](dependency-security-review.md) for affected
+versions, source advisories, production revalidation and deployment readiness.

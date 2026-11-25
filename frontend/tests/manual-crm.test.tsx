@@ -21,7 +21,7 @@ describe("manual prospecting CRM", () => {
       if (path === "/api/crm/funnels") return funnels;
       if (path.startsWith("/api/crm/manual/leads")) {
         const offset = new URL(path,"http://localhost").searchParams.get("offset");
-        return { items:[company(offset === "0" ? 1 : 531)],total:532 };
+        return { items:[company(offset === "0" ? 1 : 531)],total:532,available_total:532,matching_total:532 };
       }
       if (init?.method === "POST") return { created_card_ids:[10,11],skipped_lead_ids:[] };
       throw Error(path);
@@ -41,7 +41,8 @@ describe("manual prospecting CRM", () => {
   });
 
   it("reports already registered cards without replacing them", async () => {
-    const spy = vi.fn(async (path: string, init?: RequestInit) => init?.method === "POST" ? {created_card_ids:[],skipped_lead_ids:[1]} : path.endsWith("funnels") ? funnels : {items:[company(1)],total:1});
+    // A concurrent import after eligibility validation is still safely skipped.
+    const spy = vi.fn(async (path: string, init?: RequestInit) => path.endsWith("lead-eligibility") ? {lead_ids:[1]} : init?.method === "POST" ? {created_card_ids:[],skipped_lead_ids:[1]} : path.endsWith("funnels") ? funnels : {items:[company(1)],total:1,available_total:1,matching_total:1});
     render(<AddToCrmDialog request={spy as Request} initialIds={[1]} onClose={vi.fn()} />);
     await screen.findByText("Empresa 1");
     await userEvent.click(screen.getByRole("button",{name:"Adicionar 1 ao CRM"}));

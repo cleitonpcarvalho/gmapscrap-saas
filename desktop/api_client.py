@@ -15,7 +15,18 @@ DEFAULT_API_BASE_URL = "https://api.automasoluct.com.br"
 
 
 class ApiClientError(RuntimeError):
-    pass
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+STOPPED_ERROR = "DESKTOP_STOPPED"
+
+
+def search_status(run):
+    if run.get("status") == "failed" and str(run.get("error") or "").startswith(STOPPED_ERROR):
+        return "stopped"
+    return run.get("status")
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -80,6 +91,8 @@ class GmapScrapApiClient:
         self.config = config
         self.session = requests.Session()
         self._authenticated = False
+        self.control = None
+        self.request_key = None
 
     @classmethod
     def from_environment(cls) -> "GmapScrapApiClient":
@@ -112,6 +125,8 @@ class GmapScrapApiClient:
         return self._request(
             "POST",
             "/api/desktop/searches",
+            attempts=1,  # Legacy production has no idempotency support; never retry creation blindly.
+            headers={"Idempotency-Key": self.request_key} if self.request_key else {},
             json={
                 "niche": niche,
                 "location": location,
@@ -141,7 +156,19 @@ class GmapScrapApiClient:
             "skipped_delta": skipped_delta,
             "error": error,
         }
-        return self._request("PATCH", f"/api/desktop/searches/{run_id}", json=payload)
+        return self._request("PATCH", f"/api/desktop/searches/{run_id}", json=payload,
+                             attempts=1 if skipped_delta else 4)
+
+    def stop_search(self, run_id: int, *, scanned_count=0):
+        message = "Busca parada definitivamente. Leads salvos foram preservados."
+        try:
+            return self.update_search(run_id, status="stopped", message=message, scanned_count=scanned_count)
+        except ApiClientError as exc:
+            if exc.status_code != 422:
+                raise
+            # Old production accepts 'failed' as a terminal state and rejects further ingestion.
+            return self.update_search(run_id, status="failed", message=message,
+                                      scanned_count=scanned_count, error=STOPPED_ERROR)
 
     def ingest_lead(
         self,
@@ -171,6 +198,12 @@ class GmapScrapApiClient:
     def list_searches(self) -> list[dict[str, Any]]:
         return self._request("GET", "/api/searches", timeout=20)
 
+    def get_search(self, run_id):
+        return self._request("GET", f"/api/searches/{run_id}", timeout=20)
+
+    def get_created_search(self, request_key):
+        return self._request("GET", f"/api/desktop/searches/by-request/{request_key}", timeout=20)
+
     def list_niches(self, query: str = "") -> list[dict[str, Any]]:
         return self._request("GET", "/api/niches", params={"q": query}, timeout=20)
 
@@ -190,35 +223,43 @@ class GmapScrapApiClient:
             return self._request(method, path, timeout=timeout, retry=False, **kwargs)
 
         if not response.ok:
-            raise ApiClientError(self._error_message(response, "A API recusou a operação."))
+            raise ApiClientError(self._error_message(response, "A API recusou a operação."), response.status_code)
 
         if not response.content:
             return None
         return response.json()
 
-    def _send_with_retries(self, method: str, path: str, *, timeout: int, **kwargs: Any) -> requests.Response:
+    def _send_with_retries(self, method: str, path: str, *, timeout: int, attempts=4, **kwargs: Any) -> requests.Response:
         transient_statuses = {502, 503, 504}
         last_error: requests.RequestException | None = None
 
-        for attempt in range(4):
+        for attempt in range(attempts):
+            if self.control:
+                self.control.checkpoint()
             try:
                 response = self.session.request(method, f"{self.config.base_url}{path}", timeout=timeout, **kwargs)
             except requests.RequestException as exc:
                 last_error = exc
                 self._reset_connections()
-                if attempt == 3:
+                if attempt == attempts - 1:
                     break
-                time.sleep(1.5 * (attempt + 1))
+                self._retry_sleep(1.5 * (attempt + 1))
                 continue
 
-            if response.status_code not in transient_statuses or attempt == 3:
+            if response.status_code not in transient_statuses or attempt == attempts - 1:
                 return response
 
             response.close()
             self._reset_connections()
-            time.sleep(1.5 * (attempt + 1))
+            self._retry_sleep(1.5 * (attempt + 1))
 
         raise ApiClientError(f"Falha ao chamar a API: {last_error}") from None
+
+    def _retry_sleep(self, seconds):
+        if self.control:
+            self.control.sleep(seconds)
+        else:
+            time.sleep(seconds)
 
     def _reset_connections(self) -> None:
         self.session.close()

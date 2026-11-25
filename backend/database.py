@@ -72,7 +72,7 @@ def init_db() -> None:
     # migration. Never silently create their tables during application startup.
     Base.metadata.create_all(bind=engine, tables=[
         table for table in Base.metadata.sorted_tables
-        if table.name not in {"crm_activities", "crm_follow_ups"}
+        if table.name not in {"crm_activities", "crm_follow_ups", "crm_company_profiles"}
     ])
     _ensure_tag_tables()
     _ensure_crm_funnel_tables()
@@ -927,6 +927,8 @@ def _ensure_search_run_columns() -> None:
 
     existing_columns = {column["name"] for column in inspector.get_columns("search_runs")}
     migrations = {
+        "execution_source": "ALTER TABLE search_runs ADD COLUMN execution_source VARCHAR(20) NOT NULL DEFAULT 'server'",
+        "desktop_request_id": "ALTER TABLE search_runs ADD COLUMN desktop_request_id VARCHAR(64)",
         "skip_without_website": "ALTER TABLE search_runs ADD COLUMN skip_without_website BOOLEAN NOT NULL DEFAULT TRUE",
         "only_without_website": "ALTER TABLE search_runs ADD COLUMN only_without_website BOOLEAN NOT NULL DEFAULT FALSE",
         "validate_whatsapp": "ALTER TABLE search_runs ADD COLUMN validate_whatsapp BOOLEAN NOT NULL DEFAULT FALSE",
@@ -938,6 +940,7 @@ def _ensure_search_run_columns() -> None:
         for column_name, statement in migrations.items():
             if column_name not in existing_columns:
                 connection.execute(text(statement))
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_search_runs_desktop_request_id ON search_runs (desktop_request_id)"))
 
 
 def _ensure_lead_columns() -> None:
