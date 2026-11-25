@@ -99,8 +99,12 @@ def focus_picker(window):
     from PySide6.QtTest import QTest
     window.show()
     window.activateWindow()
+    if QApplication.platformName() != "offscreen":
+        assert QTest.qWaitForWindowActive(window, 5000)
+    QApplication.processEvents()
     window._load_niche_suggestions([{"id": 1, "name": "Brindes"}, {"id": 2, "name": "Marketing"}, {"id": 3, "name": "Presentes"}])
     window.location_input.setFocus()
+    QApplication.processEvents()
     QTest.mouseClick(window.niche_input, Qt.MouseButton.LeftButton)
     QApplication.processEvents()
     return window.niche_completer.popup()
@@ -141,6 +145,8 @@ def test_keyboard_selection_and_escape_close_popup(window):
     assert not popup.isVisible()
     # The offscreen plugin deactivates the top-level window when its popup hides.
     window.activateWindow()
+    if QApplication.platformName() != "offscreen":
+        assert QTest.qWaitForWindowActive(window, 5000)
     QApplication.processEvents()
     QTest.mouseClick(window.niche_input, Qt.MouseButton.LeftButton)
     assert popup.isVisible()
@@ -155,6 +161,10 @@ def test_mouse_selection_and_outside_click_close_popup(window):
     QTest.mouseClick(popup.viewport(), Qt.MouseButton.LeftButton, pos=popup.visualRect(index).center())
     assert window.niche_input.text() == "Marketing"
     assert not popup.isVisible()
+    window.activateWindow()
+    if QApplication.platformName() != "offscreen":
+        assert QTest.qWaitForWindowActive(window, 5000)
+    QApplication.processEvents()
     QTest.mouseClick(window.niche_input, Qt.MouseButton.LeftButton)
     QTest.mouseClick(window.location_input, Qt.MouseButton.LeftButton)
     QApplication.processEvents()
